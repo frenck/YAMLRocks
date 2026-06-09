@@ -1,6 +1,6 @@
 {
   "name": "yamlrocks",
-  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "image": "mcr.microsoft.com/devcontainers/rust:2-bookworm",
   "features": {
     "ghcr.io/devcontainers/features/python:1": {
       "version": "3.14",

@@ -1,0 +1,56 @@
+---
+name: CodeQL
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "20 0 * * 1"
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # upload CodeQL results to the code-scanning dashboard
+      actions: read # CodeQL reads the Actions workflow runs on private repos
+      contents: read # check out the repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: rust
+            build-mode: none
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: 🏗 Initialize CodeQL
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # Both languages use buildless extraction. The CodeQL Rust extractor only
+      # supports build-mode: none (it does not support a manual build), and
+      # Python needs no build either.
+      - name: 🚀 Perform CodeQL analysis
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          category: "/language:${{ matrix.language }}"

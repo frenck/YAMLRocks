@@ -1,0 +1,30 @@
+---
+name: Release Drafter
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Serialize draft updates without cancelling an in-flight run.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  update_release_draft:
+    name: ✏️ Draft release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # To create a GitHub release
+      pull-requests: write # To add a label to the PR
+    steps:
+      - name: 🚀 Run Release Drafter
+        uses: release-drafter/release-drafter@693d20e7c1ce1a81d3a41962f85914253b518449 # v7.3.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

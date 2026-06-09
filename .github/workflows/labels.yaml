@@ -1,0 +1,36 @@
+---
+name: Sync labels
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/labels.yml
+  workflow_dispatch:
+
+# Serialize label syncs without cancelling an in-flight run.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  labels:
+    name: ♻️ Sync labels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # Check out the repository
+      issues: write # Create and update issue labels
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: 🚀 Run Label Syncer
+        uses: micnncim/action-label-syncer@3abd5ab72fda571e69fffd97bd4e0033dd5f495c # v1.3.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

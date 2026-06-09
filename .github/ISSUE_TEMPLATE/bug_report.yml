@@ -1,0 +1,50 @@
+name: 🐛 Bug report
+description: Report a problem with yamlrocks
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in the details
+        below so it can be reproduced.
+
+        Using AI tools to help write this report is fine, but review and
+        understand it yourself first. See the
+        [AI Policy](https://github.com/frenck/yamlrocks/blob/main/AI_POLICY.md);
+        autonomously created issues will be closed.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: A minimal YAML input and the yamlrocks call that triggers the bug.
+      render: python
+      placeholder: |
+        import yamlrocks
+        yamlrocks.loads(b"...")
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: yamlrocks version
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version and platform
+    validations:
+      required: true

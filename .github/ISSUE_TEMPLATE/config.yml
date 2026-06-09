@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💡 Feature request or idea
+    url: https://github.com/frenck/yamlrocks/discussions/categories/ideas
+    about: Suggest and discuss new features and ideas.
+  - name: 💬 Questions & discussions
+    url: https://github.com/frenck/yamlrocks/discussions
+    about: Ask questions and discuss yamlrocks with the community.
+  - name: 🔒 Report a security issue
+    url: https://github.com/frenck/yamlrocks/security/advisories/new
+    about: Report a vulnerability privately.
+  - name: 🤖 AI policy
+    url: https://github.com/frenck/yamlrocks/blob/main/AI_POLICY.md
+    about: Read this before using AI tools to contribute. Autonomous agents are not allowed.

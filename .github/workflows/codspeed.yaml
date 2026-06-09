@@ -1,0 +1,47 @@
+---
+name: CodSpeed
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    name: Run performance benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # actions/checkout reads the repository
+      id-token: write # CodSpeed authenticates via OpenID Connect (no stored token)
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: 🏗 Set up uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - name: 🏗 Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # zizmor: ignore[superfluous-actions,stale-action-refs] stable; canonical pinned Rust toolchain installer
+      - name: 🏗 Install dependencies
+        run: uv sync --locked --no-install-project --no-default-groups --group build --group codspeed
+      - name: 🏗 Build and install yamlrocks
+        # Optimized build so CodSpeed measures the instruction counts users get.
+        run: uv run --no-sync maturin develop --release
+      - name: 🚀 Run benchmarks under CodSpeed
+        uses: CodSpeedHQ/action@9d332c4d90b43981c3e55ae8e38e68709996240f # v4.17.0
+        with:
+          mode: simulation
+          run: uv run --no-sync pytest bench --codspeed

@@ -1,0 +1,275 @@
+use super::{Resolver, ScalarKind};
+use crate::scanner::ScalarStyle;
+
+/// YAML 1.2 Core Schema resolver.
+///
+/// Resolves plain scalars to typed values following the YAML 1.2 specification:
+/// - null: ~, null, Null, NULL, empty
+/// - bool: true, True, TRUE, false, False, FALSE
+/// - int: decimal, 0o octal, 0x hex
+/// - float: decimal with dot/exponent, .inf, .nan
+/// - string: everything else
+pub struct Yaml12Resolver;
+
+impl Resolver for Yaml12Resolver {
+    fn classify(&self, value: &str, style: ScalarStyle, tag: Option<&str>) -> ScalarKind {
+        if let Some(tag) = tag {
+            return classify_tagged(value, tag);
+        }
+
+        // Quoted and block scalars are always strings.
+        if matches!(
+            style,
+            ScalarStyle::SingleQuoted
+                | ScalarStyle::DoubleQuoted
+                | ScalarStyle::Literal
+                | ScalarStyle::Folded
+        ) {
+            return ScalarKind::Str;
+        }
+
+        // Plain scalar: resolve its type.
+        classify_plain_12(value)
+    }
+}
+
+fn classify_plain_12(value: &str) -> ScalarKind {
+    if super::is_null(value) {
+        return ScalarKind::Null;
+    }
+
+    // A plain `<<` is the merge-key indicator. Only the plain style reaches here
+    // (the caller short-circuits quoted and block scalars to `Str`), so a quoted
+    // `"<<"` is a literal string and is never treated as a merge key.
+    if value == "<<" {
+        return ScalarKind::Merge;
+    }
+
+    // Bool (strict: only true/false variants)
+    if matches!(value, "true" | "True" | "TRUE") {
+        return ScalarKind::Bool(true);
+    }
+    if matches!(value, "false" | "False" | "FALSE") {
+        return ScalarKind::Bool(false);
+    }
+
+    // Integer
+    if let Some(int) = try_parse_int_12(value) {
+        return ScalarKind::Int(int);
+    }
+    // A decimal integer too large for i64 is still an integer, not a string.
+    if super::is_big_decimal_int(value) {
+        return ScalarKind::BigInt;
+    }
+
+    // Float
+    if let Some(float) = try_parse_float_12(value) {
+        return ScalarKind::Float(float);
+    }
+
+    ScalarKind::Str
+}
+
+fn try_parse_int_12(value: &str) -> Option<i64> {
+    let (negative, rest) = super::split_sign(value)?;
+
+    let result = if rest.starts_with("0x") || rest.starts_with("0X") {
+        // Hexadecimal
+        super::from_radix_unsigned(&rest[2..], 16)?
+    } else if rest.starts_with("0o") || rest.starts_with("0O") {
+        // Octal (YAML 1.2 style)
+        super::from_radix_unsigned(&rest[2..], 8)?
+    } else if let Some(after_zero) = rest.strip_prefix('0') {
+        // A leading zero is only a valid integer when it stands alone (`0`);
+        // 1.2 has no C-style octal, so `0777` is a string, not a number.
+        if after_zero.is_empty() {
+            0
+        } else {
+            return None;
+        }
+    } else {
+        // Decimal
+        rest.parse::<i64>().ok()?
+    };
+
+    if negative {
+        Some(-result)
+    } else {
+        Some(result)
+    }
+}
+
+fn try_parse_float_12(value: &str) -> Option<f64> {
+    if let Some(f) = super::parse_special_float(value) {
+        return Some(f);
+    }
+
+    // Must contain a dot or exponent to be a float. One byte pass instead of
+    // three separate `contains(char)` scans (each a full string search).
+    if !value.bytes().any(|b| matches!(b, b'.' | b'e' | b'E')) {
+        return None;
+    }
+
+    value.parse::<f64>().ok()
+}
+
+fn classify_tagged(value: &str, tag: &str) -> ScalarKind {
+    match tag {
+        "!!null" | "tag:yaml.org,2002:null" => ScalarKind::Null,
+        "!!bool" | "tag:yaml.org,2002:bool" => {
+            ScalarKind::Bool(matches!(value, "true" | "True" | "TRUE"))
+        }
+        "!!int" | "tag:yaml.org,2002:int" => ScalarKind::Int(try_parse_int_12(value).unwrap_or(0)),
+        "!!float" | "tag:yaml.org,2002:float" => {
+            ScalarKind::Float(try_parse_float_12(value).unwrap_or(0.0))
+        }
+        _ => ScalarKind::Str,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Yaml12Resolver;
+    use crate::resolver::{ResolvedValue, Resolver};
+    use crate::scanner::ScalarStyle;
+
+    fn plain(value: &str) -> ResolvedValue {
+        Yaml12Resolver.resolve(value, ScalarStyle::Plain, None)
+    }
+
+    #[test]
+    fn resolves_null_forms() {
+        for value in ["~", "null", "Null", "NULL", ""] {
+            assert_eq!(plain(value), ResolvedValue::Null, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn radix_prefix_rejects_internal_sign() {
+        // `from_str_radix` itself accepts a sign; the body after `0x`/`0o` must
+        // not, or `0x-5` would wrongly read as -5 instead of a string.
+        for value in ["0x-5", "0x+5", "0o-5", "0o+7", "0X-1"] {
+            assert!(
+                matches!(plain(value), ResolvedValue::String(_)),
+                "{value:?}"
+            );
+        }
+        // A real radix integer still parses.
+        assert_eq!(plain("0xFF"), ResolvedValue::Int(255));
+        assert_eq!(plain("0o17"), ResolvedValue::Int(15));
+        assert_eq!(plain("-0x10"), ResolvedValue::Int(-16));
+    }
+
+    #[test]
+    fn resolves_booleans_strictly() {
+        for value in ["true", "True", "TRUE"] {
+            assert_eq!(plain(value), ResolvedValue::Bool(true), "{value:?}");
+        }
+        for value in ["false", "False", "FALSE"] {
+            assert_eq!(plain(value), ResolvedValue::Bool(false), "{value:?}");
+        }
+        // YAML 1.2 keeps yes/no/on/off as plain strings.
+        for value in ["yes", "no", "on", "off", "y", "n"] {
+            assert!(
+                matches!(plain(value), ResolvedValue::String(_)),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolves_integers() {
+        assert_eq!(plain("0"), ResolvedValue::Int(0));
+        assert_eq!(plain("42"), ResolvedValue::Int(42));
+        assert_eq!(plain("-5"), ResolvedValue::Int(-5));
+        assert_eq!(plain("+7"), ResolvedValue::Int(7));
+        assert_eq!(plain("0xFF"), ResolvedValue::Int(255));
+        assert_eq!(plain("0o17"), ResolvedValue::Int(15));
+    }
+
+    #[test]
+    fn rejects_leading_zero_decimal_as_string() {
+        // 1.2 has no C-style octal: a leading zero makes it a string, not 7.
+        assert!(matches!(plain("0777"), ResolvedValue::String(_)));
+    }
+
+    #[test]
+    fn resolves_floats() {
+        assert_eq!(plain("1.5"), ResolvedValue::Float(1.5));
+        assert_eq!(plain("1e3"), ResolvedValue::Float(1000.0));
+        assert!(
+            matches!(plain(".inf"), ResolvedValue::Float(f) if f.is_infinite() && f.is_sign_positive())
+        );
+        assert!(
+            matches!(plain("-.inf"), ResolvedValue::Float(f) if f.is_infinite() && f.is_sign_negative())
+        );
+        assert!(matches!(plain(".nan"), ResolvedValue::Float(f) if f.is_nan()));
+    }
+
+    #[test]
+    fn everything_else_is_a_string() {
+        for value in ["hello", "2026-01-02", "1.2.3", "a: b"] {
+            assert!(
+                matches!(plain(value), ResolvedValue::String(_)),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_and_block_scalars_are_always_strings() {
+        for style in [
+            ScalarStyle::SingleQuoted,
+            ScalarStyle::DoubleQuoted,
+            ScalarStyle::Literal,
+            ScalarStyle::Folded,
+        ] {
+            assert_eq!(
+                Yaml12Resolver.resolve("42", style, None),
+                ResolvedValue::String("42".to_owned()),
+                "{style:?}",
+            );
+            assert_eq!(
+                Yaml12Resolver.resolve("null", style, None),
+                ResolvedValue::String("null".to_owned()),
+                "{style:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_tags_override_resolution() {
+        let r = Yaml12Resolver;
+        assert!(matches!(
+            r.resolve("42", ScalarStyle::Plain, Some("!!str")),
+            ResolvedValue::String(_)
+        ));
+        assert_eq!(
+            r.resolve("7", ScalarStyle::Plain, Some("!!int")),
+            ResolvedValue::Int(7)
+        );
+        assert_eq!(
+            r.resolve("true", ScalarStyle::Plain, Some("!!bool")),
+            ResolvedValue::Bool(true)
+        );
+        assert_eq!(
+            r.resolve("anything", ScalarStyle::Plain, Some("!!null")),
+            ResolvedValue::Null
+        );
+        // The float tag drives its own classification arm.
+        assert_eq!(
+            r.resolve("1.5", ScalarStyle::Plain, Some("!!float")),
+            ResolvedValue::Float(1.5)
+        );
+        // A non-float text under !!float falls back to 0.0 rather than erroring.
+        assert_eq!(
+            r.resolve("nope", ScalarStyle::Plain, Some("!!float")),
+            ResolvedValue::Float(0.0)
+        );
+        // A non-int text under !!int falls back to 0.
+        assert_eq!(
+            r.resolve("nope", ScalarStyle::Plain, Some("!!int")),
+            ResolvedValue::Int(0)
+        );
+    }
+}

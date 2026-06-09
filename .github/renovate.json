@@ -1,0 +1,56 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["helpers:pinGitHubActionDigests"],
+  "rebaseWhen": "behind-base-branch",
+  "dependencyDashboard": true,
+  "labels": ["dependencies", "no-stale"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
+  "commitMessagePrefix": "⬆️",
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "addLabels": ["rust"]
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["pep621", "pip_requirements"],
+      "addLabels": ["python"]
+    },
+    {
+      "matchManagers": ["pep621", "pip_requirements"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["npm", "nvm"],
+      "addLabels": ["javascript"],
+      "rangeStrategy": "pin"
+    },
+    {
+      "matchManagers": ["npm", "nvm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "addLabels": ["github_actions"],
+      "rangeStrategy": "pin"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["pre-commit"],
+      "addLabels": ["pre-commit"]
+    }
+  ]
+}

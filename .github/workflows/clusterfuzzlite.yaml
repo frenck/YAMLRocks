@@ -1,0 +1,78 @@
+---
+# This workflow uses actions that are not certified by GitHub. They are provided
+# by a third-party and are governed by separate terms of service, privacy
+# policy, and support documentation.
+
+name: ClusterFuzzLite
+
+# yamllint disable-line rule:truthy
+on:
+  # On pull requests, fuzz only when code that can affect the fuzz targets
+  # actually changes. Docs, badge, and dependency-only PRs cannot reach the
+  # parser, so they skip the (slow) Docker build + fuzz run entirely.
+  pull_request:
+    paths:
+      - "src/**"
+      - "fuzz/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".clusterfuzzlite/**"
+      - ".github/workflows/clusterfuzzlite.yaml"
+  # The deep, coverage-guided fuzzing runs on a schedule against an accumulated
+  # corpus, where bugs actually surface; a short per-PR run cannot.
+  schedule:
+    - cron: "0 4 * * *" # daily, 04:00 UTC
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The ClusterFuzzLite actions expect repo-wide read access (the posture their own
+# documentation prescribes); write scopes are passed per-step via the token input.
+permissions: read-all # zizmor: ignore[excessive-permissions]
+
+jobs:
+  # Pull-request gate: a short run over the change, to catch regressions before
+  # merge without holding up review.
+  code-change:
+    name: Fuzz changed code
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🏗 Build fuzzers
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          sanitizer: address
+      - name: 🚀 Run fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 300
+          mode: code-change
+          sanitizer: address
+
+  # Scheduled deep run: longer, and persists/grows the corpus across runs.
+  batch:
+    name: Fuzz batch
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🏗 Build fuzzers
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          sanitizer: address
+      - name: 🚀 Run fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 1800
+          mode: batch
+          sanitizer: address
+          # Persist and grow the corpus across runs in a dedicated storage repo.
+          # Set FUZZ_STORAGE_TOKEN (a PAT with write access to that repo) to
+          # enable persistence; until then the batch still runs, just cold.
+          storage-repo: ${{ secrets.FUZZ_STORAGE_TOKEN != '' && format('https://{0}@github.com/frenck/yamlrocks-fuzz-corpus.git', secrets.FUZZ_STORAGE_TOKEN) || '' }}

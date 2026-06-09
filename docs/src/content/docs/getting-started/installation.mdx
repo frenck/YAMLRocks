@@ -1,0 +1,182 @@
+---
+title: Installation
+description: Install YAMLRocks from PyPI or build it from source, and verify the install.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+YAMLRocks is a Rust extension for Python, distributed as pre-built wheels on PyPI.
+For the platforms most people run on, installing is a single command and no
+compiler is involved. This page covers the wheel install, the supported Python
+versions and platforms, building from source when you need to, the optional
+numpy dependency, and a runnable block to confirm everything works.
+
+## Install from PyPI
+
+Installing is a single command. Pick your package manager below; a matching
+wheel for your operating system, architecture, and Python version is selected
+automatically:
+
+<Tabs syncKey="installer">
+<TabItem label="uv">
+```sh
+uv add yamlrocks
+```
+</TabItem>
+<TabItem label="pip">
+```sh
+pip install yamlrocks
+```
+</TabItem>
+<TabItem label="Poetry">
+```sh
+poetry add yamlrocks
+```
+</TabItem>
+</Tabs>
+
+YAMLRocks has no required runtime dependencies. The Rust extension is statically
+linked and self-contained, so nothing else is pulled in.
+
+:::tip[Use a virtual environment]
+Install into a project virtual environment rather than the system Python. The
+usual incantation works as expected:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install yamlrocks
+```
+:::
+
+## Supported Python versions
+
+YAMLRocks targets **CPython 3.12 and newer**. Each release is built and tested
+against the active CPython series.
+
+Free-threaded ("nogil") CPython builds are supported as a first-class target.
+YAMLRocks holds no global interpreter lock of its own and shares no mutable global
+state across calls, so you can parse and emit YAML from many threads at once
+without contention. If you run a free-threaded interpreter, pip selects the
+matching free-threaded wheel.
+
+## Platforms and wheels
+
+YAMLRocks ships prebuilt wheels for a broad matrix of platforms and
+architectures, so `pip install` is quick and needs no Rust toolchain. That
+includes:
+
+<table>
+  <thead>
+    <tr>
+      <th>Platform</th>
+      <th>Architectures</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Linux (manylinux)</td>
+      <td>x86_64, aarch64, armv7, ppc64le, s390x, i686</td>
+    </tr>
+    <tr>
+      <td>Linux (musllinux, e.g. Alpine)</td>
+      <td>x86_64, aarch64, armv7</td>
+    </tr>
+    <tr>
+      <td>macOS</td>
+      <td>x86_64 (Intel), arm64 (Apple Silicon)</td>
+    </tr>
+    <tr>
+      <td>Windows</td>
+      <td>x86_64, i686</td>
+    </tr>
+  </tbody>
+</table>
+
+:::note[No wheel for your platform?]
+If pip cannot find a matching wheel it falls back to building from source, which
+needs a Rust toolchain (see below). This is the normal path on uncommon
+architectures or very new Python pre-releases that wheels do not yet target.
+:::
+
+## Building from source
+
+You only need this if you are working on YAMLRocks itself, or installing on a
+platform without a published wheel. Building requires a
+[Rust toolchain](https://rustup.rs/) and [maturin](https://www.maturin.rs/), the
+build tool that bridges Rust and Python packaging.
+
+Clone the repository and build into your active environment:
+
+```bash
+git clone https://github.com/frenck/yamlrocks
+cd yamlrocks
+pip install maturin
+maturin develop --release
+```
+
+`maturin develop` compiles the extension and installs it into the current
+virtual environment in one step. The `--release` flag produces an optimized
+build; the performance numbers in these docs all refer to release builds. While
+iterating on Rust code you can omit `--release` for much faster compiles at the
+cost of runtime speed.
+
+:::caution[Always benchmark release builds]
+A debug build of the extension can be an order of magnitude slower than a
+release build. If you are measuring performance, or comparing against another
+library, build with `--release` first.
+:::
+
+## Optional: numpy
+
+YAMLRocks does not depend on numpy, but it can serialize numpy arrays and scalars
+when you opt in with `OPT_SERIALIZE_NUMPY`. If you want that, install numpy
+alongside YAMLRocks:
+
+```bash
+pip install yamlrocks numpy
+```
+
+Without the flag, passing a numpy value to `dumps` raises `YAMLRocksEncodeError`, the
+same as any other unsupported type. With the flag, numpy arrays serialize as
+nested sequences and numpy scalars as their plain Python equivalents. See
+[dumping](/guides/dumping/) for the details.
+
+## Verify your install
+
+After installing, run this block to confirm the extension loaded and can both
+parse and emit. Remember that `dumps` returns `bytes`, so we decode for display:
+
+```python
+import yamlrocks
+
+source = """
+name: yamlrocks
+fast: true
+version: [1, 2]
+"""
+
+# Parse YAML into native Python objects.
+config = yamlrocks.loads(source)
+print(config)
+# {'name': 'yamlrocks', 'fast': True, 'version': [1, 2]}
+
+# Emit Python objects back to YAML. dumps returns bytes.
+print(yamlrocks.dumps(config).decode())
+# name: yamlrocks
+# fast: true
+# version:
+#   - 1
+#   - 2
+```
+
+If both lines print without raising, YAMLRocks is installed and working.
+
+## See also
+
+- [Quick start](/getting-started/quick-start/): a five-minute tour of the API.
+- [Migrating from PyYAML](/getting-started/migrating-from-pyyaml/): the drop-in
+  compatibility shim.
+- [Migrating from ruamel.yaml](/getting-started/migrating-from-ruamel/):
+  round-trip editing without the slowdown.
+- [API reference](/reference/api/) and [options](/reference/options/).

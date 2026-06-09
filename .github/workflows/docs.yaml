@@ -1,0 +1,86 @@
+---
+name: Docs
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  examples:
+    name: Verify documentation examples
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: 🏗 Set up uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - name: 🏗 Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # zizmor: ignore[superfluous-actions,stale-action-refs] stable; canonical pinned Rust toolchain installer
+      - name: 🏗 Install dependencies
+        run: uv sync --locked --no-install-project --no-default-groups --group build
+      - name: 🏗 Build and install yamlrocks
+        run: uv run --no-sync maturin develop --release
+      - name: 🚀 Run and verify every documented example
+        run: uv run --no-sync python docs/verify_examples.py
+
+  build:
+    name: Build the documentation site
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: 🏗 Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - name: 🏗 Install documentation dependencies
+        working-directory: docs
+        run: npm ci
+      - name: 🚀 Build the Astro site
+        working-directory: docs
+        run: npm run build
+      - name: 📦 Upload the Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: docs/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: [examples, build]
+    # Production only: publish to yaml.rocks on pushes to main (or a manual
+    # dispatch on main), and never from a fork. The artifact comes from the build
+    # job above, so nothing is rebuilt and no submodules are cloned here.
+    if: >-
+      github.repository == 'frenck/YAMLRocks'
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write # publish to GitHub Pages
+      id-token: write # OIDC token the deploy-pages action verifies
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 🚀 Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

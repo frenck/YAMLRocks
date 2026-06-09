@@ -1,0 +1,37 @@
+---
+name: PR Labels
+
+# yamllint disable-line rule:truthy
+on:
+  # zizmor: ignore[dangerous-triggers] - reads PR metadata only, no checkout
+  pull_request_target:
+    types:
+      - opened
+      - labeled
+      - unlabeled
+      - synchronize
+
+# Cancel superseded runs for the same pull request to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr_labels:
+    name: Verify
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read # Read pull request labels to verify them
+    steps:
+      - name: 🏷 Verify PR has a valid label
+        uses: jesusvasquez333/verify-pr-label-action@657d111bbbe13e22bbd55870f1813c699bde1401 # v1.4.0
+        with:
+          pull-request-number: "${{ github.event.pull_request.number }}"
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          valid-labels: >-
+            breaking-change, bugfix, documentation, enhancement,
+            refactor, performance, new-feature, maintenance, ci, dependencies
+          disable-reviews: true

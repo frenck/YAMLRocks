@@ -1,0 +1,238 @@
+---
+title: YAMLRocks
+description: A fast, correct YAML library for Python, written in Rust.
+hero:
+  title: YAMLRocks
+  tagline: Rock-solid YAML for Python, written in Rust.
+  actions:
+    - text: Quick start
+      link: /getting-started/quick-start/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/frenck/yamlrocks
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+**YAMLRocks** is the rock-solid YAML library for Python: a Rust-backed
+extension that parses and emits YAML fast, follows the YAML 1.2 specification
+(with a YAML 1.1 compatibility mode), and, unlike PyYAML, round-trips
+documents while preserving comments, anchors, and formatting. Correct, secure
+by default, and fast, with Rust at the core (the R in Rock).
+
+The API is small and predictable: `loads` and `dumps` for in-memory data, `load` and `dump` for files,
+`to_json` to export JSON, integer `OPT_*` flags combined with `|`, and `dumps`
+returning `bytes`. Reach for a flag only when you need to, and the defaults stay
+fast and correct.
+
+Created and written by **[Franck Nijhof](https://www.linkedin.com/in/frenck)**,
+also known as [Frenck](https://frenck.dev).
+
+Read [the story behind YAMLRocks](/about/).
+
+:::caution[Pre-1.0 project]
+YAMLRocks is currently alpha software. The core promises are explicit and tested:
+safe loading by default, YAML 1.2 semantics, reproducible real-world
+verification, and byte-for-byte round-trip for unmodified documents. Some
+advanced APIs may still change before 1.0 while the project gathers production
+feedback. See [stability and roadmap](/stability-roadmap/) for the 1.0 contract.
+:::
+
+<CardGrid>
+  <Card title="Fast" icon="rocket">
+    Parsing runs about 5 to 10 times faster than PyYAML's C loader, and dumping
+    about 15 to 19 times faster. Native `!include` resolution over hundreds of
+    files is roughly 18 times faster than a PyYAML constructor.
+  </Card>
+  <Card title="Correct" icon="approve-check">
+    A custom YAML 1.2 scanner and parser, exercised against the official YAML
+    test suite plus snapshot and fuzz corpora, and actively tested against
+    thousands of real-world configuration files from dozens of public
+    repositories across many ecosystems. See [real-world
+    verification](/verification/real-world-corpus/).
+  </Card>
+  <Card title="Secure" icon="approve-check-circle">
+    No code execution from tags, safe by default, and hardened against alias
+    bombs and deeply nested input. Includes stay confined to their base
+    directory, so a document cannot reach arbitrary files on disk.
+  </Card>
+  <Card title="Round-trip" icon="document">
+    Preserve comments, anchors, scalar styles, flow-versus-block layout, and an
+    explicit `---` marker. Edit a value and re-emit with the rest of the
+    document preserved, including unmodified included files.
+  </Card>
+  <Card title="Async-friendly" icon="random">
+    Await `async_load` to parse off the event loop (the native parse releases
+    the GIL, so other tasks keep progressing) and `async_dump` to write files
+    without blocking it. The extension is built for free-threaded (no-GIL)
+    CPython, too.
+  </Card>
+  <Card title="Batteries included" icon="setting">
+    YAML 1.1 mode, source-location annotations, native `!include` resolution
+    with write-back, JSON export, JSON Schema validation (including in-file
+    `$schema` references), and a PyYAML-compatible shim.
+  </Card>
+</CardGrid>
+
+## At a glance
+
+Parse YAML into native Python objects, and serialize them back to `bytes`:
+
+```python
+import yamlrocks
+
+source = """
+key: value
+list:
+  - 1
+  - 2
+"""
+
+data = yamlrocks.loads(source)
+# {'key': 'value', 'list': [1, 2]}
+
+yamlrocks.dumps(data)
+# b'key: value\nlist:\n  - 1\n  - 2\n'
+```
+
+Edit a value while keeping comments, anchors, and layout untouched:
+
+```python
+import yamlrocks
+
+doc = yamlrocks.loads(b"# app config\nname: app  # service\nport: 8080\n", option=yamlrocks.OPT_ROUND_TRIP)
+doc["port"] = 9090
+doc.to_yaml()
+# b'# app config\nname: app  # service\nport: 9090\n'
+```
+
+Export the same data to JSON with `to_json` (JSON is valid YAML 1.2, so `loads`
+already reads it back):
+
+```python
+import yamlrocks
+
+source = """
+name: app
+ports: [80, 443]
+"""
+
+yamlrocks.to_json(yamlrocks.loads(source))
+# b'{"name":"app","ports":[80,443]}'
+```
+
+In an asyncio application, `await` the load so it runs off the event loop
+thread. The native parse releases the GIL, so other tasks keep progressing:
+
+```python
+import asyncio
+import yamlrocks
+
+source = """
+key: value
+list:
+  - 1
+  - 2
+"""
+
+async def main():
+    return await yamlrocks.async_loads(source)
+
+asyncio.run(main())
+# {'key': 'value', 'list': [1, 2]}
+```
+
+## Faster on everything
+
+YAMLRocks beats PyYAML's C loader and leaves pure-Python round-trip libraries far
+behind. Release-build benchmarks, showing how many times faster YAMLRocks is:
+
+<table>
+  <thead>
+    <tr>
+      <th>Operation</th>
+      <th>vs PyYAML (C)</th>
+      <th>vs ruamel.yaml</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>
+        Parse (<code>loads</code>)
+      </td>
+      <td>~5-10x faster</td>
+      <td>~85-135x faster</td>
+    </tr>
+    <tr>
+      <td>
+        Serialize (<code>dumps</code>)
+      </td>
+      <td>~15-19x faster</td>
+      <td>~155-210x faster</td>
+    </tr>
+    <tr>
+      <td>
+        Split config (<code>!include</code>)
+      </td>
+      <td>~18x faster</td>
+      <td>n/a</td>
+    </tr>
+  </tbody>
+</table>
+
+See the full [comparisons](/comparisons/) and
+[performance guide](/guides/performance/). Planning a migration? Start with the
+[migration compatibility](/getting-started/compatibility/) matrix.
+
+## Real-world verification
+
+Trust matters when a parser edits configuration people maintain by hand.
+YAMLRocks is continuously tested against a reproducible corpus of public YAML
+repositories across Home Assistant, ESPHome, Ansible, Kubernetes, Docker Compose,
+GitHub Actions, CloudFormation, GitOps, Helm, OpenAPI, dbt, CircleCI,
+Serverless, and Tekton. Every standalone YAML file must parse and re-emit
+byte-for-byte in round-trip mode, and selected Home Assistant configurations are
+loaded through their full `!include` graph.
+
+These projects do not endorse or depend on YAMLRocks; their public repositories
+are used as a compatibility corpus so regressions are caught against YAML that
+people actually write and maintain. See the
+[real-world verification](/verification/real-world-corpus/) page for the current
+corpus and scope.
+
+## The whole story, in one example
+
+Round-trip a split configuration, edit a value that lives in an included file,
+and write only the file that changed back to disk:
+
+{/* verify: skip */}
+
+```python
+import yamlrocks
+
+# Load a Home Assistant config with includes, round-trip mode
+doc = yamlrocks.load(
+    "configuration.yaml",
+    option=yamlrocks.OPT_ROUND_TRIP | yamlrocks.OPT_INCLUDES,
+)
+
+# Edit a value that lives in an included file
+doc["automation"][0]["trigger"]["at"] = "07:30:00"
+
+# Save: only the changed file is rewritten, comments and the rest intact
+doc.save()
+```
+
+:::note[Project status]
+YAMLRocks implements fast load/dump, JSON export, YAML 1.1 mode, annotated mode,
+native includes, round-trip preservation, writable includes, JSON Schema
+validation (including in-file `$schema` references), the `!secret` and `!env_var`
+config tags, a PyYAML compatibility shim, and rich standard-library type support. It is
+verified against the official YAML test suite and thousands of real-world configs
+from many ecosystems, behind a code-coverage gate, and is safe against the common
+YAML attack classes, with hot paths tuned via the raw CPython API and zero-copy
+scalar parsing. See [stability and roadmap](/stability-roadmap/) for what is
+stable today, what may still change, and what blocks 1.0.
+:::

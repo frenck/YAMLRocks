@@ -20,6 +20,9 @@ jobs:
   benchmarks:
     name: Run performance benchmarks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # actions/checkout reads the repository
+      id-token: write # CodSpeed authenticates via OpenID Connect (no stored token)
     steps:
       - name: ⤵️ Check out code from GitHub
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -40,5 +43,5 @@ jobs:
       - name: 🚀 Run benchmarks under CodSpeed
         uses: CodSpeedHQ/action@9d332c4d90b43981c3e55ae8e38e68709996240f # v4.17.0
         with:
+          mode: simulation
           run: uv run --no-sync pytest bench --codspeed
-          token: ${{ secrets.CODSPEED_TOKEN }}

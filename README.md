@@ -7,6 +7,7 @@
 [![License][license-shield]](LICENSE)
 
 [![Build Status][build-shield]][build]
+[![CodSpeed][codspeed-shield]][codspeed]
 [![OpenSSF Scorecard][scorecard-shield]][scorecard]
 [![Open in Dev Containers][devcontainer-shield]][devcontainer]
 
@@ -277,6 +278,8 @@ SOFTWARE.
 
 [build-shield]: https://github.com/frenck/yamlrocks/actions/workflows/tests.yaml/badge.svg
 [build]: https://github.com/frenck/yamlrocks/actions/workflows/tests.yaml
+[codspeed-shield]: https://img.shields.io/endpoint?url=https://codspeed.io/badge.json
+[codspeed]: https://app.codspeed.io/frenck/YAMLRocks?utm_source=badge
 [contributors]: https://github.com/frenck/yamlrocks/graphs/contributors
 [devcontainer-shield]: https://img.shields.io/static/v1?label=Dev%20Containers&message=Open&color=blue&logo=visualstudiocode
 [devcontainer]: https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/frenck/yamlrocks

@@ -1,0 +1,19 @@
+literal_block: |
+  line one
+  line two
+  line three
+folded_block: >
+  this is a long
+  paragraph that will
+  be folded into one line
+literal_strip: |-
+  no trailing newline
+literal_keep: |+
+  keep trailing newlines
+
+
+description: |
+  A multi-line
+  description with
+
+  a blank line in the middle

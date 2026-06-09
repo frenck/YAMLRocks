@@ -1,0 +1,36 @@
+# Home Assistant configuration
+homeassistant:
+  name: Home
+  latitude: 52.3676
+  longitude: 4.9041
+  elevation: 0
+  unit_system: metric
+  time_zone: Europe/Amsterdam
+
+default_config:
+
+automation:
+  - alias: Turn on lights at sunset
+    trigger:
+      platform: sun
+      event: sunset
+    action:
+      - service: light.turn_on
+        target:
+          entity_id: light.living_room
+  - alias: Notify on door open
+    trigger:
+      platform: state
+      entity_id: binary_sensor.front_door
+      to: "on"
+    action:
+      - service: notify.mobile_app
+        data:
+          message: Front door opened
+
+sensor:
+  - platform: template
+    sensors:
+      temperature_trend:
+        friendly_name: Temperature Trend
+        value_template: "{{ states('sensor.temperature') }}"

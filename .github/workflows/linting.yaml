@@ -1,0 +1,117 @@
+---
+name: Linting
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    name: Ruff (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: 🏗 Set up uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: 🏗 Install ruff
+        run: uv sync --locked --only-group lint
+      - name: 🚀 Run ruff check
+        run: uv run --no-sync ruff check .
+      - name: 🚀 Run ruff format
+        run: uv run --no-sync ruff format --check .
+
+  rust:
+    name: Rustfmt & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: 🏗 Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # zizmor: ignore[superfluous-actions] stable; canonical pinned Rust toolchain installer
+        with:
+          components: rustfmt, clippy
+      - name: 🚀 Run cargo fmt
+        run: cargo fmt --check
+      - name: 🚀 Run cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  codespell:
+    name: Codespell
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: 🏗 Set up uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: 🏗 Install codespell
+        run: uv sync --locked --only-group lint
+      - name: 🚀 Run codespell
+        # Same codespell version as pre-commit and the lint group (uv.lock).
+        run: uv run --no-sync codespell
+
+  zizmor:
+    name: Zizmor (Actions security)
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: 🏗 Set up uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: 🏗 Install zizmor
+        run: uv sync --locked --only-group lint
+      - name: 🚀 Audit workflows with zizmor
+        env:
+          # Lets zizmor run its online audits (e.g. action ref checks).
+          GH_TOKEN: ${{ github.token }}
+        run: uv run --no-sync zizmor .github/workflows/ --persona=pedantic
+
+  pre-commit:
+    name: Pre-commit (file hygiene, workflows, formatting)
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: 🏗 Set up uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: 🚀 Run the pre-commit hooks not covered by the jobs above
+        # ruff, mypy, ty, codespell, zizmor, and cargo run in their own jobs
+        # above with the same uv-pinned versions, so they are skipped here. This
+        # runs the rest of .pre-commit-config.yaml (file hygiene, actionlint,
+        # prettier, taplo) through prek, which bootstraps their node/go/python
+        # environments. Local and CI thus run the exact same hook set.
+        env:
+          SKIP: ruff-check,ruff-format,mypy,ty,codespell,zizmor,cargo-fmt,cargo-clippy
+        run: uvx prek run --all-files --show-diff-on-failure

@@ -1,0 +1,13 @@
+{'empty_map': {},
+ 'empty_list': [],
+ 'null_value': None,
+ 'explicit_null': None,
+ 'nested_empty': {'inner': {}, 'another': []},
+ 'single_item_list': ['only'],
+ 'single_key_map': {'only': 'value'},
+ 'deeply_nested': {'a': {'b': {'c': {'d': {'e': 'bottom'}}}}},
+ 'list_of_nulls': [None, None, None],
+ 'booleans_as_keys': {'true': 'yes_string', 'false': 'no_string'},
+ 'numeric_keys': {'1': 'one', '2': 'two'},
+ 'long_value': 'this is a fairly long plain scalar value that keeps going on a single '
+               'line without quotes'}

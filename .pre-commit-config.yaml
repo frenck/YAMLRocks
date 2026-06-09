@@ -1,0 +1,124 @@
+# Hooks for prek (https://prek.j178.dev), a fast, drop-in pre-commit runner.
+# Run all hooks with `prek run --all-files` (or `pre-commit run --all-files`).
+#
+# Every tool that is also a project dependency runs through `uv run` as a local
+# hook, so its version comes from uv.lock (the single source of truth) and can
+# never drift from a separate `rev:` pin. Only tools that are not Python
+# dependencies (the pre-commit file hooks, actionlint, prettier) stay pinned by
+# `rev`; each has a single source, so it does not drift either.
+ci:
+  # pre-commit.ci cannot run the `language: system` hooks below (they need uv or
+  # the Rust toolchain), so skip them there; CI enforces them via the dedicated
+  # uv-based workflows instead.
+  skip:
+    - ruff-check
+    - ruff-format
+    - mypy
+    - ty
+    - codespell
+    - zizmor
+    - cargo-fmt
+    - cargo-clippy
+  autofix_commit_msg: "chore(pre-commit): auto-fixes from hooks"
+  autoupdate_commit_msg: "chore(pre-commit): autoupdate hooks"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        exclude: ^tests/data/
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-json
+      - id: detect-private-key
+      - id: end-of-file-fixer
+        exclude: ^tests/data/
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: ^tests/data/
+      - id: trailing-whitespace
+        exclude: ^tests/data/
+
+  # actionlint is a Go binary, not a Python dependency, so it stays pinned here.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        # `code-quality` is a current GitHub permission scope that actionlint
+        # does not recognize yet; ignore only that specific diagnostic.
+        args: ["-ignore", "code-quality"]
+
+  # Markdown / YAML / JS / JSON formatting for the docs site and configs.
+  - repo: https://github.com/rbubley/mirrors-prettier
+    rev: v3.4.2
+    hooks:
+      - id: prettier
+        types_or: [markdown, yaml, javascript, ts, json]
+        exclude: ^(tests/data/|Cargo\.lock$)
+
+  # TOML formatting. The hook installs the `taplo` PyPI package (which bundles
+  # the binary), so prek bootstraps it with no system dependency.
+  - repo: https://github.com/ComPWA/taplo-pre-commit
+    rev: v0.9.3
+    hooks:
+      - id: taplo-format
+
+  # Local hooks: every tool runs through uv (or the repo's Rust toolchain), so
+  # the version is whatever uv.lock / the toolchain pins. No `rev:` to drift.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: "🐶 Ruff linter"
+        language: system
+        types: [python]
+        entry: uv run --no-sync ruff check --fix
+        require_serial: true
+      - id: ruff-format
+        name: "🐶 Ruff formatter"
+        language: system
+        types: [python]
+        entry: uv run --no-sync ruff format
+        require_serial: true
+      - id: mypy
+        name: "🆎 Static typing with mypy"
+        language: system
+        types: [python]
+        files: ^pysrc/yamlrocks/
+        pass_filenames: false
+        entry: uv run --no-sync mypy pysrc/yamlrocks
+        require_serial: true
+      - id: ty
+        name: "🆎 Static typing with ty"
+        language: system
+        types: [python]
+        files: ^pysrc/yamlrocks/
+        pass_filenames: false
+        entry: uv run --no-sync ty check pysrc/yamlrocks
+        require_serial: true
+      - id: codespell
+        name: "🔤 Check for common misspellings"
+        language: system
+        types: [text]
+        entry: uv run --no-sync codespell
+      - id: zizmor
+        name: "🌈 Audit GitHub Actions workflows with zizmor"
+        language: system
+        types: [yaml]
+        files: ^\.github/workflows/
+        pass_filenames: false
+        entry: uv run --no-sync zizmor .github/workflows/ --persona=pedantic
+      - id: cargo-fmt
+        name: "🦀 Format Rust with cargo fmt"
+        language: system
+        types: [rust]
+        pass_filenames: false
+        entry: cargo fmt --
+      - id: cargo-clippy
+        name: "🦀 Lint Rust with Clippy"
+        language: system
+        types: [rust]
+        pass_filenames: false
+        entry: cargo clippy --all-targets -- -D warnings

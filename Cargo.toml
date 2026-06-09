@@ -1,0 +1,29 @@
+[package]
+name = "yamlrocks"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+description = "A fast, correct YAML library for Python"
+# Distributed as a Python wheel via maturin, never published to crates.io.
+publish = false
+
+[lib]
+name = "_yamlrocks"
+# cdylib for the Python extension module; rlib so the fuzz harness (see `fuzz/`)
+# can link the crate and exercise the pure-Rust parser directly.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.28", features = ["extension-module", "py-clone"] }
+smallvec = "1"
+# Grows the native stack on demand so recursive descent over deeply nested input
+# cannot overflow a small thread stack (musl/threadpool deployments) and abort the
+# interpreter; the depth cap still bounds total work. See `stack::guard`.
+stacker = "0.1"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+strip = "symbols"

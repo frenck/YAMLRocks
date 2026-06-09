@@ -1,0 +1,30 @@
+# Third-party licenses
+
+YAMLRocks is built from the Rust crates listed below. The crates linked into the
+distributed extension are redistributed in compiled form inside every wheel, and
+their licenses are reproduced here in full as those licenses require. YAMLRocks
+itself is MIT licensed (see `LICENSE`).
+
+This file is generated; run `just licenses` to regenerate it after a dependency
+change. Do not edit it by hand.
+
+## Summary
+
+{{#each overview}}
+- {{name}}: {{count}} crate(s)
+{{/each}}
+
+{{#each licenses}}
+## {{name}}
+
+Used by:
+
+{{#each used_by}}
+- [{{crate.name}} {{crate.version}}](https://crates.io/crates/{{crate.name}})
+{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}

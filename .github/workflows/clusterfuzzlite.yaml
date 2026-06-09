@@ -1,0 +1,42 @@
+---
+# This workflow uses actions that are not certified by GitHub. They are provided
+# by a third-party and are governed by separate terms of service, privacy
+# policy, and support documentation.
+
+name: ClusterFuzzLite
+
+# yamllint disable-line rule:truthy
+on:
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The ClusterFuzzLite actions expect repo-wide read access (the posture their own
+# documentation prescribes); write scopes are passed per-step via the token input.
+permissions: read-all # zizmor: ignore[excessive-permissions]
+
+jobs:
+  fuzz:
+    name: Fuzz the YAML parser
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🏗 Build fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          sanitizer: address
+      - name: 🚀 Run fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # A short batch on every pull request catches regressions without
+          # holding up review; a persistent corpus + longer continuous runs are
+          # an optional follow-up (configure `storage-repo`).
+          fuzz-seconds: 300
+          mode: code-change
+          sanitizer: address

@@ -1,0 +1,52 @@
+---
+// Keep Starlight's built-in footer (pagination, edit link, last updated), then
+// append project-level links: contribution guidelines and license.
+// The built-in footer needs the route props and pagination data, which some
+// routes (e.g. the 404 page) do not have, so forward props and guard it.
+import Default from "@astrojs/starlight/components/Footer.astro";
+---
+
+{Astro.props.pagination && <Default {...Astro.props} />}
+
+<div class="yr-footer">
+  <nav class="yr-footer-links" aria-label="Project">
+    <a href="/contributing/">Contributing</a>
+    <span aria-hidden="true">·</span>
+    <a href="/license/">License (MIT)</a>
+    <span aria-hidden="true">·</span>
+    <a href="https://github.com/frenck/yamlrocks">GitHub</a>
+  </nav>
+  <p class="yr-footer-copy">
+    Released under the <a href="/license/">MIT License</a>. Copyright © 2026
+    <a href="https://github.com/frenck">Franck Nijhof</a>.
+  </p>
+</div>
+
+<style>
+  .yr-footer {
+    margin-top: 2rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    text-align: center;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .yr-footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+    font-weight: 600;
+  }
+  .yr-footer-copy {
+    margin-top: 0.5rem;
+  }
+  .yr-footer a {
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+  }
+  .yr-footer a:hover {
+    color: var(--sl-color-accent-high);
+    text-decoration: underline;
+  }
+</style>

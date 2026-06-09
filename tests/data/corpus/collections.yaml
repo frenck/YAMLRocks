@@ -1,0 +1,36 @@
+mapping:
+  nested:
+    deep:
+      value: 1
+sequence:
+  - one
+  - two
+  - three
+sequence_of_mappings:
+  - name: alice
+    age: 30
+    roles:
+      - admin
+      - user
+  - name: bob
+    age: 25
+mapping_of_sequences:
+  fruits:
+    - apple
+    - banana
+  veggies:
+    - carrot
+nested_sequences:
+  - - 1
+    - 2
+  - - 3
+    - 4
+mixed:
+  servers:
+    - host: web1
+      ports:
+        - 80
+        - 443
+    - host: web2
+      ports:
+        - 8080

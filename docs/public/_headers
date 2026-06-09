@@ -1,0 +1,10 @@
+# Security headers for the documentation site, applied by Cloudflare Pages.
+# Astro copies everything in `public/` to the build output, so this file ships
+# as `dist/_headers`. No Content-Security-Policy is set here: Starlight relies on
+# inline theme styles/scripts, and a strict policy would need per-build hashing.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains

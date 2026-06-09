@@ -1,0 +1,222 @@
+/* =====================================================================
+   Frenck brand styling for the YAMLRocks docs.
+   Colors and motifs taken from frenck.dev's Ghost theme: the Inter font,
+   the accent -> gradient sweep (#506468 -> #24fefd), the #100F15
+   background with corner glows, pill buttons, and cards with a gradient
+   border that fades in on hover.
+   ===================================================================== */
+
+:root {
+  /* Inter, matching frenck.dev (loaded via @fontsource-variable/inter). */
+  --sl-font: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  --frenck-accent: #506468; /* Ghost accent color */
+  --frenck-cyan: #24fefd; /* Ghost gradient color */
+  /* --gradient-primary: accent -> gradient, the way the theme builds it. */
+  --frenck-gradient: linear-gradient(30deg, var(--frenck-accent), var(--frenck-cyan));
+
+  /* Accent for links / active nav / focus rings. Based on #506468, but the
+     base is lightened (same hue) so link text stays legible on the dark
+     background; literal #506468 would fail contrast there. */
+  --sl-color-accent-low: #273335;
+  --sl-color-accent: #739da5;
+  --sl-color-accent-high: #b7d1d7;
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #dfeaec;
+  --sl-color-accent: #49686e;
+  --sl-color-accent-high: #243d42;
+}
+
+/* -- Background -------------------------------------------------------
+   Dark mode (the default): the deep #100F15 base with soft brand glows.
+   The background is painted by a fixed, full-viewport layer behind
+   everything (`body::before`, z-index -1) rather than on `body` itself.
+   Starlight's reset sets `body { background-color: var(--sl-color-bg) }`,
+   so painting the base color on `body` is fragile - the cascade can drop
+   it and leave only the glows, so the dark base never reaches the main
+   content. A dedicated layer is immune to that and shows uniformly behind
+   the sidebar AND the main content, which are made transparent below.
+   Light mode keeps Starlight's clean surfaces. */
+:root {
+  --sl-color-bg: transparent;
+  --sl-color-bg-sidebar: transparent;
+  --sl-color-bg-nav: rgba(16, 15, 21, 0.8);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(55rem 38rem at 0% -2%, rgba(36, 254, 253, 0.1), transparent 60%),
+    radial-gradient(48rem 40rem at 100% 100%, rgba(80, 100, 104, 0.18), transparent 60%),
+    radial-gradient(70rem 52rem at 62% 32%, rgba(36, 254, 253, 0.05), transparent 60%),
+    #100f15;
+}
+
+:root[data-theme="light"] {
+  --sl-color-bg: #ffffff;
+  --sl-color-bg-sidebar: #f6f7f9;
+  --sl-color-bg-nav: rgba(255, 255, 255, 0.85);
+}
+
+:root[data-theme="light"] body::before {
+  background: #ffffff;
+}
+
+/* -- Landing hero ----------------------------------------------------- */
+.sl-container .hero {
+  padding-block: 1.5rem 2.5rem;
+  grid-template-columns: 1fr;
+}
+
+/* The wordmark wears the brand gradient. The emoji is rendered via a
+   pseudo-element so it keeps its own colors instead of being clipped. */
+.sl-container .hero h1 {
+  background: var(--frenck-text-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.sl-container .hero h1::before {
+  content: "🪨 ";
+  -webkit-text-fill-color: initial;
+  color: initial;
+}
+
+/* The header site title gets the same treatment: gradient wordmark with a
+   leading rock emoji (the emoji lives in ::before so it is not clipped). The
+   site title is a flex row, so its `gap` controls the emoji-to-text distance;
+   tighten it to match the hero (no extra space in the emoji content). */
+.site-title {
+  gap: 0.4rem;
+}
+
+.site-title > span {
+  background: var(--frenck-text-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.site-title::before {
+  content: "🪨";
+  -webkit-text-fill-color: initial;
+  color: initial;
+}
+
+/* -- Primary buttons (pill + gradient slide on hover) ----------------- */
+.sl-link-button.primary {
+  border: none;
+  border-radius: 99px;
+  color: #fff;
+  font-weight: 700;
+  background: var(--frenck-gradient);
+  background-size: 200% auto;
+  background-position: left center;
+  transition:
+    background-position 0.5s cubic-bezier(0.2, 0.63, 0.36, 1),
+    box-shadow 0.25s ease,
+    transform 0.25s ease;
+}
+
+.sl-link-button.primary:hover {
+  color: #fff;
+  background-position: right center;
+  box-shadow: 0 6px 24px -8px var(--frenck-cyan);
+  transform: translateY(-1px);
+}
+
+/* -- Cards (rounded, with a gradient border that fades in on hover) ---- */
+.sl-markdown-content .card {
+  position: relative;
+  border-radius: 16px;
+  transition: transform 0.25s ease;
+}
+
+/* A 1px gradient ring, masked to the edges, that fades in on hover. */
+.sl-markdown-content .card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--frenck-gradient);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+}
+
+.sl-markdown-content .card:hover {
+  transform: translateY(-3px);
+}
+
+.sl-markdown-content .card:hover::after {
+  opacity: 1;
+}
+
+/* Card icons. Starlight rotates the icon square through saturated
+   orange/purple/green/red/blue `-low` colors, which read as a harsh rainbow
+   against the muted teal brand. Use one soft brand tone for every card so the
+   grid stays cohesive. */
+.sl-markdown-content .card .icon {
+  background-color: var(--sl-color-accent-low);
+  color: var(--sl-color-accent-high);
+}
+
+/* -- Asides / admonitions --------------------------------------------
+   Starlight fills note/tip/caution/danger with a saturated `-low` color that
+   sits heavily on the dark background. Keep the semantic left border and title
+   color (so the type still reads at a glance), but soften the fill to a faint
+   tint of that same color. */
+.sl-markdown-content .starlight-aside {
+  background-color: color-mix(in srgb, var(--sl-color-asides-border) 10%, transparent);
+}
+
+/* -- Inline brand mentions (the YAMLRocks gimmick) -------------------
+   Every "YAMLRocks" mention in prose is wrapped by the rehype plugin and
+   rendered with the brand gradient and a leading rock emoji. */
+:root {
+  --frenck-text-gradient: var(--frenck-gradient);
+}
+
+:root[data-theme="light"] {
+  /* The bright cyan end is invisible on white, so use a darker teal sweep. */
+  --frenck-text-gradient: linear-gradient(30deg, #3a4d50, #0a8e99);
+}
+
+.yamlrocks {
+  white-space: nowrap;
+  font-weight: 600;
+  background: var(--frenck-text-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.yamlrocks::before {
+  content: "🪨\00a0";
+  -webkit-text-fill-color: initial;
+  color: initial;
+}
+
+/* -- Table cells -----------------------------------------------------
+   Inline code in table cells (flag names, identifiers) should stay whole
+   instead of breaking mid-token in a narrow column, e.g.
+   `OPT_PASSTHROUGH_TAG` was wrapping as `OPT_PASSTHROUGH_T` + `AG`. */
+.sl-markdown-content table code {
+  white-space: nowrap;
+}

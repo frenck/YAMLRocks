@@ -1,0 +1,289 @@
+[submodule "tests/data/realworld/home-assistant/frenck"]
+	path = tests/data/realworld/home-assistant/frenck
+	url = https://github.com/frenck/home-assistant-config.git
+[submodule "tests/data/realworld/home-assistant/thomasloven"]
+	path = tests/data/realworld/home-assistant/thomasloven
+	url = https://github.com/thomasloven/hass-config.git
+[submodule "tests/data/realworld/home-assistant/arsaboo"]
+	path = tests/data/realworld/home-assistant/arsaboo
+	url = https://github.com/arsaboo/homeassistant-config.git
+[submodule "tests/data/realworld/ansible/geerlingguy-devops"]
+	path = tests/data/realworld/ansible/geerlingguy-devops
+	url = https://github.com/geerlingguy/ansible-for-devops.git
+[submodule "tests/data/realworld/ansible/geerlingguy-docker"]
+	path = tests/data/realworld/ansible/geerlingguy-docker
+	url = https://github.com/geerlingguy/ansible-role-docker.git
+[submodule "tests/data/realworld/esphome/firmware"]
+	path = tests/data/realworld/esphome/firmware
+	url = https://github.com/esphome/firmware.git
+[submodule "tests/data/realworld/kubernetes/examples"]
+	path = tests/data/realworld/kubernetes/examples
+	url = https://github.com/kubernetes/examples.git
+[submodule "tests/data/realworld/docker-compose/awesome-compose"]
+	path = tests/data/realworld/docker-compose/awesome-compose
+	url = https://github.com/docker/awesome-compose.git
+[submodule "tests/data/realworld/home-assistant/dubhad"]
+	path = tests/data/realworld/home-assistant/dubhad
+	url = https://github.com/DubhAd/Home-AssistantConfig.git
+[submodule "tests/data/realworld/home-assistant/shortbloke"]
+	path = tests/data/realworld/home-assistant/shortbloke
+	url = https://github.com/shortbloke/home_assistant_config.git
+[submodule "tests/data/realworld/home-assistant/jcallaghan"]
+	path = tests/data/realworld/home-assistant/jcallaghan
+	url = https://github.com/jcallaghan/home-assistant-config.git
+[submodule "tests/data/realworld/home-assistant/benct"]
+	path = tests/data/realworld/home-assistant/benct
+	url = https://github.com/benct/home-assistant-config.git
+[submodule "tests/data/realworld/home-assistant/nagyrobi"]
+	path = tests/data/realworld/home-assistant/nagyrobi
+	url = https://github.com/nagyrobi/home-assistant-configuration-examples.git
+[submodule "tests/data/realworld/home-assistant/bahnburner"]
+	path = tests/data/realworld/home-assistant/bahnburner
+	url = https://github.com/Bahnburner/Home-Assistant-Config.git
+[submodule "tests/data/realworld/home-assistant/renemarc"]
+	path = tests/data/realworld/home-assistant/renemarc
+	url = https://github.com/renemarc/home-assistant-config.git
+[submodule "tests/data/realworld/home-assistant/bieniu"]
+	path = tests/data/realworld/home-assistant/bieniu
+	url = https://github.com/bieniu/home-assistant-config.git
+[submodule "tests/data/realworld/home-assistant/dshokouhi"]
+	path = tests/data/realworld/home-assistant/dshokouhi
+	url = https://github.com/dshokouhi/Home-AssistantConfig.git
+[submodule "tests/data/realworld/home-assistant/hmmbob"]
+	path = tests/data/realworld/home-assistant/hmmbob
+	url = https://github.com/hmmbob/HomeAssistantConfig.git
+[submodule "tests/data/realworld/github-actions/starter-workflows"]
+	path = tests/data/realworld/github-actions/starter-workflows
+	url = https://github.com/actions/starter-workflows.git
+[submodule "tests/data/realworld/cloudformation/aws-templates"]
+	path = tests/data/realworld/cloudformation/aws-templates
+	url = https://github.com/aws-cloudformation/aws-cloudformation-templates.git
+[submodule "tests/data/realworld/serverless/examples"]
+	path = tests/data/realworld/serverless/examples
+	url = https://github.com/serverless/examples.git
+[submodule "tests/data/realworld/gitops/argocd-example-apps"]
+	path = tests/data/realworld/gitops/argocd-example-apps
+	url = https://github.com/argoproj/argocd-example-apps.git
+[submodule "tests/data/realworld/gitops/flux2-example"]
+	path = tests/data/realworld/gitops/flux2-example
+	url = https://github.com/fluxcd/flux2-kustomize-helm-example.git
+[submodule "tests/data/realworld/openapi/openapi-specification"]
+	path = tests/data/realworld/openapi/openapi-specification
+	url = https://github.com/OAI/OpenAPI-Specification.git
+[submodule "tests/data/realworld/openapi/swagger-petstore"]
+	path = tests/data/realworld/openapi/swagger-petstore
+	url = https://github.com/swagger-api/swagger-petstore.git
+[submodule "tests/data/realworld/dbt/jaffle-shop"]
+	path = tests/data/realworld/dbt/jaffle-shop
+	url = https://github.com/dbt-labs/jaffle-shop-classic.git
+[submodule "tests/data/realworld/helm/prometheus-community"]
+	path = tests/data/realworld/helm/prometheus-community
+	url = https://github.com/prometheus-community/helm-charts.git
+[submodule "tests/data/realworld/tekton/catalog"]
+	path = tests/data/realworld/tekton/catalog
+	url = https://github.com/tektoncd/catalog.git
+[submodule "tests/data/realworld/circleci/demo-go"]
+	path = tests/data/realworld/circleci/demo-go
+	url = https://github.com/CircleCI-Public/circleci-demo-go.git
+[submodule "tests/data/realworld/esphome/jesserockz"]
+	path = tests/data/realworld/esphome/jesserockz
+	url = https://github.com/jesserockz/esphome-configs.git
+[submodule "tests/data/realworld/esphome/athom"]
+	path = tests/data/realworld/esphome/athom
+	url = https://github.com/athom-tech/esp32-configs.git
+[submodule "tests/data/realworld/esphome/alexmekkering"]
+	path = tests/data/realworld/esphome/alexmekkering
+	url = https://github.com/AlexMekkering/esphome-config.git
+[submodule "tests/data/realworld/ansible/geerlingguy-nginx"]
+	path = tests/data/realworld/ansible/geerlingguy-nginx
+	url = https://github.com/geerlingguy/ansible-role-nginx.git
+[submodule "tests/data/realworld/ansible/geerlingguy-mysql"]
+	path = tests/data/realworld/ansible/geerlingguy-mysql
+	url = https://github.com/geerlingguy/ansible-role-mysql.git
+[submodule "tests/data/realworld/kubernetes/microservices-demo"]
+	path = tests/data/realworld/kubernetes/microservices-demo
+	url = https://github.com/GoogleCloudPlatform/microservices-demo.git
+[submodule "tests/data/realworld/kubernetes/example-voting-app"]
+	path = tests/data/realworld/kubernetes/example-voting-app
+	url = https://github.com/dockersamples/example-voting-app.git
+[submodule "tests/data/realworld/docker-compose/haxxnet-examples"]
+	path = tests/data/realworld/docker-compose/haxxnet-examples
+	url = https://github.com/Haxxnet/Compose-Examples.git
+[submodule "tests/data/realworld/cloudformation/widdix"]
+	path = tests/data/realworld/cloudformation/widdix
+	url = https://github.com/widdix/aws-cf-templates.git
+[submodule "tests/data/realworld/gitops/podinfo"]
+	path = tests/data/realworld/gitops/podinfo
+	url = https://github.com/stefanprodan/podinfo.git
+[submodule "tests/data/realworld/dbt/dbt-utils"]
+	path = tests/data/realworld/dbt/dbt-utils
+	url = https://github.com/dbt-labs/dbt-utils.git
+[submodule "tests/data/realworld/helm/grafana"]
+	path = tests/data/realworld/helm/grafana
+	url = https://github.com/grafana/helm-charts.git
+[submodule "tests/data/realworld/circleci/demo-python-django"]
+	path = tests/data/realworld/circleci/demo-python-django
+	url = https://github.com/CircleCI-Public/circleci-demo-python-django.git
+[submodule "tests/data/yaml_test_suite/cases"]
+	path = tests/data/yaml_test_suite/cases
+	url = https://github.com/yaml/yaml-test-suite
+	branch = data
+[submodule "tests/data/realworld/ansible/dev-sec-hardening"]
+	path = tests/data/realworld/ansible/dev-sec-hardening
+	url = https://github.com/dev-sec/ansible-collection-hardening.git
+[submodule "tests/data/realworld/ansible/prometheus-community"]
+	path = tests/data/realworld/ansible/prometheus-community
+	url = https://github.com/prometheus-community/ansible.git
+[submodule "tests/data/realworld/esphome/landonr"]
+	path = tests/data/realworld/esphome/landonr
+	url = https://github.com/landonr/lilygo-tdisplays3-esphome.git
+[submodule "tests/data/realworld/esphome/nrandell"]
+	path = tests/data/realworld/esphome/nrandell
+	url = https://github.com/nrandell/esphome.git
+[submodule "tests/data/realworld/prometheus/prometheus"]
+	path = tests/data/realworld/prometheus/prometheus
+	url = https://github.com/prometheus/prometheus.git
+[submodule "tests/data/realworld/prometheus/alertmanager"]
+	path = tests/data/realworld/prometheus/alertmanager
+	url = https://github.com/prometheus/alertmanager.git
+[submodule "tests/data/realworld/argo-workflows/argo-workflows"]
+	path = tests/data/realworld/argo-workflows/argo-workflows
+	url = https://github.com/argoproj/argo-workflows.git
+[submodule "tests/data/realworld/opentelemetry/collector"]
+	path = tests/data/realworld/opentelemetry/collector
+	url = https://github.com/open-telemetry/opentelemetry-collector.git
+[submodule "tests/data/realworld/concourse/concourse"]
+	path = tests/data/realworld/concourse/concourse
+	url = https://github.com/concourse/concourse.git
+[submodule "tests/data/realworld/crossplane/crossplane"]
+	path = tests/data/realworld/crossplane/crossplane
+	url = https://github.com/crossplane/crossplane.git
+[submodule "tests/data/realworld/docker-compose/compose-spec"]
+	path = tests/data/realworld/docker-compose/compose-spec
+	url = https://github.com/compose-spec/compose-spec.git
+[submodule "tests/data/realworld/kubernetes/kustomize"]
+	path = tests/data/realworld/kubernetes/kustomize
+	url = https://github.com/kubernetes-sigs/kustomize.git
+[submodule "tests/data/realworld/cloudfoundry/cf-deployment"]
+	path = tests/data/realworld/cloudfoundry/cf-deployment
+	url = https://github.com/cloudfoundry/cf-deployment.git
+[submodule "tests/data/realworld/azure-pipelines/examples"]
+	path = tests/data/realworld/azure-pipelines/examples
+	url = https://github.com/microsoft/azure-pipelines-yaml.git
+[submodule "tests/data/realworld/goss/goss"]
+	path = tests/data/realworld/goss/goss
+	url = https://github.com/goss-org/goss.git
+[submodule "tests/data/realworld/mkdocs/mkdocs-material"]
+	path = tests/data/realworld/mkdocs/mkdocs-material
+	url = https://github.com/squidfunk/mkdocs-material.git
+[submodule "tests/data/realworld/cloud-init/cloud-init"]
+	path = tests/data/realworld/cloud-init/cloud-init
+	url = https://github.com/canonical/cloud-init.git
+[submodule "tests/data/realworld/woodpecker/woodpecker"]
+	path = tests/data/realworld/woodpecker/woodpecker
+	url = https://github.com/woodpecker-ci/woodpecker.git
+[submodule "tests/data/realworld/home-assistant/basnijholt"]
+	path = tests/data/realworld/home-assistant/basnijholt
+	url = https://github.com/basnijholt/home-assistant-config.git
+[submodule "tests/data/realworld/esphome/esphome-core"]
+	path = tests/data/realworld/esphome/esphome-core
+	url = https://github.com/esphome/esphome.git
+[submodule "tests/data/realworld/kubernetes/the-hard-way"]
+	path = tests/data/realworld/kubernetes/the-hard-way
+	url = https://github.com/kelseyhightower/kubernetes-the-hard-way.git
+[submodule "tests/data/realworld/docker-compose/vegasbrianc-monitoring"]
+	path = tests/data/realworld/docker-compose/vegasbrianc-monitoring
+	url = https://github.com/vegasbrianc/prometheus.git
+[submodule "tests/data/realworld/cloudformation/awslabs"]
+	path = tests/data/realworld/cloudformation/awslabs
+	url = https://github.com/awslabs/aws-cloudformation-templates.git
+[submodule "tests/data/realworld/gitops/flux2"]
+	path = tests/data/realworld/gitops/flux2
+	url = https://github.com/fluxcd/flux2.git
+[submodule "tests/data/realworld/argo-workflows/argo-cd"]
+	path = tests/data/realworld/argo-workflows/argo-cd
+	url = https://github.com/argoproj/argo-cd.git
+[submodule "tests/data/realworld/helm/jenkinsci"]
+	path = tests/data/realworld/helm/jenkinsci
+	url = https://github.com/jenkinsci/helm-charts.git
+[submodule "tests/data/realworld/prometheus/kube-prometheus"]
+	path = tests/data/realworld/prometheus/kube-prometheus
+	url = https://github.com/prometheus-operator/kube-prometheus.git
+[submodule "tests/data/realworld/opentelemetry/demo"]
+	path = tests/data/realworld/opentelemetry/demo
+	url = https://github.com/open-telemetry/opentelemetry-demo.git
+[submodule "tests/data/realworld/openapi/oas-examples"]
+	path = tests/data/realworld/openapi/oas-examples
+	url = https://github.com/readmeio/oas-examples.git
+[submodule "tests/data/realworld/dbt/dbt-core"]
+	path = tests/data/realworld/dbt/dbt-core
+	url = https://github.com/dbt-labs/dbt-core.git
+[submodule "tests/data/realworld/circleci/demo-js-express"]
+	path = tests/data/realworld/circleci/demo-js-express
+	url = https://github.com/CircleCI-Public/circleci-demo-javascript-express.git
+[submodule "tests/data/realworld/azure-pipelines/pipelines-java"]
+	path = tests/data/realworld/azure-pipelines/pipelines-java
+	url = https://github.com/MicrosoftDocs/pipelines-java.git
+[submodule "tests/data/realworld/concourse/concourse-docker"]
+	path = tests/data/realworld/concourse/concourse-docker
+	url = https://github.com/concourse/concourse-docker.git
+[submodule "tests/data/realworld/github-actions/toolkit"]
+	path = tests/data/realworld/github-actions/toolkit
+	url = https://github.com/actions/toolkit.git
+[submodule "tests/data/realworld/serverless/serverless-patterns"]
+	path = tests/data/realworld/serverless/serverless-patterns
+	url = https://github.com/aws-samples/serverless-patterns.git
+[submodule "tests/data/realworld/tekton/pipeline"]
+	path = tests/data/realworld/tekton/pipeline
+	url = https://github.com/tektoncd/pipeline.git
+[submodule "tests/data/realworld/cloudfoundry/bosh-deployment"]
+	path = tests/data/realworld/cloudfoundry/bosh-deployment
+	url = https://github.com/cloudfoundry/bosh-deployment.git
+[submodule "tests/data/realworld/mkdocs/mkdocstrings"]
+	path = tests/data/realworld/mkdocs/mkdocstrings
+	url = https://github.com/mkdocstrings/mkdocstrings.git
+[submodule "tests/data/realworld/woodpecker/plugin-git"]
+	path = tests/data/realworld/woodpecker/plugin-git
+	url = https://github.com/woodpecker-ci/plugin-git.git
+[submodule "tests/data/realworld/crossplane/platform-ref-aws"]
+	path = tests/data/realworld/crossplane/platform-ref-aws
+	url = https://github.com/upbound/platform-ref-aws.git
+[submodule "tests/data/realworld/ansible/geerlingguy-mac"]
+	path = tests/data/realworld/ansible/geerlingguy-mac
+	url = https://github.com/geerlingguy/mac-dev-playbook.git
+[submodule "tests/data/realworld/kubernetes/kubespray"]
+	path = tests/data/realworld/kubernetes/kubespray
+	url = https://github.com/kubernetes-sigs/kubespray.git
+[submodule "tests/data/realworld/prometheus/operator"]
+	path = tests/data/realworld/prometheus/operator
+	url = https://github.com/prometheus-operator/prometheus-operator.git
+[submodule "tests/data/realworld/gitops/fleet-examples"]
+	path = tests/data/realworld/gitops/fleet-examples
+	url = https://github.com/rancher/fleet-examples.git
+[submodule "tests/data/realworld/github-actions/setup-node"]
+	path = tests/data/realworld/github-actions/setup-node
+	url = https://github.com/actions/setup-node.git
+[submodule "tests/data/realworld/home-assistant/bachya"]
+	path = tests/data/realworld/home-assistant/bachya
+	url = https://github.com/bachya/smart-home.git
+[submodule "tests/data/realworld/docker-compose/compose-tool"]
+	path = tests/data/realworld/docker-compose/compose-tool
+	url = https://github.com/docker/compose.git
+[submodule "tests/data/realworld/argo-workflows/argo-rollouts"]
+	path = tests/data/realworld/argo-workflows/argo-rollouts
+	url = https://github.com/argoproj/argo-rollouts.git
+[submodule "tests/data/realworld/tekton/triggers"]
+	path = tests/data/realworld/tekton/triggers
+	url = https://github.com/tektoncd/triggers.git
+[submodule "tests/data/realworld/opentelemetry/collector-contrib"]
+	path = tests/data/realworld/opentelemetry/collector-contrib
+	url = https://github.com/open-telemetry/opentelemetry-collector-contrib.git
+[submodule "tests/data/realworld/circleci/docs"]
+	path = tests/data/realworld/circleci/docs
+	url = https://github.com/circleci/circleci-docs.git
+[submodule "tests/data/realworld/helm/helm-tool"]
+	path = tests/data/realworld/helm/helm-tool
+	url = https://github.com/helm/helm.git
+[submodule "tests/data/realworld/openapi/stripe"]
+	path = tests/data/realworld/openapi/stripe
+	url = https://github.com/stripe/openapi.git

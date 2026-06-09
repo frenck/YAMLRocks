@@ -1,0 +1,29 @@
+flow_mapping:
+  a: 1
+  b: 2
+  c: 3
+flow_sequence:
+  - 1
+  - 2
+  - 3
+  - 4
+nested_flow:
+  list:
+    - 1
+    - 2
+  map:
+    x: 10
+    y: 20
+flow_in_block:
+  - name: a
+    value: 1
+  - name: b
+    value: 2
+empty_flow_map: {}
+empty_flow_seq: []
+mixed_flow:
+  - a: 1
+  - b: 2
+  -
+    - 3
+    - 4

@@ -1,0 +1,22 @@
+# Top-level configuration comment
+# spanning multiple lines
+name: my-app # inline comment on a value
+version: 1.0.0
+
+# Section: database settings
+database:
+  # the database host
+  host: localhost
+  port: 5432 # default postgres port
+  # connection pool
+  pool:
+    min: 1
+    max: 10
+
+# Section: feature flags
+features:
+  - logging # enabled by default
+  - metrics
+  # caching is experimental
+  - caching
+# trailing comment at end of file

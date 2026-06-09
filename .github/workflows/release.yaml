@@ -1,0 +1,242 @@
+---
+name: Release
+
+# yamllint disable-line rule:truthy
+on:
+  release:
+    types:
+      - published
+
+# Serialize releases per tag and never cancel an in-flight publish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # manylinux wheels across architectures.
+  linux:
+    name: Wheels (manylinux ${{ matrix.platform.target }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-22.04, target: x86_64 }
+          - { runner: ubuntu-22.04, target: x86 }
+          - { runner: ubuntu-22.04, target: aarch64 }
+          - { runner: ubuntu-22.04, target: armv7 }
+          - { runner: ubuntu-22.04, target: s390x }
+          - { runner: ubuntu-22.04, target: ppc64le }
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: 🏗 Set package version from release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter '3.11 3.12 3.13 3.14'
+          manylinux: auto
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-linux-${{ matrix.platform.target }}
+          path: dist
+
+  # musllinux (Alpine) wheels.
+  musllinux:
+    name: Wheels (musllinux ${{ matrix.platform.target }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { target: x86_64 }
+          - { target: x86 }
+          - { target: aarch64 }
+          - { target: armv7 }
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: 🏗 Set package version from release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter '3.11 3.12 3.13 3.14'
+          manylinux: musllinux_1_2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-musllinux-${{ matrix.platform.target }}
+          path: dist
+
+  windows:
+    name: Wheels (windows ${{ matrix.platform.target }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { target: x64, arch: x64 }
+          - { target: x86, arch: x86 }
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.platform.arch }}
+      - name: 🏗 Set package version from release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter '3.11 3.12 3.13 3.14'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-windows-${{ matrix.platform.target }}
+          path: dist
+
+  macos:
+    name: Wheels (macos ${{ matrix.platform.target }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: macos-13, target: x86_64 }
+          - { runner: macos-14, target: aarch64 }
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: 🏗 Set package version from release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter '3.11 3.12 3.13 3.14'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-macos-${{ matrix.platform.target }}
+          path: dist
+
+  sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: 🏗 Set package version from release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-sdist
+          path: dist
+
+  release:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [linux, musllinux, windows, macos, sdist]
+    environment:
+      name: release
+      url: https://pypi.org/p/yamlrocks
+    permissions:
+      attestations: write # Sign build provenance and SBOM
+      id-token: write # Trusted publishing to PyPI
+    steps:
+      - name: ⬇️ Download all artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 🏗 Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: 🔍 Validate the artifact set
+        shell: bash
+        # A failed build job already blocks publishing via `needs:`; this catches
+        # the narrow case of a job that went green but produced an incomplete set.
+        # We assert the source dist exists and that every CPython version we
+        # promise has at least one wheel, rather than counting wheels (a count
+        # tells us nothing about which ones are present).
+        run: |
+          set -euo pipefail
+          ls -l dist
+          find dist -maxdepth 1 -name '*.tar.gz' | grep -q . \
+            || { echo "::error::no source distribution (sdist) found"; exit 1; }
+          for tag in cp311 cp312 cp313 cp314; do
+            find dist -maxdepth 1 -name "*${tag}*.whl" | grep -q . \
+              || { echo "::error::no wheel for ${tag}"; exit 1; }
+          done
+      - name: 🚬 Smoke-test a built wheel in a clean environment
+        shell: bash
+        # Install the wheel matching this runner from the artifacts only (never
+        # PyPI) and exercise the public API, so a broken wheel blocks publish.
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install --upgrade pip
+          /tmp/smoke/bin/pip install --no-index --find-links dist yamlrocks
+          /tmp/smoke/bin/python -c "import yamlrocks; assert yamlrocks.loads(b'x: 1') == {'x': 1}; print('smoke OK', yamlrocks.dumps({'a': [1, 2]}))"
+      - name: 📝 Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist
+          format: cyclonedx-json
+          output-file: yamlrocks.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: 📝 Attest build provenance and SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: "dist/*"
+          sbom-path: yamlrocks.cdx.json
+      - name: 🚀 Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          verbose: true
+          print-hash: true

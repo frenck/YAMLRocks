@@ -1,0 +1,26 @@
+defaults:
+  adapter: postgres
+  host: localhost
+  port: 5432
+development:
+  database: dev_db
+  settings:
+    adapter: postgres
+    host: localhost
+    port: 5432
+production:
+  database: prod_db
+  settings:
+    adapter: postgres
+    host: localhost
+    port: 5432
+scalar_anchor: hello
+reference: hello
+list_anchor:
+  - 1
+  - 2
+  - 3
+list_ref:
+  - 1
+  - 2
+  - 3

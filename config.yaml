@@ -1,0 +1,4 @@
+name: app
+ports:
+  - 80
+  - 443

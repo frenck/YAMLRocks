@@ -1,0 +1,92 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+sdist/
+.Python
+.installed.cfg
+
+# --- Python: tooling caches and coverage ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ty/
+.hypothesis/
+.cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.python-version
+
+# --- Virtual environments ---
+.venv/
+.venv-*/
+venv/
+ENV/
+env/
+
+# --- Rust / maturin ---
+/target/
+*.so
+*.pyd
+# Coverage instrumentation output (cargo-llvm-cov).
+*.profraw
+*.profdata
+lcov.info
+# Mutation-testing output (cargo-mutants): the current and previous run.
+/mutants.out/
+/mutants.out.old/
+
+# --- Fuzzing (cargo-fuzz): build, corpus, and findings are all local. ---
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+# libFuzzer writes per-worker logs to the working directory.
+fuzz-*.log
+
+# --- Documentation site (Astro / Node) ---
+node_modules/
+docs/.astro/
+
+# --- Generated / transient ---
+# Dependency-audit export written and removed by `just audit-python`.
+requirements-audit.txt
+# CycloneDX SBOM emitted by the release pipeline.
+*.cdx.json
+# Local, machine-specific benchmark output from `python bench/bench.py --save`.
+# The canonical figures live in the docs; this is a regenerable scratch report.
+/bench/RESULTS.md
+
+# --- Tooling and agents ---
+.claude/
+.dccache
+
+# --- OS cruft ---
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Editors ---
+.vscode/
+.idea/
+*.iml
+*.swp
+*~
+
+# --- Secrets and stray files ---
+.env
+*.orig
+*.rej

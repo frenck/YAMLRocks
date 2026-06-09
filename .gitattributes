@@ -1,0 +1,20 @@
+# Normalize text files to LF in the repository and working tree, so the parser's
+# byte-for-byte round-trip and snapshot tests stay stable on every platform; a
+# CRLF checkout would otherwise change file bytes and fail them. Files that git
+# detects as binary (some test fixtures hold non-UTF-8 bytes by design) are left
+# exactly as committed.
+* text=auto eol=lf
+
+# Flag whitespace errors in diffs for the code we hand-write.
+*.py whitespace=error
+*.rs whitespace=error
+
+# Keep lockfiles and generated artifacts out of GitHub's language statistics.
+Cargo.lock              linguist-generated=true
+uv.lock                 linguist-generated=true
+docs/package-lock.json  linguist-generated=true
+THIRD_PARTY_LICENSES.md linguist-generated=true
+
+# Test fixtures and the documentation site are not the project's source language.
+tests/data/**           linguist-vendored=true
+docs/**                 linguist-documentation=true

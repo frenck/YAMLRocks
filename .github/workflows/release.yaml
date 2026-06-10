@@ -98,13 +98,18 @@ jobs:
 
   windows:
     name: Wheels (windows ${{ matrix.platform.target }})
-    runs-on: windows-latest
+    runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
       matrix:
         platform:
-          - { target: x64, arch: x64 }
-          - { target: x86, arch: x86 }
+          - { runner: windows-latest, target: x64, arch: x64 }
+          - { runner: windows-latest, target: x86, arch: x86 }
+          # Windows on ARM. Built natively on the windows-11-arm runner image
+          # (which ships Rust and Python), so maturin resolves the arm64
+          # interpreters exactly as the x64/x86 jobs do. setup-python has arm64
+          # builds for every CPython version we target.
+          - { runner: windows-11-arm, target: aarch64, arch: arm64 }
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

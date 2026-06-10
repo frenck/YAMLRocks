@@ -28,8 +28,16 @@ jobs:
           - { runner: ubuntu-22.04, target: x86 }
           - { runner: ubuntu-22.04, target: aarch64 }
           - { runner: ubuntu-22.04, target: armv7 }
-          - { runner: ubuntu-22.04, target: s390x }
           - { runner: ubuntu-22.04, target: ppc64le }
+          # s390x is intentionally omitted: the `psm` crate (pulled in by
+          # `stacker`, our recursion-depth guard) ships hand-written
+          # z/Architecture assembly that the manylinux s390x cross-image's
+          # binutils is too old to assemble (`Unrecognized opcode: lay`).
+          # There is no fixed psm/stacker release. The code itself is fine on
+          # big-endian s390x (built natively with a modern toolchain in
+          # tests-arch.yaml), so an s390x user can still build from the sdist;
+          # we just cannot cross-build a wheel here. Restore this target if
+          # psm gains a manylinux-compatible s390x build.
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

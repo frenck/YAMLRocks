@@ -68,6 +68,12 @@
       "matchManagers": ["git-submodules"],
       "matchDepNames": ["tests/data/yaml_test_suite/cases"],
       "enabled": false
+    },
+    {
+      "description": "Do not let Renovate pin or bump the setup-python python-version. The GitHub Actions runner images lag CPython patch releases, so pinning to the newest patch (e.g. 3.14.6) breaks setup-python until the runners catch up. Keep the major.minor spec (3.14) and manage supported versions by hand.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["python"],
+      "enabled": false
     }
   ]
 }

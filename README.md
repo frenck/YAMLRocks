@@ -12,10 +12,6 @@
 [![OpenSSF Scorecard][scorecard-shield]][scorecard]
 [![Open in Dev Containers][devcontainer-shield]][devcontainer]
 
-[![Sponsor Frenck via GitHub Sponsors][github-sponsors-shield]][github-sponsors]
-
-[![Support Frenck on Patreon][patreon-shield]][patreon]
-
 Rock-solid YAML for Python, written in Rust.
 
 ## About
@@ -288,14 +284,10 @@ SOFTWARE.
 [devcontainer]: https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/frenck/yamlrocks
 [docs]: https://yaml.rocks
 [frenck]: https://github.com/frenck
-[github-sponsors-shield]: https://frenck.dev/wp-content/uploads/2019/12/github_sponsor.png
-[github-sponsors]: https://github.com/sponsors/frenck
 [keepchangelog]: http://keepachangelog.com/en/1.0.0/
 [license-shield]: https://img.shields.io/github/license/frenck/yamlrocks.svg
 [maintenance-shield]: https://img.shields.io/maintenance/yes/2026.svg
 [maturin]: https://www.maturin.rs/
-[patreon-shield]: https://frenck.dev/wp-content/uploads/2019/12/patreon.png
-[patreon]: https://www.patreon.com/frenck
 [prek]: https://prek.j178.dev
 [project-stage-shield]: https://img.shields.io/badge/project%20stage-experimental-yellow.svg
 [pypi]: https://pypi.org/project/yamlrocks/

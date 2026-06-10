@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.14.6"
+          python-version: "3.14"
       - name: 🏗 Set package version from release tag
         shell: bash
         env:
@@ -71,7 +71,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.14.6"
+          python-version: "3.14"
       - name: 🏗 Set package version from release tag
         shell: bash
         env:
@@ -172,7 +172,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.14.6"
+          python-version: "3.14"
       - name: 🏗 Set package version from release tag
         shell: bash
         env:
@@ -207,7 +207,7 @@ jobs:
       - name: 🏗 Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.14.6"
+          python-version: "3.14"
       - name: 🔍 Validate the artifact set
         shell: bash
         # A failed build job already blocks publishing via `needs:`; this catches

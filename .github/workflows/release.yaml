@@ -238,9 +238,19 @@ jobs:
         run: |
           set -euo pipefail
           python -m venv /tmp/smoke
-          # Install only the just-built wheel, fully offline (never PyPI). The
-          # venv's bundled pip is used as-is; nothing is fetched from the network.
-          /tmp/smoke/bin/pip install --no-index --find-links dist yamlrocks
+          # Resolve the wheel for this runner from the built artifacts (offline,
+          # never PyPI), pin it by its content hash, then install exactly that.
+          # `pip download` (not `install`) just selects the compatible wheel; the
+          # install is `--require-hashes`, so the install itself is pinned.
+          /tmp/smoke/bin/pip download --no-index --no-deps \
+            --find-links dist --dest /tmp/wheelhouse yamlrocks
+          wheel="$(echo /tmp/wheelhouse/*.whl)"
+          version="$(basename "${wheel}" | cut -d- -f2)"
+          sha="$(sha256sum "${wheel}" | cut -d ' ' -f1)"
+          printf 'yamlrocks==%s --hash=sha256:%s\n' "${version}" "${sha}" \
+            > /tmp/smoke-requirements.txt
+          /tmp/smoke/bin/pip install --no-index --no-deps --find-links /tmp/wheelhouse \
+            --require-hashes --requirement /tmp/smoke-requirements.txt
           /tmp/smoke/bin/python -c "import yamlrocks; assert yamlrocks.loads(b'x: 1') == {'x': 1}; print('smoke OK', yamlrocks.dumps({'a': [1, 2]}))"
       - name: 📝 Generate CycloneDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0

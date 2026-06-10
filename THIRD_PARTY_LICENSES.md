@@ -248,7 +248,7 @@ Software.
 
 Used by:
 
-- [ar_archive_writer 0.5.1](https://crates.io/crates/ar_archive_writer)
+- [ar_archive_writer 0.5.2](https://crates.io/crates/ar_archive_writer)
 
 ```
                                  Apache License

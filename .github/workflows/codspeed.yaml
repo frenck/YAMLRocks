@@ -38,7 +38,15 @@ jobs:
       - name: 🏗 Install dependencies
         run: uv sync --locked --no-install-project --no-default-groups --group build --group codspeed
       - name: 🏗 Build and install yamlrocks
-        # Optimized build so CodSpeed measures the instruction counts users get.
+        # Optimized build so CodSpeed measures the instruction counts users get,
+        # but keep the symbol table and debug line info so CodSpeed attributes
+        # costs to functions instead of reporting "unknown symbol". `release`
+        # strips symbols by default; these env overrides change only that metadata
+        # (LTO/opt-level/codegen-units are untouched, so the measured counts match
+        # the shipped wheels). The binary is only used for this benchmark run.
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: "false"
+          CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"
         run: uv run --no-sync maturin develop --release
       - name: 🚀 Run benchmarks under CodSpeed
         uses: CodSpeedHQ/action@9d332c4d90b43981c3e55ae8e38e68709996240f # v4.17.0

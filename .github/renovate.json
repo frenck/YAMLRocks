@@ -4,6 +4,9 @@
   "rebaseWhen": "behind-base-branch",
   "dependencyDashboard": true,
   "labels": ["dependencies", "no-stale"],
+  "git-submodules": {
+    "enabled": true
+  },
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
@@ -51,6 +54,20 @@
     {
       "matchManagers": ["pre-commit"],
       "addLabels": ["pre-commit"]
+    },
+    {
+      "description": "Refresh the real-world corpus submodules once a month, grouped into a single PR.",
+      "matchManagers": ["git-submodules"],
+      "matchDepNames": ["tests/data/realworld/**"],
+      "addLabels": ["maintenance"],
+      "groupName": "real-world corpus submodules",
+      "schedule": ["before 3am on the first day of the month"]
+    },
+    {
+      "description": "The YAML test suite is the compliance baseline; bumping it can change which cases pass and needs expectations regenerated, so update it by hand rather than via Renovate.",
+      "matchManagers": ["git-submodules"],
+      "matchDepNames": ["tests/data/yaml_test_suite/cases"],
+      "enabled": false
     }
   ]
 }

@@ -99,6 +99,11 @@ jobs:
   windows:
     name: Wheels (windows ${{ matrix.platform.target }})
     runs-on: ${{ matrix.platform.runner }}
+    # The arm64 leg is flagged experimental, so continue-on-error makes only
+    # that leg non-fatal: the `release` job's `needs: [..., windows, ...]` still
+    # proceeds if arm64 fails, while x64/x86 stay required. Without this, a
+    # windows-11-arm failure would fail the whole job and block the publish.
+    continue-on-error: ${{ matrix.platform.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -108,8 +113,15 @@ jobs:
           # Windows on ARM. Built natively on the windows-11-arm runner image
           # (which ships Rust and Python), so maturin resolves the arm64
           # interpreters exactly as the x64/x86 jobs do. setup-python has arm64
-          # builds for every CPython version we target.
-          - { runner: windows-11-arm, target: aarch64, arch: arm64 }
+          # builds for every CPython version we target. Marked experimental so a
+          # failure on this newer runner does not block the release (see
+          # continue-on-error above).
+          - {
+              runner: windows-11-arm,
+              target: aarch64,
+              arch: arm64,
+              experimental: true,
+            }
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

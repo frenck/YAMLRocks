@@ -246,8 +246,11 @@ jobs:
           name: wheels-linux-${{ matrix.target }}
           path: dist
 
-  # musllinux (Alpine) wheels. Only on the full matrix. Built here; importing a
-  # musl wheel needs an Alpine runtime, so runtime testing is handled separately.
+  # musllinux (Alpine) wheels. Only on the full matrix. Importing a musl wheel
+  # needs a musl runtime, so every shipped musl wheel is installed and the suite
+  # is run against it under Alpine: x86_64 natively, aarch64 and armv7 in an
+  # emulated Alpine container. i686 stays build-only, the same 32-bit-x86 tier as
+  # manylinux i686 (and pyyaml has no musllinux i686 wheel to test against).
   musllinux:
     name: musllinux ${{ matrix.target }}
     if: inputs.full
@@ -260,6 +263,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+      - name: ⤵️ Check out the YAML test suite submodule
+        run: |
+          git config --global core.autocrlf false
+          git submodule update --init tests/data/yaml_test_suite/cases
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
@@ -275,6 +282,53 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist --interpreter '3.12 3.13 3.14'
           manylinux: musllinux_1_2
+      - name: 🧪 Test the built wheel on Alpine (musl, native x86_64)
+        # Native musl runtime, no emulation. Tests the image's CPython (one
+        # version) for the same reason as the emulated legs: arch/libc behaviour
+        # is version-independent and every version is covered by the native legs.
+        if: matrix.target == 'x86_64'
+        shell: bash
+        # python:3.13-alpine, pinned by digest (Renovate keeps it current).
+        run: |
+          docker run --rm -v "${PWD}:/io" -w /io \
+            python:3.13-alpine@sha256:d67e0c999afea29aa8e07a201cf653a7e5379a1b32530f433f26cfcfd94ef367 \
+            sh -ec '
+              python3 -m venv /tmp/venv
+              . /tmp/venv/bin/activate
+              pip install --quiet pytest pytest-asyncio pyyaml
+              pip install --quiet --no-index --no-deps --find-links dist yamlrocks
+              pytest -q
+            '
+      - name: 🧪 Test the built wheel on Alpine (musl, emulated)
+        # aarch64/armv7 musl wheels run the suite in an emulated Alpine container.
+        # pyyaml comes from Alpine's py3-yaml (a prebuilt musl package) so nothing
+        # has to compile under QEMU; pytest is pure Python via pip. Installs into
+        # the system interpreter (--break-system-packages) since Alpine marks it
+        # externally managed.
+        #
+        # `alpine_latest` is intentionally not pinned to a specific Alpine
+        # release: run-on-arch only ships that one Alpine preset (and it is what
+        # reliably wires up QEMU; a pinned base_image does not). Its system
+        # CPython always sits within the 3.12-3.14 range we build wheels for, so
+        # pip finds a matching wheel in dist. If Alpine ever ships a CPython we do
+        # not yet build, this fails loudly and we add that version to the build
+        # list (which we would do to support it anyway). Using base Alpine plus
+        # apk py3-yaml, rather than the digest-pinned python:alpine image, is
+        # deliberate: it gives a prebuilt musl pyyaml and avoids compiling it
+        # under QEMU on armv7.
+        if: matrix.target == 'aarch64' || matrix.target == 'armv7'
+        uses: uraimo/run-on-arch-action@f9b26e3a1a408d5fd530d20c17b9f3f4428ff8d9 # v3.1.0
+        with:
+          arch: ${{ matrix.target }}
+          distro: alpine_latest
+          githubToken: ${{ github.token }}
+          install: |
+            apk add --no-cache python3 py3-pip py3-yaml
+          run: |
+            pip install --break-system-packages --quiet pytest pytest-asyncio
+            pip install --break-system-packages --quiet \
+              --no-index --no-deps --find-links dist yamlrocks
+            pytest -q
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-musllinux-${{ matrix.target }}

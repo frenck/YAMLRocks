@@ -16,16 +16,17 @@ permissions:
   contents: read
 
 jobs:
-  # Build the full wheel + sdist matrix via the shared reusable workflow, the
-  # same one wheels.yaml exercises on every build-config change, so the runners
-  # and targets are proven before a tag is ever cut. The release tag is passed
-  # in to stamp the package version.
+  # Build and test the full wheel + sdist matrix via the shared reusable engine,
+  # the same one tests.yaml exercises in CI, so the runners and targets are
+  # proven before a tag is ever cut. `full: true` includes the emulated/cross
+  # matrix; the release tag stamps the package version.
   build:
     name: Build
     permissions:
       contents: read
     uses: ./.github/workflows/build-wheels.yaml
     with:
+      full: true
       release-tag: ${{ github.event.release.tag_name }}
 
   release:

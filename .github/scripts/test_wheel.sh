@@ -22,5 +22,6 @@ uv pip install --python "${pyexe}" --group numpy \
 # none of its own).
 uv pip install --python "${pyexe}" --no-index --no-deps --find-links dist yamlrocks
 
-# Run against the installed wheel via the same interpreter.
-python -m pytest -q
+# Run against the installed wheel via the exact interpreter the wheel was built
+# for and installed into, not whatever "python" happens to resolve to on PATH.
+"${pyexe}" -m pytest -q

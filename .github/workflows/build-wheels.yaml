@@ -207,9 +207,24 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist --interpreter '3.12 3.13 3.14'
           manylinux: auto
-      - name: 🧪 Test the built wheels under emulation
+      - name: 🧪 Test the built wheel under emulation
         # i686 (x86) is 32-bit and not worth an emulated runtime; the other
         # arches install the manylinux wheel and run the full suite in-container.
+        #
+        # This runs against the container's default CPython (one version), not
+        # all three that were built. That is deliberate: the purpose here is to
+        # catch arch-specific behaviour (endianness, alignment, the Rust build
+        # for the target), which is independent of the Python version. The
+        # per-CPython-version PyO3 boundary is already exercised on every version
+        # by the native legs above. Installing all three interpreters under QEMU
+        # would multiply already-slow emulated runs for no arch-specific gain.
+        #
+        # Test deps are installed unpinned rather than from the pinned
+        # [dependency-groups]: the distro pip predates `pip install --group`, and
+        # uv ships no reliable armv7/ppc64le binary, so the pinned path is not
+        # available in-container. The suite does not import these at collection
+        # time, so latest is fine for an arch smoke. (The old tests-arch.yaml did
+        # the same.)
         if: matrix.target != 'x86'
         uses: uraimo/run-on-arch-action@f9b26e3a1a408d5fd530d20c17b9f3f4428ff8d9 # v3.1.0
         with:

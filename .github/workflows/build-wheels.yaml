@@ -305,6 +305,17 @@ jobs:
         # has to compile under QEMU; pytest is pure Python via pip. Installs into
         # the system interpreter (--break-system-packages) since Alpine marks it
         # externally managed.
+        #
+        # `alpine_latest` is intentionally not pinned to a specific Alpine
+        # release: run-on-arch only ships that one Alpine preset (and it is what
+        # reliably wires up QEMU; a pinned base_image does not). Its system
+        # CPython always sits within the 3.12-3.14 range we build wheels for, so
+        # pip finds a matching wheel in dist. If Alpine ever ships a CPython we do
+        # not yet build, this fails loudly and we add that version to the build
+        # list (which we would do to support it anyway). Using base Alpine plus
+        # apk py3-yaml, rather than the digest-pinned python:alpine image, is
+        # deliberate: it gives a prebuilt musl pyyaml and avoids compiling it
+        # under QEMU on armv7.
         if: matrix.target == 'aarch64' || matrix.target == 'armv7'
         uses: uraimo/run-on-arch-action@f9b26e3a1a408d5fd530d20c17b9f3f4428ff8d9 # v3.1.0
         with:

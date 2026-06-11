@@ -22,6 +22,14 @@ uv pip install --python "${pyexe}" --group numpy \
 # none of its own).
 uv pip install --python "${pyexe}" --no-index --no-deps --find-links dist yamlrocks
 
+# On a free-threaded (no-GIL) build, fail loudly if the GIL is actually enabled,
+# i.e. the build silently fell back to a GIL build or the import re-enabled it.
+# On a regular build Py_GIL_DISABLED is unset and this is a no-op.
+"${pyexe}" -c "import sys, sysconfig
+if sysconfig.get_config_var('Py_GIL_DISABLED'):
+    assert not sys._is_gil_enabled(), 'GIL is enabled on a free-threaded build'
+    print('free-threaded build: GIL is disabled')"
+
 # Run against the installed wheel via the exact interpreter the wheel was built
 # for and installed into, not whatever "python" happens to resolve to on PATH.
 "${pyexe}" -m pytest -q

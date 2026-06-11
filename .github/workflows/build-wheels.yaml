@@ -267,8 +267,10 @@ jobs:
   # musllinux (Alpine) wheels. Only on the full matrix. Importing a musl wheel
   # needs a musl runtime, so every shipped musl wheel is installed and the suite
   # is run against it under Alpine: x86_64 natively, aarch64 and armv7 in an
-  # emulated Alpine container. i686 stays build-only, the same 32-bit-x86 tier as
-  # manylinux i686 (and pyyaml has no musllinux i686 wheel to test against).
+  # emulated Alpine container. musllinux i686 is the one wheel that stays
+  # build-only: unlike manylinux i686 (tested natively above), pyyaml ships no
+  # musllinux i686 wheel, so a test container would have to compile it under a
+  # 32-bit musl toolchain.
   musllinux:
     name: musllinux ${{ matrix.target }}
     if: inputs.full

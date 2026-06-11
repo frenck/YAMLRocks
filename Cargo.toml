@@ -15,6 +15,10 @@ name = "_yamlrocks"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Fast hasher for the document-local key-intern cache on the decode hot path.
+# Unlike a plain FxHash it seeds from a per-process random state, so it keeps
+# SipHash's resistance to hash-flooding from attacker-controlled mapping keys.
+ahash = "0.8"
 # Canonicalize paths without Windows' extended-length `\\?\` verbatim prefix, so
 # include-path confinement and the paths returned by `save()` compare and read
 # back the same on every platform.

@@ -118,7 +118,11 @@ struct Emitter<'a> {
 impl<'a> Emitter<'a> {
     fn new(options: &'a EmitOptions) -> Self {
         Self {
-            buf: Vec::with_capacity(256),
+            // Most documents emit to more than a couple hundred bytes; starting
+            // larger skips the first few doubling reallocations (each of which
+            // copies the whole buffer) for the common case, at a negligible cost
+            // for tiny ones.
+            buf: Vec::with_capacity(1024),
             options,
         }
     }

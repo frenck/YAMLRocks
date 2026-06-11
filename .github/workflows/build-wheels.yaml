@@ -251,7 +251,7 @@ jobs:
         shell: bash
         run: |
           docker run --rm --platform linux/386 -v "${PWD}:/io" -w /io \
-            python:3.13-slim@sha256:f82c96458eedc847b233e582eb31336f4954b39cae020b6dcf5b3ed0e5cbcd74 \
+            python:3.14-slim@sha256:d7a925f9eb9639a93e455b9f12c167569358818c0f62b51b88edbc8fcf34c421 \
             sh -ec '
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
@@ -311,7 +311,7 @@ jobs:
         # python:3.13-alpine, pinned by digest (Renovate keeps it current).
         run: |
           docker run --rm -v "${PWD}:/io" -w /io \
-            python:3.13-alpine@sha256:d67e0c999afea29aa8e07a201cf653a7e5379a1b32530f433f26cfcfd94ef367 \
+            python:3.14-alpine@sha256:003970a263347645cd23d4f90929ad16ba7ce7d808ee4674ffcc93cb21cc289f \
             sh -ec '
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate

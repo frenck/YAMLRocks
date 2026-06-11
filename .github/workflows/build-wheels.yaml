@@ -246,8 +246,14 @@ jobs:
           name: wheels-linux-${{ matrix.target }}
           path: dist
 
-  # musllinux (Alpine) wheels. Only on the full matrix. Built here; importing a
-  # musl wheel needs an Alpine runtime, so runtime testing is handled separately.
+  # musllinux (Alpine) wheels. Only on the full matrix. Importing a musl wheel
+  # needs a musl runtime, so the x86_64 wheel is installed and the suite is run
+  # inside an Alpine container (native, no QEMU). The ARM musl wheels stay
+  # build-only on purpose: coverage has two axes, libc (glibc vs musl) and arch
+  # (x86_64 vs ARM). glibc is tested on x86_64/aarch64/armv7 (the linux and
+  # linux-cross jobs) and musl is tested on x86_64 here, so musl-on-ARM is the
+  # intersection of two already-covered axes and not worth doubling the slow
+  # emulated runs for. i686 stays build-only as elsewhere.
   musllinux:
     name: musllinux ${{ matrix.target }}
     if: inputs.full
@@ -260,6 +266,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+      - name: ⤵️ Check out the YAML test suite submodule
+        run: |
+          git config --global core.autocrlf false
+          git submodule update --init tests/data/yaml_test_suite/cases
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
@@ -275,6 +285,24 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist --interpreter '3.12 3.13 3.14'
           manylinux: musllinux_1_2
+      - name: 🧪 Test the built wheel on Alpine (musl)
+        # x86_64 only: native musl runtime, no emulation. Tests the container's
+        # CPython (one version) for the same reason as the emulated legs, the
+        # arch/libc behaviour is version-independent and every version is covered
+        # by the native legs. Deps are unpinned for parity with those legs.
+        if: matrix.target == 'x86_64'
+        shell: bash
+        # python:3.13-alpine, pinned by digest (Renovate keeps it current).
+        run: |
+          docker run --rm -v "${PWD}:/io" -w /io \
+            python:3.13-alpine@sha256:d67e0c999afea29aa8e07a201cf653a7e5379a1b32530f433f26cfcfd94ef367 \
+            sh -ec '
+              python3 -m venv /tmp/venv
+              . /tmp/venv/bin/activate
+              pip install --quiet pytest pytest-asyncio pyyaml
+              pip install --quiet --no-index --no-deps --find-links dist yamlrocks
+              pytest -q
+            '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-musllinux-${{ matrix.target }}

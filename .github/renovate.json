@@ -12,6 +12,17 @@
     "automerge": true
   },
   "commitMessagePrefix": "⬆️",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the digest-pinned Python images that the wheel-test steps run with `docker run`. The built-in docker manager does not scan shell `run:` commands, so without this the pins would never be refreshed.",
+      "managerFilePatterns": ["/^\\.github/workflows/build-wheels\\.yaml$/"],
+      "matchStrings": [
+        "(?<depName>python):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]+)"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
   "packageRules": [
     {
       "matchManagers": ["cargo"],

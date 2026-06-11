@@ -172,10 +172,10 @@ jobs:
           name: wheels-macos-${{ matrix.platform.target }}-cp${{ matrix.python }}
           path: dist
 
-  # Cross-built Linux arches under QEMU. Only runs on the full matrix. The
-  # non-x86 wheels cannot be imported on the x86_64 host, so the testable arches
-  # (aarch64/armv7/ppc64le) install the built wheel and run the suite inside an
-  # emulated container; i686 is build-only.
+  # Cross-built Linux arches. Only runs on the full matrix. Every wheel is
+  # tested: aarch64/armv7/ppc64le install the built wheel and run the suite in an
+  # emulated container (the x86_64 host cannot import them), while i686 runs the
+  # suite in a 32-bit container natively on the x86_64 host (no QEMU needed).
   linux-cross:
     name: Linux ${{ matrix.target }} (emulated)
     if: inputs.full
@@ -208,8 +208,9 @@ jobs:
           args: --release --out dist --interpreter '3.12 3.13 3.14'
           manylinux: auto
       - name: 🧪 Test the built wheel under emulation
-        # i686 (x86) is 32-bit and not worth an emulated runtime; the other
-        # arches install the manylinux wheel and run the full suite in-container.
+        # aarch64/armv7/ppc64le install the manylinux wheel and run the full
+        # suite in an emulated container (i686 is handled natively in the next
+        # step instead, no QEMU needed for 32-bit on an x86_64 host).
         #
         # This runs against the container's default CPython (one version), not
         # all three that were built. That is deliberate: the purpose here is to
@@ -241,6 +242,23 @@ jobs:
             pip install pytest pytest-asyncio pyyaml
             pip install --no-index --no-deps --find-links dist yamlrocks
             pytest -q
+      - name: 🧪 Test the built wheel (i686, native 32-bit)
+        # i686 is 32-bit x86, which runs natively on the x86_64 host (no QEMU).
+        # Tests the image's CPython (one version) for the same reason as the
+        # emulated legs; pyyaml installs from its manylinux i686 wheel, so nothing
+        # compiles. python:3.13-slim, pinned by digest (Renovate keeps it current).
+        if: matrix.target == 'x86'
+        shell: bash
+        run: |
+          docker run --rm --platform linux/386 -v "${PWD}:/io" -w /io \
+            python:3.13-slim@sha256:f82c96458eedc847b233e582eb31336f4954b39cae020b6dcf5b3ed0e5cbcd74 \
+            sh -ec '
+              python3 -m venv /tmp/venv
+              . /tmp/venv/bin/activate
+              pip install --quiet pytest pytest-asyncio pyyaml
+              pip install --quiet --no-index --no-deps --find-links dist yamlrocks
+              pytest -q
+            '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-linux-${{ matrix.target }}
@@ -249,8 +267,10 @@ jobs:
   # musllinux (Alpine) wheels. Only on the full matrix. Importing a musl wheel
   # needs a musl runtime, so every shipped musl wheel is installed and the suite
   # is run against it under Alpine: x86_64 natively, aarch64 and armv7 in an
-  # emulated Alpine container. i686 stays build-only, the same 32-bit-x86 tier as
-  # manylinux i686 (and pyyaml has no musllinux i686 wheel to test against).
+  # emulated Alpine container. musllinux i686 is the one wheel that stays
+  # build-only: unlike manylinux i686 (tested natively above), pyyaml ships no
+  # musllinux i686 wheel, so a test container would have to compile it under a
+  # 32-bit musl toolchain.
   musllinux:
     name: musllinux ${{ matrix.target }}
     if: inputs.full

@@ -1,7 +1,7 @@
 # Build environment for ClusterFuzzLite. base-builder-rust provides the Rust
 # toolchain, cargo-fuzz, and the sanitizer setup that OSS-Fuzz uses. Pinned by
 # digest for a reproducible, supply-chain-safe build; Renovate keeps it current.
-FROM gcr.io/oss-fuzz-base/base-builder-rust:latest@sha256:ad58fbf937ffa41b62ccbc41eba136df47d4387d2669ab2ed009de31edca835b
+FROM gcr.io/oss-fuzz-base/base-builder-rust:latest@sha256:b1e961501abdd60334d114d950f2f7c8adbd16fcc35daa527c47c9f9beee1114
 
 # The fuzz targets link the yamlrocks library, which includes the PyO3 extension
 # code. Compiling the annotated list/dict pyclasses needs CPython >= 3.12 (PyO3

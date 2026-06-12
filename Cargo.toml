@@ -23,7 +23,7 @@ ahash = "0.8"
 # include-path confinement and the paths returned by `save()` compare and read
 # back the same on every platform.
 dunce = "1"
-pyo3 = { version = "0.28", features = ["extension-module", "py-clone"] }
+pyo3 = { version = "0.29", features = ["extension-module", "py-clone"] }
 smallvec = "1"
 # Grows the native stack on demand so recursive descent over deeply nested input
 # cannot overflow a small thread stack (musl/threadpool deployments) and abort the

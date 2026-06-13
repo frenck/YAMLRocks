@@ -23,6 +23,21 @@ def test_no_async_serializers():
     assert not hasattr(yamlrocks, "async_to_json")
 
 
+def test_import_does_not_pull_in_asyncio():
+    """`import yamlrocks` must not import asyncio: it is imported lazily inside the
+    async_* helpers, so the sync import path stays cheap (issue #52)."""
+    import subprocess
+    import sys
+
+    code = "import sys, yamlrocks; sys.exit(1 if 'asyncio' in sys.modules else 0)"
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert result.returncode == 0, (
+        f"importing yamlrocks pulled in asyncio; keep it lazy.\n{result.stderr}"
+    )
+
+
 async def test_async_loads_matches_loads():
     """async_loads returns the same result as loads."""
     src = b"name: app\nport: 8080\nlist:\n  - 1\n  - 2\n"

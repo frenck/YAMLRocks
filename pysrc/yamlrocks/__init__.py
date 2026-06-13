@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import os
 from collections.abc import Callable, Iterator
@@ -583,6 +582,11 @@ async def async_loads(
     on_missing_env_var: Callable[[str, str | None, int], None] | None = None,
 ) -> Any:
     """Parse YAML off the event loop thread; see :func:`loads`."""
+    # Imported lazily, not at module top, so `import yamlrocks` does not pull in
+    # asyncio (and its transitive ssl / logging / concurrent.futures), which
+    # otherwise dominates import time on the sync path. See issue #52.
+    import asyncio
+
     return await asyncio.to_thread(
         loads,
         data,
@@ -615,6 +619,8 @@ async def async_load(
     Both the disk read and the parse run in a worker thread, so this is the
     natural call for loading configuration inside an async application.
     """
+    import asyncio  # lazy; see async_loads (issue #52)
+
     return await asyncio.to_thread(
         load,
         source,
@@ -638,6 +644,8 @@ async def async_load_all(
     tags: dict[str, Callable[[Any], Any]] | None = None,
 ) -> list[Any]:
     """Read and parse a multi-document file off the event loop; see :func:`load_all`."""
+    import asyncio  # lazy; see async_loads (issue #52)
+
     return await asyncio.to_thread(
         load_all,
         source,
@@ -662,6 +670,8 @@ async def async_dump(
 
     The serialization and the disk write both run in a worker thread.
     """
+    import asyncio  # lazy; see async_loads (issue #52)
+
     await asyncio.to_thread(
         dump,
         obj,

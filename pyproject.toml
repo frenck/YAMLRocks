@@ -74,7 +74,7 @@ build = ["maturin==1.14.0"]
 # Test runtime needed to run the suite anywhere, including free-threaded CPython.
 # numpy is a separate group because it has no free-threaded wheels yet.
 test = [
-  "pytest==9.0.3",
+  "pytest==9.1.0",
   "pytest-asyncio==1.4.0",
   "pyyaml==6.0.3",
   "yamllint==1.38.0",

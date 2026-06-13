@@ -10,7 +10,7 @@ change. Do not edit it by hand.
 
 ## Summary
 
-- MIT License: 31 crate(s)
+- MIT License: 32 crate(s)
 - Apache License 2.0: 3 crate(s)
 - Unicode License v3: 1 crate(s)
 
@@ -940,6 +940,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [itoa 1.0.18](https://crates.io/crates/itoa)
 - [once_cell 1.21.4](https://crates.io/crates/once_cell)
 - [portable-atomic 1.13.1](https://crates.io/crates/portable-atomic)
 - [proc-macro2 1.0.106](https://crates.io/crates/proc-macro2)

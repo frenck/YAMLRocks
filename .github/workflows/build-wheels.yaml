@@ -220,7 +220,13 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --interpreter '3.12 3.13 3.14'
+          # aarch64 also builds the free-threaded wheel (cp314t): it is the only
+          # 64-bit arch here, and free-threaded CPython exists only on 64-bit.
+          # armv7 and ppc64le have no free-threaded build. These cp314t wheels are
+          # build-only (shipped, not run): a free-threaded interpreter is not
+          # readily available in the emulated container, and free-threaded runtime
+          # behaviour is already exercised natively on x86_64.
+          args: "--release --out dist --interpreter '3.12 3.13 3.14${{ matrix.target == 'aarch64' && ' 3.14t' || '' }}'"
           manylinux: auto
       - name: 🧪 Test the built wheel under emulation
         # aarch64/armv7/ppc64le install the manylinux wheel and run the full
@@ -274,7 +280,7 @@ jobs:
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
               pip install --quiet --require-hashes -r .github/scripts/test-requirements.txt
-              pip install --quiet --no-deps dist/*cp314*.whl
+              pip install --quiet --no-deps dist/*cp314-cp314-*.whl
               pytest -q
             '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -318,7 +324,13 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --interpreter '3.12 3.13 3.14'
+          # x86_64 and aarch64 also build the free-threaded wheel (cp314t): they
+          # are the 64-bit arches, and free-threaded CPython exists only on
+          # 64-bit (x86 and armv7 are 32-bit, no free-threaded build). The cp314t
+          # musl wheels are build-only (shipped, not run): there is no
+          # free-threaded musl interpreter image to test them in, and
+          # free-threaded runtime behaviour is exercised natively on x86_64.
+          args: "--release --out dist --interpreter '3.12 3.13 3.14${{ (matrix.target == 'x86_64' || matrix.target == 'aarch64') && ' 3.14t' || '' }}'"
           manylinux: musllinux_1_2
       - name: 🧪 Test the built wheel on Alpine (musl, native x86_64)
         # Native musl runtime, no emulation. Tests the image's CPython (one
@@ -338,7 +350,7 @@ jobs:
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
               pip install --quiet --require-hashes -r .github/scripts/test-requirements.txt
-              pip install --quiet --no-deps dist/*cp314*.whl
+              pip install --quiet --no-deps dist/*cp314-cp314-*.whl
               pytest -q
             '
       - name: 🧪 Test the built wheel on Alpine (musl, emulated)

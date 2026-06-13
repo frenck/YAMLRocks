@@ -85,6 +85,13 @@
       "matchManagers": ["github-actions"],
       "matchDepNames": ["python"],
       "enabled": false
+    },
+    {
+      "description": "The oss-fuzz base image republishes its :latest digest daily, which otherwise opens a digest-bump PR every day. Refresh the fuzzing base image only once a month.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["gcr.io/oss-fuzz-base/base-builder-rust"],
+      "addLabels": ["maintenance"],
+      "schedule": ["before 3am on the first day of the month"]
     }
   ]
 }

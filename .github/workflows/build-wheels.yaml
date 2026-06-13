@@ -260,8 +260,11 @@ jobs:
       - name: 🧪 Test the built wheel (i686, native 32-bit)
         # i686 is 32-bit x86, which runs natively on the x86_64 host (no QEMU).
         # Tests the image's CPython (one version) for the same reason as the
-        # emulated legs; pyyaml installs from its manylinux i686 wheel, so nothing
-        # compiles. python:3.13-slim, pinned by digest (Renovate keeps it current).
+        # emulated legs. python:3.14-slim, pinned by digest (Renovate keeps it
+        # current). Both pip installs are pinned for OpenSSF Scorecard: the test
+        # deps via a hash-pinned requirements file (the same versions the native
+        # legs use), and the wheel by its built .whl path (Scorecard exempts a
+        # .whl file; a bare package name would be flagged as unpinned).
         if: matrix.target == 'x86'
         shell: bash
         run: |
@@ -270,8 +273,8 @@ jobs:
             sh -ec '
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
-              pip install --quiet pytest pytest-asyncio pyyaml
-              pip install --quiet --no-index --no-deps --find-links dist yamlrocks
+              pip install --quiet --require-hashes -r .github/scripts/test-requirements.txt
+              pip install --quiet --no-deps dist/*cp314*.whl
               pytest -q
             '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -321,17 +324,21 @@ jobs:
         # Native musl runtime, no emulation. Tests the image's CPython (one
         # version) for the same reason as the emulated legs: arch/libc behaviour
         # is version-independent and every version is covered by the native legs.
+        # python:3.14-alpine, pinned by digest (Renovate keeps it current). Both
+        # pip installs are pinned for OpenSSF Scorecard: the test deps via a
+        # hash-pinned requirements file (the same versions the native legs use),
+        # and the wheel by its built .whl path (Scorecard exempts a .whl file; a
+        # bare package name would be flagged as unpinned).
         if: matrix.target == 'x86_64'
         shell: bash
-        # python:3.13-alpine, pinned by digest (Renovate keeps it current).
         run: |
           docker run --rm -v "${PWD}:/io" -w /io \
             python:3.14-alpine@sha256:003970a263347645cd23d4f90929ad16ba7ce7d808ee4674ffcc93cb21cc289f \
             sh -ec '
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
-              pip install --quiet pytest pytest-asyncio pyyaml
-              pip install --quiet --no-index --no-deps --find-links dist yamlrocks
+              pip install --quiet --require-hashes -r .github/scripts/test-requirements.txt
+              pip install --quiet --no-deps dist/*cp314*.whl
               pytest -q
             '
       - name: 🧪 Test the built wheel on Alpine (musl, emulated)

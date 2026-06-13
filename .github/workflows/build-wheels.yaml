@@ -49,7 +49,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12", "3.13", "3.14"]
+        # 3.14t is the free-threaded (no-GIL) build. CPython declares
+        # free-threading supported from 3.14 (3.13t was experimental and PyO3
+        # 0.29 dropped it), and it exists only on 64-bit plus Windows x86, which
+        # is exactly these native targets. The emulated/musl legs do not build
+        # it yet.
+        python: ["3.12", "3.13", "3.14", "3.14t"]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -92,7 +97,12 @@ jobs:
           - { runner: windows-latest, target: x64, arch: x64 }
           - { runner: windows-latest, target: x86, arch: x86 }
           - { runner: windows-11-arm, target: aarch64, arch: arm64 }
-        python: ["3.12", "3.13", "3.14"]
+        # 3.14t is the free-threaded (no-GIL) build. CPython declares
+        # free-threading supported from 3.14 (3.13t was experimental and PyO3
+        # 0.29 dropped it), and it exists only on 64-bit plus Windows x86, which
+        # is exactly these native targets. The emulated/musl legs do not build
+        # it yet.
+        python: ["3.12", "3.13", "3.14", "3.14t"]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -140,7 +150,12 @@ jobs:
           # generation. Replaces the retired macos-13 and deprecating macos-14.
           - { runner: macos-26-intel, target: x86_64 }
           - { runner: macos-26, target: aarch64 }
-        python: ["3.12", "3.13", "3.14"]
+        # 3.14t is the free-threaded (no-GIL) build. CPython declares
+        # free-threading supported from 3.14 (3.13t was experimental and PyO3
+        # 0.29 dropped it), and it exists only on 64-bit plus Windows x86, which
+        # is exactly these native targets. The emulated/musl legs do not build
+        # it yet.
+        python: ["3.12", "3.13", "3.14", "3.14t"]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

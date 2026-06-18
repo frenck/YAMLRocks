@@ -99,7 +99,7 @@ dev = [
   { include-group = "numpy" },
   { include-group = "typing" },
   { include-group = "lint" },
-  "rust-just==1.52.0",
+  "rust-just==1.53.0",
 ]
 
 [tool.ruff]

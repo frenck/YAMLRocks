@@ -70,7 +70,7 @@ markers = [
 # The build tool for the native extension, used by `maturin develop`. The
 # `[build-system]` range above governs isolated sdist builds; this pins the tool
 # used for local and CI development builds.
-build = ["maturin==1.14.0"]
+build = ["maturin==1.14.1"]
 # Test runtime needed to run the suite anywhere, including free-threaded CPython.
 # numpy is a separate group because it has no free-threaded wheels yet.
 test = [

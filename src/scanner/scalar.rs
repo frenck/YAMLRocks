@@ -53,7 +53,9 @@ pub fn scan_single_quoted<'input>(
             }
             '\n' | '\r' => {
                 // A leading break folds the same way, so an empty buffer is no
-                // exception.
+                // exception. Single-quoted scalars have no escapes, so every
+                // trailing blank is foldable whitespace.
+                trim_trailing_blanks(&mut value);
                 fold_quoted_break(reader, &mut value, parent_indent)?;
             }
             ch => {
@@ -90,16 +92,20 @@ fn check_quoted_continuation_indent(reader: &Reader, parent_indent: i32) -> Resu
     Ok(())
 }
 
-/// Fold a line break inside a quoted scalar: trim the line's trailing blanks,
-/// then collapse a lone break to a space, or each blank line beyond the first to
-/// a newline. Rejects a continuation line not indented past the block context.
-/// Shared by the single- and double-quoted scanners.
+/// Fold a line break inside a quoted scalar: collapse a lone break to a space,
+/// or each blank line beyond the first to a newline. Rejects a continuation line
+/// not indented past the block context. Shared by the single- and double-quoted
+/// scanners.
+///
+/// The caller is responsible for dropping the line's trailing blanks first.
+/// Single-quoted scalars trim with [`trim_trailing_blanks`]; double-quoted
+/// scalars truncate to the last non-blank boundary so an *escaped* trailing tab
+/// or space (which is content, not foldable whitespace) survives the fold.
 fn fold_quoted_break(
     reader: &mut Reader<'_>,
     value: &mut String,
     parent_indent: i32,
 ) -> Result<(), ScanError> {
-    trim_trailing_blanks(value);
     reader.advance_line();
     let mut blank_lines = 0;
     while !reader.is_eof() {
@@ -135,6 +141,12 @@ pub fn scan_double_quoted<'input>(
     reader.advance(); // skip opening "
 
     let mut value = String::new();
+    // Length of `value` up to the last non-blank (or escaped-blank) character.
+    // Folding a line break strips the line's trailing whitespace, but only the
+    // *literal* spaces and tabs from the source: an escaped `\t`/`\<TAB>` or
+    // escaped space is content and must survive. Tracking the boundary lets the
+    // fold truncate to it instead of blindly trimming the tail.
+    let mut nonblank_len = 0usize;
     loop {
         if reader.is_eof() {
             return Err(ScanError::new(
@@ -171,7 +183,9 @@ pub fn scan_double_quoted<'input>(
                         value.push('\x08');
                         reader.advance();
                     }
-                    't' => {
+                    't' | '\t' => {
+                        // `\t` and a backslash before a literal tab are both the
+                        // escaped horizontal tab (`ns-esc-horizontal-tab`, x09).
                         value.push('\t');
                         reader.advance();
                     }
@@ -260,13 +274,24 @@ pub fn scan_double_quoted<'input>(
                         ));
                     }
                 }
+                // Escaped output is content, never foldable whitespace, even
+                // when it is a tab or space: protect it from the next fold.
+                nonblank_len = value.len();
             }
             '\n' | '\r' => {
+                // Strip the line's literal trailing blanks (everything past the
+                // last non-blank boundary), keeping any escaped blanks, then fold.
+                value.truncate(nonblank_len);
                 fold_quoted_break(reader, &mut value, parent_indent)?;
             }
             ch => {
                 value.push(ch);
                 reader.advance();
+                // A literal space or tab is foldable whitespace; leave the
+                // boundary behind it so a trailing run is stripped on a fold.
+                if ch != ' ' && ch != '\t' {
+                    nonblank_len = value.len();
+                }
             }
         }
     }

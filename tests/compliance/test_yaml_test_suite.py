@@ -182,9 +182,9 @@ def test_json_mismatch_still_mismatches(case_id):
     """A baselined JSON mismatch still parses and still differs from canonical.
 
     When the parser learns to resolve one correctly this fails, prompting its
-    removal from ``json_mismatch`` (the baseline only shrinks). The baseline is
-    currently drained to zero; the ``[None]`` fallback keeps this a passing test
-    rather than an empty-parameter skip until a future mismatch is baselined.
+    removal from ``json_mismatch`` (the baseline only shrinks). The ``[None]``
+    fallback keeps this a passing test rather than an empty-parameter skip when
+    the baseline happens to be empty.
     """
     if case_id is None:
         assert not JSON_MISMATCH

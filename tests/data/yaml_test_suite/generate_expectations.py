@@ -40,13 +40,11 @@ for c in sorted((p.parent for p in base.rglob("in.yaml")), key=lambda p: p.as_po
         parsed = True
     except Exception:
         parsed = False
-    if is_err and not has_json and not parsed:
-        # Correctly rejected an invalid document; nothing to round-trip.
-        rejected.append(cid)
-        continue
     if is_err and not parsed:
-        # An invalid document with an in.json (showing a lenient parse) that we
-        # still reject. Correct behavior, tracked like any other rejection.
+        # Correctly rejected an invalid document; nothing to round-trip. Some
+        # error cases carry an in.json showing what a lenient parser yields, but
+        # rejecting them is the right answer, so they are tracked like any other
+        # rejection whether or not that in.json is present.
         rejected.append(cid)
         continue
     if is_err and parsed:

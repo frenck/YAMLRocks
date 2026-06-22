@@ -1,10 +1,12 @@
 """Compliance and round-trip tests against the official YAML test suite.
 
 The suite (https://github.com/yaml/yaml-test-suite) is a git submodule at
-``tests/data/yaml_test_suite/cases/``, tracking its ``data`` branch. Only the
-single-document cases (those with a top-level ``in.yaml``) are exercised; the
-multi-document cases, whose variants live in numbered subdirectories, are
-skipped. yamlrocks is a pragmatic YAML 1.2 parser rather than a fully
+``tests/data/yaml_test_suite/cases/``, tracking its ``data`` branch. Every case
+is exercised, including the variants a case stores in numbered subdirectories
+(``DE56/00``, ``KH5V/01``, ...); the case id is the path relative to the suite
+root. Multi-document inputs are loaded the same way as single-document ones:
+``loads`` resolves the first document, which is what the canonical-JSON match
+compares against. yamlrocks is a pragmatic YAML 1.2 parser rather than a fully
 spec-complete one, so a behavior baseline in ``expectations.json`` records the
 cases it does not yet handle. The category auto-skips when the submodule is not
 checked out, so a plain ``pytest`` stays green without it.
@@ -46,12 +48,15 @@ import yamlrocks
 
 SUITE_DIR = pathlib.Path(__file__).resolve().parents[1] / "data" / "yaml_test_suite"
 CASES_DIR = SUITE_DIR / "cases"
+# A case is any directory holding an ``in.yaml``. Most sit at the top level, but
+# a case with several variants stores each under a numbered subdirectory, so the
+# search recurses and the case id is the path relative to the suite root.
 CASES = (
-    sorted(p for p in CASES_DIR.iterdir() if (p / "in.yaml").exists())
+    sorted((p.parent for p in CASES_DIR.rglob("in.yaml")), key=lambda p: p.as_posix())
     if CASES_DIR.is_dir()
     else []
 )
-CASE_IDS = [p.name for p in CASES]
+CASE_IDS = [c.relative_to(CASES_DIR).as_posix() for c in CASES]
 
 if not CASES:
     # The suite lives in a git submodule (see `.gitmodules`). Without it the
@@ -108,16 +113,26 @@ def canonical_json(case_id: str):
 
 
 # Parse every case once; downstream tests and guards read from this.
-_PARSED = {c.name: try_load(c) for c in CASES}
+_PARSED = {cid: try_load(c) for c, cid in zip(CASES, CASE_IDS, strict=True)}
 PARSEABLE_IDS = [name for name in CASE_IDS if _PARSED[name][0]]
 NONPARSING_IDS = {name for name in CASE_IDS if not _PARSED[name][0]}
-JSON_CASE_IDS = {c.name for c in CASES if (c / "in.json").exists()}
-ERROR_CASES = sorted(c.name for c in CASES if (c / "error").exists())
-# Parseable cases with a canonical JSON that are not baselined as a mismatch.
+JSON_CASE_IDS = {
+    cid for c, cid in zip(CASES, CASE_IDS, strict=True) if (c / "in.json").exists()
+}
+ERROR_CASES = sorted(
+    cid for c, cid in zip(CASES, CASE_IDS, strict=True) if (c / "error").exists()
+)
+# Parseable, valid cases with a canonical JSON that are not baselined as a
+# mismatch. Error cases are excluded: some carry an ``in.json`` showing what a
+# lenient parser yields, but their canonical answer is "reject", so they are
+# governed by ``error_accepted`` rather than compared against that JSON.
+_ERROR_CASE_SET = set(ERROR_CASES)
 JSON_MATCH_IDS = [
     name
     for name in PARSEABLE_IDS
-    if name in JSON_CASE_IDS and name not in JSON_MISMATCH
+    if name in JSON_CASE_IDS
+    and name not in JSON_MISMATCH
+    and name not in _ERROR_CASE_SET
 ]
 
 
@@ -167,9 +182,9 @@ def test_json_mismatch_still_mismatches(case_id):
     """A baselined JSON mismatch still parses and still differs from canonical.
 
     When the parser learns to resolve one correctly this fails, prompting its
-    removal from ``json_mismatch`` (the baseline only shrinks). The baseline is
-    currently drained to zero; the ``[None]`` fallback keeps this a passing test
-    rather than an empty-parameter skip until a future mismatch is baselined.
+    removal from ``json_mismatch`` (the baseline only shrinks). The ``[None]``
+    fallback keeps this a passing test rather than an empty-parameter skip when
+    the baseline happens to be empty.
     """
     if case_id is None:
         assert not JSON_MISMATCH
@@ -254,8 +269,8 @@ def test_suite_baseline_counts():
     # `parse_failures` shrinks, so it is the honest regression floor.
     error_ids = set(ERROR_CASES)
     valid_parseable = [name for name in PARSEABLE_IDS if name not in error_ids]
-    assert len(valid_parseable) >= 242, (
-        f"only {len(valid_parseable)} valid cases parse (expected >= 242)"
+    assert len(valid_parseable) >= 306, (
+        f"only {len(valid_parseable)} valid cases parse (expected >= 306)"
     )
     # Round-trip instability is not tolerated at all.
     assert len(ROUNDTRIP_UNSTABLE) == 0

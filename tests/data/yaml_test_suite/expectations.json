@@ -1,10 +1,15 @@
 {
   "_comment": "Behavior baseline for the yaml-test-suite submodule. YAMLRocks is a pragmatic YAML 1.2 parser; these lists record cases it does not yet handle so the suite guards against regressions. Shrinking these lists is an improvement (regenerate with tests/data/yaml_test_suite/generate_expectations.py).",
   "roundtrip_unstable": [],
-  "json_mismatch": [],
+  "json_mismatch": [
+    "JEF9/01",
+    "JEF9/02"
+  ],
   "rejected": [
     "236B",
     "2CMS",
+    "2G84/00",
+    "2G84/01",
     "3HFZ",
     "4EJS",
     "4H7K",
@@ -27,6 +32,7 @@
     "9KBC",
     "9MAG",
     "9MMA",
+    "9MQT/01",
     "B63P",
     "BD7L",
     "BF9H",
@@ -39,6 +45,7 @@
     "CXX2",
     "D49Q",
     "DK4H",
+    "DK95/06",
     "DMG6",
     "EB22",
     "EW3V",
@@ -55,6 +62,7 @@
     "JY7Z",
     "KS4U",
     "LHL4",
+    "MUS6/00",
     "N4JP",
     "N782",
     "P2EQ",
@@ -74,14 +82,29 @@
     "TD5N",
     "U44R",
     "U99R",
+    "VJP3/00",
     "W9L4",
     "X4QW",
+    "Y79Y/009",
     "YJV2",
     "ZCZ6",
     "ZL4Z",
     "ZVH3",
     "ZXT5"
   ],
-  "error_accepted": [],
-  "parse_failures": ["V9D5"]
+  "error_accepted": [
+    "DK95/01",
+    "MUS6/01",
+    "Y79Y/000",
+    "Y79Y/003",
+    "Y79Y/004",
+    "Y79Y/005",
+    "Y79Y/006",
+    "Y79Y/007",
+    "Y79Y/008"
+  ],
+  "parse_failures": [
+    "DK95/00",
+    "V9D5"
+  ]
 }

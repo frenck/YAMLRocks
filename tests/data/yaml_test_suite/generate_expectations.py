@@ -27,12 +27,11 @@ roundtrip_unstable, json_mismatch, rejected, error_accepted, parse_failures = (
     [],
     [],
 )
-for c in sorted(base.iterdir()):
-    if not (c / "in.yaml").exists():
-        # Skip non-case entries: the submodule's `.git` pointer and the
-        # multi-document cases whose variants live in numbered subdirectories
-        # (these have no top-level `in.yaml`), matching the test harness filter.
-        continue
+# Every directory with an ``in.yaml`` is a case, including the variants stored
+# under numbered subdirectories (``DE56/00``, ...); the id is the path relative
+# to the suite root, matching the test harness.
+for c in sorted((p.parent for p in base.rglob("in.yaml")), key=lambda p: p.as_posix()):
+    cid = c.relative_to(base).as_posix()
     inp = (c / "in.yaml").read_bytes()
     is_err = (c / "error").exists()
     has_json = (c / "in.json").exists()
@@ -43,34 +42,42 @@ for c in sorted(base.iterdir()):
         parsed = False
     if is_err and not has_json and not parsed:
         # Correctly rejected an invalid document; nothing to round-trip.
-        rejected.append(c.name)
+        rejected.append(cid)
+        continue
+    if is_err and not parsed:
+        # An invalid document with an in.json (showing a lenient parse) that we
+        # still reject. Correct behavior, tracked like any other rejection.
+        rejected.append(cid)
         continue
     if is_err and parsed:
         # The suite marks this input invalid, but the pragmatic parser accepts
         # it. Track the laxness so it cannot grow silently and can only shrink.
-        error_accepted.append(c.name)
+        error_accepted.append(cid)
     if not is_err and not parsed:
         # A valid document the pragmatic parser does not handle yet. Baselined
         # so the gap is visible and can only shrink as the parser improves.
-        parse_failures.append(c.name)
+        parse_failures.append(cid)
     if parsed:
         # Round-trip must be byte-for-byte identical for an unmodified document.
         try:
             emitted = yamlrocks.loads(inp, option=yamlrocks.OPT_ROUND_TRIP).to_yaml()
             if emitted != inp:
-                roundtrip_unstable.append(c.name)
+                roundtrip_unstable.append(cid)
         except Exception:
-            roundtrip_unstable.append(c.name)
-    if has_json and parsed:
+            roundtrip_unstable.append(cid)
+    if has_json and parsed and not is_err:
+        # Only valid cases are compared against their canonical JSON. An error
+        # case's answer is "reject", so a lenient accept is governed by
+        # error_accepted, not by matching the JSON a lenient parser would yield.
         raw = (c / "in.json").read_text().lstrip()
         try:
             # An empty in.json means the stream yields no document, which loads
             # as None (comment-only / empty inputs).
             expected = None if not raw else json.JSONDecoder().raw_decode(raw)[0]
             if not jequal(val, expected):
-                json_mismatch.append(c.name)
+                json_mismatch.append(cid)
         except Exception:
-            json_mismatch.append(c.name)
+            json_mismatch.append(cid)
 
 out = {
     "_comment": "Behavior baseline for the yaml-test-suite submodule. YAMLRocks is a "

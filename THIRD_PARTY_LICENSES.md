@@ -560,7 +560,7 @@ limitations under the License.
 
 Used by:
 
-- [cc 1.2.63](https://crates.io/crates/cc)
+- [cc 1.2.65](https://crates.io/crates/cc)
 - [cfg-if 1.0.4](https://crates.io/crates/cfg-if)
 - [find-msvc-tools 0.1.9](https://crates.io/crates/find-msvc-tools)
 - [stacker 0.1.24](https://crates.io/crates/stacker)
@@ -944,10 +944,10 @@ Used by:
 - [once_cell 1.21.4](https://crates.io/crates/once_cell)
 - [portable-atomic 1.13.1](https://crates.io/crates/portable-atomic)
 - [proc-macro2 1.0.106](https://crates.io/crates/proc-macro2)
-- [quote 1.0.45](https://crates.io/crates/quote)
-- [syn 2.0.117](https://crates.io/crates/syn)
+- [quote 1.0.46](https://crates.io/crates/quote)
+- [syn 2.0.118](https://crates.io/crates/syn)
 - [unicode-ident 1.0.24](https://crates.io/crates/unicode-ident)
-- [wasip2 1.0.3+wasi-0.2.9](https://crates.io/crates/wasip2)
+- [wasip2 1.0.4+wasi-0.2.12](https://crates.io/crates/wasip2)
 - [wit-bindgen 0.57.1](https://crates.io/crates/wit-bindgen)
 
 ```
@@ -981,7 +981,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [memchr 2.8.1](https://crates.io/crates/memchr)
+- [memchr 2.8.2](https://crates.io/crates/memchr)
 
 ```
 The MIT License (MIT)

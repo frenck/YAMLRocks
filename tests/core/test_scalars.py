@@ -104,14 +104,23 @@ def test_double_quote_escapes():
     assert yamlrocks.loads(rb'x: "a\tb\nc"')["x"] == "a\tb\nc"
 
 
-def test_backslash_literal_tab_is_rejected():
-    """A backslash followed by a literal tab is not a valid escape (only `\\t` is).
+def test_backslash_literal_tab_is_an_escaped_tab():
+    """A backslash before a literal tab is the escaped-tab form (`ns-esc-horizontal-tab`).
 
-    The spec and the YAML test suite reject it; it used to be silently accepted
-    as a tab.
+    The spec lists `t | x09`, so `\\<TAB>` decodes to a tab exactly like `\\t`.
+    The YAML test suite case `KH5V/01` covers it; we used to reject it.
     """
-    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="escape"):
-        yamlrocks.loads(b'x: "a\\\tb"')
+    assert yamlrocks.loads(b'x: "a\\\tb"')["x"] == "a\tb"
+
+
+def test_escaped_trailing_tab_survives_line_fold():
+    """An escaped trailing tab is content, so a folded line break keeps it.
+
+    Folding strips a line's *literal* trailing whitespace, but `\\t` (and the
+    `\\<TAB>` form) are escaped content. The YAML test suite case `DE56/00`
+    expects the tab plus the fold's single space.
+    """
+    assert yamlrocks.loads(b'x: "a\\t\n  b"')["x"] == "a\t b"
 
 
 def test_unicode_escape():

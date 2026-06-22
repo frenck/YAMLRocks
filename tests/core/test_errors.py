@@ -62,6 +62,9 @@ def test_decode_error_subclasses_value_error():
         pytest.param(b"?\t-\n", id="explicit-key-tab-dash"),
         pytest.param(b"?\tkey:\n", id="explicit-key-tab-mapping"),
         pytest.param(b"a:\n\tb: c\n", id="tab-before-mapping-key"),
+        pytest.param(b'a:\n\t"b": c\n', id="tab-before-double-quoted-key"),
+        pytest.param(b"a:\n\t'b': c\n", id="tab-before-single-quoted-key"),
+        pytest.param(b"a:\n\t&x b: c\n", id="tab-before-anchored-key"),
         pytest.param(b"- [\n\tfoo,\n foo\n ]\n", id="tab-indent-in-flow"),
     ],
 )

@@ -1086,6 +1086,7 @@ impl<'input> Scanner<'input> {
 
     fn fetch_single_quoted_scalar(&mut self) -> Result<(), ScanError> {
         let was_simple_key_allowed = self.simple_key_allowed;
+        let had_leading_tab = self.tab_before_token;
         let span = self.reader.span();
         let parent_indent = if self.flow_level == 0 {
             self.current_indent
@@ -1109,6 +1110,11 @@ impl<'input> Scanner<'input> {
                 ));
             }
             if self.flow_level == 0 {
+                // A tab cannot indent the mapping this quoted key opens, matching
+                // the plain-key rule (`a:\n\t'b': c`).
+                if had_leading_tab {
+                    return Err(tab_indent_error(span));
+                }
                 let key_col = span.column as i32;
                 self.roll_indent(key_col, span, TokenKind::BlockMappingStart)?;
             }
@@ -1145,6 +1151,7 @@ impl<'input> Scanner<'input> {
 
     fn fetch_double_quoted_scalar(&mut self) -> Result<(), ScanError> {
         let was_simple_key_allowed = self.simple_key_allowed;
+        let had_leading_tab = self.tab_before_token;
         let span = self.reader.span();
         let parent_indent = if self.flow_level == 0 {
             self.current_indent
@@ -1168,6 +1175,11 @@ impl<'input> Scanner<'input> {
                 ));
             }
             if self.flow_level == 0 {
+                // A tab cannot indent the mapping this quoted key opens, matching
+                // the plain-key rule (`a:\n\t"b": c`).
+                if had_leading_tab {
+                    return Err(tab_indent_error(span));
+                }
                 let key_col = span.column as i32;
                 self.roll_indent(key_col, span, TokenKind::BlockMappingStart)?;
             }

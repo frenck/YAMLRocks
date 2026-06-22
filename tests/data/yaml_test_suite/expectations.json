@@ -61,6 +61,7 @@
     "KS4U",
     "LHL4",
     "MUS6/00",
+    "MUS6/01",
     "N4JP",
     "N782",
     "P2EQ",
@@ -97,9 +98,7 @@
     "ZVH3",
     "ZXT5"
   ],
-  "error_accepted": [
-    "MUS6/01"
-  ],
+  "error_accepted": [],
   "parse_failures": [
     "V9D5"
   ]

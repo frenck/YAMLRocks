@@ -430,19 +430,18 @@ pub fn scan_block<'input>(
         // or below that, the scalar is empty. A document-level scalar (`--- |`)
         // has parent indent -1, so column-0 content is valid.
         if (detected as i32) <= parent_indent {
-            // Empty block: use an indent just past the parent so the content
-            // loop reads nothing, while any trailing blank lines are still
-            // counted for `keep` chomping (`key: |+` followed by a blank line).
-            (parent_indent + 1).max(0) as u32
-        } else {
-            if max_leading_blank > detected {
-                return Err(ScanError::new(
-                    "a leading empty line in a block scalar is indented more than the content",
-                    start_span,
-                ));
-            }
-            detected
+            // No content line is indented past the parent: the scalar is empty.
+            // Its lines are all empty lines (no content even when over-indented),
+            // so the value is empty and only `keep` retains a feed per line.
+            return Ok(Cow::Owned(scan_empty_block(reader, &chomping)?));
         }
+        if max_leading_blank > detected {
+            return Err(ScanError::new(
+                "a leading empty line in a block scalar is indented more than the content",
+                start_span,
+            ));
+        }
+        detected
     };
 
     // Read the block content line by line. `breaks` carries the empty-line
@@ -761,6 +760,45 @@ fn trim_trailing_blanks(value: &mut String) {
     while value.as_bytes().last().is_some_and(|&b| is_blank_byte(b)) {
         value.pop();
     }
+}
+
+/// Scan a block scalar with no content line: every line is empty. Such lines are
+/// not content even when indented past the block, so the value is empty; only
+/// `keep` chomping retains one feed per empty line. A block scalar is indented
+/// with spaces, so a tab where that indentation belongs is rejected (the empty
+/// line `\t` in `foo: |\n\t\nbar: 1`). Leaves the reader at the first non-blank
+/// line (a sibling or dedent), which the caller's scanner reads next.
+fn scan_empty_block(reader: &mut Reader<'_>, chomping: &Chomping) -> Result<String, ScanError> {
+    let mut feeds = 0u32;
+    while !reader.is_eof() {
+        // A line is empty when only whitespace precedes its break (or EOF). A
+        // non-blank line is the next sibling: leave it untouched and stop.
+        let next = reader.peek_after_blanks();
+        if !(next.is_none() || matches!(next, Some('\n' | '\r'))) {
+            break;
+        }
+        while reader.peek() == ' ' {
+            reader.advance();
+        }
+        if reader.peek() == '\t' {
+            return Err(ScanError::new(
+                "a tab cannot be used for indentation",
+                reader.span(),
+            ));
+        }
+        feeds += 1;
+        if reader.is_eof() {
+            break;
+        }
+        reader.advance_line();
+    }
+    let mut value = String::new();
+    if matches!(chomping, Chomping::Keep) {
+        for _ in 0..feeds {
+            value.push('\n');
+        }
+    }
+    Ok(value)
 }
 
 /// Consume empty lines of a block scalar, returning how many were skipped.

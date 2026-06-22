@@ -143,6 +143,24 @@ impl YAMLRocksDocument {
         }
     }
 
+    fn __delitem__(&mut self, key: &Bound<'_, PyAny>) -> PyResult<()> {
+        if self.nodes.len() == 1 {
+            del_child(&mut self.nodes[0], key)
+        } else {
+            let idx: usize = key.extract()?;
+            if idx >= self.nodes.len() {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    "index out of range",
+                ));
+            }
+            self.nodes.remove(idx);
+            // The cached source still contains the removed document; drop it so
+            // the stream re-emits from the AST instead of replaying verbatim.
+            self.source = None;
+            Ok(())
+        }
+    }
+
     fn __contains__(&self, key: &Bound<'_, PyAny>) -> bool {
         self.nodes.len() == 1 && node_contains(&self.nodes[0], key)
     }
@@ -467,6 +485,13 @@ impl YAMLRocksDocumentView {
         let node = resolve_path_mut(&mut doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         set_child(py, node, key, value, double_quotes)
+    }
+
+    fn __delitem__(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut doc = self.root.borrow_mut(py);
+        let node = resolve_path_mut(&mut doc.nodes, &self.path)
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
+        del_child(node, key)
     }
 
     fn __contains__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -1213,6 +1238,43 @@ fn set_child(
             "node is not a mapping or sequence",
         )),
     }
+}
+
+fn del_child(node: &mut YamlNode, key: &Bound<'_, PyAny>) -> PyResult<()> {
+    match &mut node.kind {
+        YamlNodeKind::Mapping(pairs) => {
+            let key_str: String = key
+                .extract()
+                .map_err(|_| pyo3::exceptions::PyTypeError::new_err("mapping keys must be str"))?;
+            // The removed pair carries its own attached comments away with it; the
+            // surrounding pairs keep their nodes (and comments).
+            let idx = pairs
+                .iter()
+                .position(|(k, _)| scalar_eq(k, &key_str))
+                .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key_str.clone()))?;
+            pairs.remove(idx);
+        }
+        YamlNodeKind::Sequence(items) => {
+            let idx: usize = key.extract()?;
+            if idx >= items.len() {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    "index out of range",
+                ));
+            }
+            items.remove(idx);
+        }
+        _ => {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "node is not a mapping or sequence",
+            ));
+        }
+    }
+    // Mark the container modified so the document re-emits from the AST instead of
+    // replaying its original source bytes verbatim (those still contain the removed
+    // entry — see `to_yaml`/`nodes_modified`). Re-emission walks the pairs/items and
+    // emits each surviving node's own comments, so the rest stays comment-preserving.
+    node.mark_modified();
+    Ok(())
 }
 
 fn node_contains(node: &YamlNode, key: &Bound<'_, PyAny>) -> bool {

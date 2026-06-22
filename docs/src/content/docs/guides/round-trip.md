@@ -141,6 +141,53 @@ inspect a sub-tree, and assign through it to edit in place. When you want a
 detached, formatting-free copy instead, call `unwrap()` or `to_dict()`.
 :::
 
+## Deleting keys
+
+`del` removes a mapping key or a sequence item. The deleted entry takes its own
+comments with it, while everything around it — the document header, sibling keys,
+and their inline comments — stays untouched:
+
+```python
+import yamlrocks
+
+doc = yamlrocks.loads(
+    b"# app config\nname: my-app   # the service\ndebug: true\nport: 8080\n",
+    option=yamlrocks.OPT_ROUND_TRIP,
+)
+
+del doc["debug"]
+
+print(doc.to_yaml().decode())
+# # app config
+# name: my-app   # the service
+# port: 8080
+```
+
+Deletes write through a `YAMLRocksDocumentView` too, so a nested key can be removed
+in place:
+
+```python
+doc = yamlrocks.loads(
+    b"server:\n  host: localhost  # keep me\n  debug: true\n",
+    option=yamlrocks.OPT_ROUND_TRIP,
+)
+
+del doc["server"]["debug"]
+
+print(doc.to_yaml().decode())
+# server:
+#   host: localhost  # keep me
+```
+
+Deleting an absent mapping key raises `KeyError`; an out-of-range sequence index
+raises `IndexError`:
+
+<!-- verify: raises KeyError -->
+
+```python
+del doc["server"]["missing"]
+```
+
 ## Walking the tree
 
 `walk()` flattens the whole document into a list of `(path, value)` pairs, where

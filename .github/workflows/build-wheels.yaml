@@ -1,0 +1,415 @@
+---
+name: Build wheels
+
+# Reusable engine that builds every wheel + the sdist AND runs the full pytest
+# suite against each built wheel. It is the single source of truth for "do the
+# shipped artifacts build and work", called by:
+#   - tests.yaml  (continuous integration; full = emulated/cross matrix too)
+#   - release.yaml (with a tag, then publishes the artifacts to PyPI)
+# It never publishes and holds no PyPI permissions; publishing lives only in
+# release.yaml.
+#
+# Native legs (Linux x86_64, Windows, macOS) build the wheel with maturin and
+# then install that exact wheel and run the suite against it, split by CPython
+# version so each job's interpreter matches the wheel it tests. The cross/
+# emulated legs (other Linux arches, musllinux) run only when `full` is true and
+# are built under QEMU; the testable ones run the suite against the wheel in an
+# emulated container.
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_call:
+    inputs:
+      full:
+        description: >-
+          Build and test the full matrix, including the QEMU-emulated Linux
+          arches and musllinux. When false (the default), only the fast native
+          targets run.
+        required: false
+        type: boolean
+        default: false
+      release-tag:
+        description: >-
+          The release tag to stamp into the package version (e.g. v0.1.3). Leave
+          empty for a plain build/test check, which uses the in-tree version.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  # manylinux x86_64: built in the manylinux container, then the wheel is
+  # installed and the suite is run on the glibc host (which can import it). Split
+  # by CPython version so the host interpreter matches the wheel under test.
+  linux:
+    name: Linux x86_64 cp${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.14t is the free-threaded (no-GIL) build. CPython declares
+        # free-threading supported from 3.14 (3.13t was experimental and PyO3
+        # 0.29 dropped it), and it exists only on 64-bit plus Windows x86, which
+        # is exactly these native targets. The emulated/musl legs do not build
+        # it yet.
+        python: ["3.12", "3.13", "3.14", "3.14t"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: ⤵️ Check out the YAML test suite submodule
+        run: |
+          git config --global core.autocrlf false
+          git submodule update --init tests/data/yaml_test_suite/cases
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - name: 🏗 Set package version from release tag
+        if: inputs.release-tag != ''
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: x86_64
+          args: --release --out dist --interpreter ${{ matrix.python }}
+          manylinux: auto
+      - name: 🧪 Test the built wheel
+        shell: bash
+        run: bash .github/scripts/test_wheel.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-linux-x86_64-cp${{ matrix.python }}
+          path: dist
+
+  windows:
+    name: Windows ${{ matrix.platform.target }} cp${{ matrix.python }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: windows-latest, target: x64, arch: x64 }
+          - { runner: windows-latest, target: x86, arch: x86 }
+          - { runner: windows-11-arm, target: aarch64, arch: arm64 }
+        # 3.14t is the free-threaded (no-GIL) build. CPython declares
+        # free-threading supported from 3.14 (3.13t was experimental and PyO3
+        # 0.29 dropped it), and it exists only on 64-bit plus Windows x86, which
+        # is exactly these native targets. The emulated/musl legs do not build
+        # it yet.
+        python: ["3.12", "3.13", "3.14", "3.14t"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: ⤵️ Check out the YAML test suite submodule
+        # Force LF so byte-exact and control-character cases are unchanged on the
+        # Windows default CRLF checkout (e.g. G4RS).
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git submodule update --init tests/data/yaml_test_suite/cases
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python }}
+          architecture: ${{ matrix.platform.arch }}
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - name: 🏗 Set package version from release tag
+        if: inputs.release-tag != ''
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter ${{ matrix.python }}
+      - name: 🧪 Test the built wheel
+        shell: bash
+        run: bash .github/scripts/test_wheel.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-windows-${{ matrix.platform.target }}-cp${{ matrix.python }}
+          path: dist
+
+  macos:
+    name: macOS ${{ matrix.platform.target }} cp${{ matrix.python }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          # macOS 26 (Tahoe) is the newest GA image and Apple's last Intel-
+          # supporting release, so macos-26-intel is the final Intel runner
+          # generation. Replaces the retired macos-13 and deprecating macos-14.
+          - { runner: macos-26-intel, target: x86_64 }
+          - { runner: macos-26, target: aarch64 }
+        # 3.14t is the free-threaded (no-GIL) build. CPython declares
+        # free-threading supported from 3.14 (3.13t was experimental and PyO3
+        # 0.29 dropped it), and it exists only on 64-bit plus Windows x86, which
+        # is exactly these native targets. The emulated/musl legs do not build
+        # it yet.
+        python: ["3.12", "3.13", "3.14", "3.14t"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: ⤵️ Check out the YAML test suite submodule
+        run: |
+          git config --global core.autocrlf false
+          git submodule update --init tests/data/yaml_test_suite/cases
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - name: 🏗 Set package version from release tag
+        if: inputs.release-tag != ''
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter ${{ matrix.python }}
+      - name: 🧪 Test the built wheel
+        shell: bash
+        run: bash .github/scripts/test_wheel.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-macos-${{ matrix.platform.target }}-cp${{ matrix.python }}
+          path: dist
+
+  # Cross-built Linux arches. Only runs on the full matrix. Every wheel is
+  # tested: aarch64/armv7/ppc64le install the built wheel and run the suite in an
+  # emulated container (the x86_64 host cannot import them), while i686 runs the
+  # suite in a 32-bit container natively on the x86_64 host (no QEMU needed).
+  linux-cross:
+    name: Linux ${{ matrix.target }} (emulated)
+    if: inputs.full
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86, aarch64, armv7, ppc64le]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: ⤵️ Check out the YAML test suite submodule
+        run: |
+          git config --global core.autocrlf false
+          git submodule update --init tests/data/yaml_test_suite/cases
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+      - name: 🏗 Set package version from release tag
+        if: inputs.release-tag != ''
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          # aarch64 also builds the free-threaded wheel (cp314t): it is the only
+          # 64-bit arch here, and free-threaded CPython exists only on 64-bit.
+          # armv7 and ppc64le have no free-threaded build. These cp314t wheels are
+          # build-only (shipped, not run): a free-threaded interpreter is not
+          # readily available in the emulated container, and free-threaded runtime
+          # behaviour is already exercised natively on x86_64.
+          args: "--release --out dist --interpreter '3.12 3.13 3.14${{ matrix.target == 'aarch64' && ' 3.14t' || '' }}'"
+          manylinux: auto
+      - name: 🧪 Test the built wheel under emulation
+        # aarch64/armv7/ppc64le install the manylinux wheel and run the full
+        # suite in an emulated container (i686 is handled natively in the next
+        # step instead, no QEMU needed for 32-bit on an x86_64 host).
+        #
+        # This runs against the container's default CPython (one version), not
+        # all three that were built. That is deliberate: the purpose here is to
+        # catch arch-specific behaviour (endianness, alignment, the Rust build
+        # for the target), which is independent of the Python version. The
+        # per-CPython-version PyO3 boundary is already exercised on every version
+        # by the native legs above. Installing all three interpreters under QEMU
+        # would multiply already-slow emulated runs for no arch-specific gain.
+        #
+        # Test deps are installed unpinned rather than from the pinned
+        # [dependency-groups]: the distro pip predates `pip install --group`, and
+        # uv ships no reliable armv7/ppc64le binary, so the pinned path is not
+        # available in-container. The suite does not import these at collection
+        # time, so latest is fine for an arch smoke. (The old tests-arch.yaml did
+        # the same.)
+        if: matrix.target != 'x86'
+        uses: uraimo/run-on-arch-action@f9b26e3a1a408d5fd530d20c17b9f3f4428ff8d9 # v3.1.0
+        with:
+          arch: ${{ matrix.target }}
+          distro: ubuntu24.04
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update -q -y
+            apt-get install -q -y --no-install-recommends \
+              python3 python3-pip python3-venv
+          run: |
+            python3 -m venv /tmp/venv
+            . /tmp/venv/bin/activate
+            pip install pytest pytest-asyncio pyyaml
+            pip install --no-index --no-deps --find-links dist yamlrocks
+            pytest -q
+      - name: 🧪 Test the built wheel (i686, native 32-bit)
+        # i686 is 32-bit x86, which runs natively on the x86_64 host (no QEMU).
+        # Tests the image's CPython (one version) for the same reason as the
+        # emulated legs. python:3.14-slim, pinned by digest (Renovate keeps it
+        # current). Both pip installs are pinned for OpenSSF Scorecard: the test
+        # deps via a hash-pinned requirements file (the same versions the native
+        # legs use), and the wheel by its built .whl path (Scorecard exempts a
+        # .whl file; a bare package name would be flagged as unpinned).
+        if: matrix.target == 'x86'
+        shell: bash
+        run: |
+          docker run --rm --platform linux/386 -v "${PWD}:/io" -w /io \
+            python:3.14-slim@sha256:44dd04494ee8f3b538294360e7c4b3acb87c8268e4d0a4828a6500b1eff50061 \
+            sh -ec '
+              python3 -m venv /tmp/venv
+              . /tmp/venv/bin/activate
+              pip install --quiet --require-hashes -r .github/scripts/test-requirements.txt
+              pip install --quiet --no-deps dist/*cp314-cp314-*.whl
+              pytest -q
+            '
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  # musllinux (Alpine) wheels. Only on the full matrix. Importing a musl wheel
+  # needs a musl runtime, so every shipped musl wheel is installed and the suite
+  # is run against it under Alpine: x86_64 natively, aarch64 and armv7 in an
+  # emulated Alpine container. musllinux i686 is the one wheel that stays
+  # build-only: unlike manylinux i686 (tested natively above), pyyaml ships no
+  # musllinux i686 wheel, so a test container would have to compile it under a
+  # 32-bit musl toolchain.
+  musllinux:
+    name: musllinux ${{ matrix.target }}
+    if: inputs.full
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, x86, aarch64, armv7]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: ⤵️ Check out the YAML test suite submodule
+        run: |
+          git config --global core.autocrlf false
+          git submodule update --init tests/data/yaml_test_suite/cases
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+      - name: 🏗 Set package version from release tag
+        if: inputs.release-tag != ''
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          # x86_64 and aarch64 also build the free-threaded wheel (cp314t): they
+          # are the 64-bit arches, and free-threaded CPython exists only on
+          # 64-bit (x86 and armv7 are 32-bit, no free-threaded build). The cp314t
+          # musl wheels are build-only (shipped, not run): there is no
+          # free-threaded musl interpreter image to test them in, and
+          # free-threaded runtime behaviour is exercised natively on x86_64.
+          args: "--release --out dist --interpreter '3.12 3.13 3.14${{ (matrix.target == 'x86_64' || matrix.target == 'aarch64') && ' 3.14t' || '' }}'"
+          manylinux: musllinux_1_2
+      - name: 🧪 Test the built wheel on Alpine (musl, native x86_64)
+        # Native musl runtime, no emulation. Tests the image's CPython (one
+        # version) for the same reason as the emulated legs: arch/libc behaviour
+        # is version-independent and every version is covered by the native legs.
+        # python:3.14-alpine, pinned by digest (Renovate keeps it current). Both
+        # pip installs are pinned for OpenSSF Scorecard: the test deps via a
+        # hash-pinned requirements file (the same versions the native legs use),
+        # and the wheel by its built .whl path (Scorecard exempts a .whl file; a
+        # bare package name would be flagged as unpinned).
+        if: matrix.target == 'x86_64'
+        shell: bash
+        run: |
+          docker run --rm -v "${PWD}:/io" -w /io \
+            python:3.14-alpine@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92 \
+            sh -ec '
+              python3 -m venv /tmp/venv
+              . /tmp/venv/bin/activate
+              pip install --quiet --require-hashes -r .github/scripts/test-requirements.txt
+              pip install --quiet --no-deps dist/*cp314-cp314-*.whl
+              pytest -q
+            '
+      - name: 🧪 Test the built wheel on Alpine (musl, emulated)
+        # aarch64/armv7 musl wheels run the suite in an emulated Alpine container.
+        # pyyaml comes from Alpine's py3-yaml (a prebuilt musl package) so nothing
+        # has to compile under QEMU; pytest is pure Python via pip. Installs into
+        # the system interpreter (--break-system-packages) since Alpine marks it
+        # externally managed.
+        #
+        # `alpine_latest` is intentionally not pinned to a specific Alpine
+        # release: run-on-arch only ships that one Alpine preset (and it is what
+        # reliably wires up QEMU; a pinned base_image does not). Its system
+        # CPython always sits within the 3.12-3.14 range we build wheels for, so
+        # pip finds a matching wheel in dist. If Alpine ever ships a CPython we do
+        # not yet build, this fails loudly and we add that version to the build
+        # list (which we would do to support it anyway). Using base Alpine plus
+        # apk py3-yaml, rather than the digest-pinned python:alpine image, is
+        # deliberate: it gives a prebuilt musl pyyaml and avoids compiling it
+        # under QEMU on armv7.
+        if: matrix.target == 'aarch64' || matrix.target == 'armv7'
+        uses: uraimo/run-on-arch-action@f9b26e3a1a408d5fd530d20c17b9f3f4428ff8d9 # v3.1.0
+        with:
+          arch: ${{ matrix.target }}
+          distro: alpine_latest
+          githubToken: ${{ github.token }}
+          install: |
+            apk add --no-cache python3 py3-pip py3-yaml
+          run: |
+            pip install --break-system-packages --quiet pytest pytest-asyncio
+            pip install --break-system-packages --quiet \
+              --no-index --no-deps --find-links dist yamlrocks
+            pytest -q
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-musllinux-${{ matrix.target }}
+          path: dist
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+      - name: 🏗 Set package version from release tag
+        if: inputs.release-tag != ''
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: python .github/scripts/set_version.py "${RELEASE_TAG}"
+      - name: 🏗 Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-sdist
+          path: dist

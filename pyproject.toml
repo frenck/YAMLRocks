@@ -70,11 +70,11 @@ markers = [
 # The build tool for the native extension, used by `maturin develop`. The
 # `[build-system]` range above governs isolated sdist builds; this pins the tool
 # used for local and CI development builds.
-build = ["maturin==1.13.3"]
+build = ["maturin==1.14.1"]
 # Test runtime needed to run the suite anywhere, including free-threaded CPython.
 # numpy is a separate group because it has no free-threaded wheels yet.
 test = [
-  "pytest==9.0.3",
+  "pytest==9.1.1",
   "pytest-asyncio==1.4.0",
   "pyyaml==6.0.3",
   "yamllint==1.38.0",
@@ -82,10 +82,10 @@ test = [
 # The optional numpy serialization path (OPT_SERIALIZE_NUMPY). Kept as its own
 # group so the free-threaded job can omit it (no nogil wheels yet); the numpy
 # tests skip cleanly when it is absent.
-numpy = ["numpy==2.4.6"]
+numpy = ["numpy==2.5.0"]
 # Type checkers and linters (no build needed; they check the source and stub).
-typing = ["mypy==2.1.0", "ty==0.0.46"]
-lint = ["ruff==0.15.16", "codespell==2.4.2", "zizmor==1.25.2"]
+typing = ["mypy==2.1.0", "ty==0.0.51"]
+lint = ["ruff==0.15.18", "codespell==2.4.2", "zizmor==1.26.1"]
 # Continuous performance testing (bench/test_benchmarks.py, run by CodSpeed).
 codspeed = [{ include-group = "test" }, "pytest-codspeed==5.0.3"]
 # Comparison libraries used only by the one-off bench/bench.py report.
@@ -99,7 +99,7 @@ dev = [
   { include-group = "numpy" },
   { include-group = "typing" },
   { include-group = "lint" },
-  "rust-just==1.52.0",
+  "rust-just==1.53.0",
 ]
 
 [tool.ruff]

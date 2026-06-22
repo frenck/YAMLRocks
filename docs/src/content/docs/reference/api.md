@@ -457,6 +457,7 @@ to serialize.
 | `__len__()`               | Number of top-level entries.                                                                            |
 | `__getitem__(key)`        | Read a value. A nested mapping or sequence returns a [`YAMLRocksDocumentView`](#yamlrocksdocumentview). |
 | `__setitem__(key, value)` | Set a value; the change is reflected by `to_yaml`.                                                      |
+| `__delitem__(key)`        | Delete a mapping key or sequence item; raises `KeyError`/`IndexError` if absent.                        |
 | `__contains__(key)`       | Membership test.                                                                                        |
 | `get(key, default=None)`  | Read with a fallback.                                                                                   |
 | `keys()`                  | List of top-level keys.                                                                                 |
@@ -498,7 +499,8 @@ A live proxy onto a nested mapping or sequence inside a `YAMLRocksDocument`. Ind
 to the underlying document.
 
 It supports the same navigation as `YAMLRocksDocument` (`__len__`, `__getitem__`,
-`__setitem__`, `__contains__`, `get`, `keys`, `range`, `to_yaml`, `to_dict`,
+`__setitem__`, `__delitem__`, `__contains__`, `get`, `keys`, `range`, `to_yaml`,
+`to_dict`,
 `walk`) plus `unwrap()`, which returns the node as plain Python objects, and
 `node`, the [`YAMLRocksNode`](#yamlrocksnode) cursor at this view's position.
 

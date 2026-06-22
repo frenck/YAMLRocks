@@ -16,8 +16,6 @@
 
 pub mod json;
 
-use std::io::Write as _;
-
 use crate::decode::Value;
 use crate::resolver::{ScalarKind, Schema};
 use crate::scanner::ScalarStyle;
@@ -118,7 +116,11 @@ struct Emitter<'a> {
 impl<'a> Emitter<'a> {
     fn new(options: &'a EmitOptions) -> Self {
         Self {
-            buf: Vec::with_capacity(256),
+            // Most documents emit to more than a couple hundred bytes; starting
+            // larger skips the first few doubling reallocations (each of which
+            // copies the whole buffer) for the common case, at a negligible cost
+            // for tiny ones.
+            buf: Vec::with_capacity(1024),
             options,
         }
     }
@@ -366,10 +368,12 @@ impl<'a> Emitter<'a> {
                 .extend_from_slice(self.options.null_style.inline_token().as_bytes()),
             Value::Bool(true) => self.buf.extend_from_slice(b"true"),
             Value::Bool(false) => self.buf.extend_from_slice(b"false"),
-            // Format the integer straight into the output buffer (writing to a
-            // `Vec<u8>` is infallible), avoiding a throwaway `String` per int.
+            // Format the integer straight into the output buffer via itoa, a
+            // specialized integer formatter that is faster than `core::fmt` and
+            // produces the exact same digits, with no throwaway `String` per int.
             Value::Int(i) => {
-                let _ = write!(self.buf, "{i}");
+                let mut itoa_buf = itoa::Buffer::new();
+                self.buf.extend_from_slice(itoa_buf.format(*i).as_bytes());
             }
             // A big integer is already its exact decimal text; emit it verbatim
             // (it is all digits with an optional sign, so it needs no quoting).

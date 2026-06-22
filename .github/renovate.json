@@ -12,6 +12,17 @@
     "automerge": true
   },
   "commitMessagePrefix": "⬆️",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the digest-pinned Python images that the wheel-test steps run with `docker run`. The built-in docker manager does not scan shell `run:` commands, so without this the pins would never be refreshed.",
+      "managerFilePatterns": ["/^\\.github/workflows/build-wheels\\.yaml$/"],
+      "matchStrings": [
+        "(?<depName>python):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]+)"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
   "packageRules": [
     {
       "matchManagers": ["cargo"],
@@ -68,6 +79,19 @@
       "matchManagers": ["git-submodules"],
       "matchDepNames": ["tests/data/yaml_test_suite/cases"],
       "enabled": false
+    },
+    {
+      "description": "Do not let Renovate pin or bump the setup-python python-version. The GitHub Actions runner images lag CPython patch releases, so pinning to the newest patch (e.g. 3.14.6) breaks setup-python until the runners catch up. Keep the major.minor spec (3.14) and manage supported versions by hand.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["python"],
+      "enabled": false
+    },
+    {
+      "description": "The oss-fuzz base image republishes its :latest digest daily, which otherwise opens a digest-bump PR every day. Refresh the fuzzing base image only once a month.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["gcr.io/oss-fuzz-base/base-builder-rust"],
+      "addLabels": ["maintenance"],
+      "schedule": ["before 3am on the first day of the month"]
     }
   ]
 }

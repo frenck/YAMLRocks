@@ -42,7 +42,7 @@ pub(super) fn resolve_tagged(
 /// hit, while still handing back an *interned* object so the caller's later
 /// `data["key"]` lookups keep interning's speed. Keyed by the source slice, which
 /// lives as long as the `Value` tree being materialized.
-type KeyCache<'tree> = std::collections::HashMap<&'tree str, Py<PyAny>>;
+type KeyCache<'tree> = std::collections::HashMap<&'tree str, Py<PyAny>, ahash::RandomState>;
 
 /// Convert a [`Value`] to Python, applying `tags` to custom-tagged nodes.
 ///
@@ -54,7 +54,7 @@ pub fn value_to_python_with(
     value: &Value<'_>,
     tags: TagPolicy<'_, '_>,
 ) -> PyResult<Py<PyAny>> {
-    let mut keys = KeyCache::new();
+    let mut keys = KeyCache::default();
     value_to_python_cached(py, value, tags, &mut keys)
 }
 

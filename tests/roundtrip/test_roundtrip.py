@@ -220,6 +220,79 @@ def test_contains_and_keys():
     assert list(doc.keys()) == ["a", "b"]
 
 
+def test_delete_top_level_key():
+    """Deleting a top-level key removes it from the emitted document."""
+    doc = yamlrocks.loads(b"a: 1\nb: 2\nc: 3\n", option=RT)
+    del doc["b"]
+    assert doc.to_yaml() == b"a: 1\nc: 3\n"
+
+
+def test_delete_nested_key():
+    """Deleting a key through a nested view is reflected on emit."""
+    doc = yamlrocks.loads(b"server:\n  host: localhost\n  port: 80\n", option=RT)
+    del doc["server"]["port"]
+    assert yamlrocks.loads(doc.to_yaml()) == {"server": {"host": "localhost"}}
+
+
+def test_delete_preserves_surrounding_comments():
+    """Deleting a key keeps the comments on the surrounding keys intact."""
+    doc = yamlrocks.loads(
+        b"# config\nname: app  # the name\nport: 8080  # the port\n", option=RT
+    )
+    del doc["port"]
+    assert doc.to_yaml() == b"# config\nname: app  # the name\n"
+
+
+def test_delete_takes_the_keys_own_comments_with_it():
+    """A deleted key's own head and inline comments are removed with it."""
+    doc = yamlrocks.loads(b"a: 1\n# b heading\nb: 2  # inline b\nc: 3\n", option=RT)
+    del doc["b"]
+    out = doc.to_yaml().decode()
+    assert "# b heading" not in out
+    assert "inline b" not in out
+    assert out == "a: 1\nc: 3\n"
+
+
+def test_delete_missing_key_raises_keyerror():
+    """Deleting a key that is not present raises KeyError."""
+    doc = yamlrocks.loads(b"a: 1\n", option=RT)
+    with pytest.raises(KeyError):
+        del doc["missing"]
+
+
+def test_delete_then_add_round_trips():
+    """Deleting a key then adding another round-trips, keeping comments."""
+    doc = yamlrocks.loads(b"account:\n  user: me  # login\n  password: x\n", option=RT)
+    del doc["account"]["password"]
+    doc["account"]["keyring"] = None
+    assert "# login" in doc.to_yaml().decode()
+    assert yamlrocks.loads(doc.to_yaml()) == {
+        "account": {"user": "me", "keyring": None}
+    }
+
+
+def test_delete_reflected_in_contains_and_keys():
+    """After a delete, membership and keys() no longer report the key."""
+    doc = yamlrocks.loads(b"a: 1\nb: 2\n", option=RT)
+    del doc["a"]
+    assert "a" not in doc
+    assert list(doc.keys()) == ["b"]
+
+
+def test_delete_sequence_item():
+    """Deleting a sequence item by index removes it on emit."""
+    doc = yamlrocks.loads(b"items:\n  - one\n  - two\n  - three\n", option=RT)
+    del doc["items"][1]
+    assert yamlrocks.loads(doc.to_yaml()) == {"items": ["one", "three"]}
+
+
+def test_delete_sequence_index_out_of_range_raises():
+    """Deleting an out-of-range sequence index raises IndexError."""
+    doc = yamlrocks.loads(b"items:\n  - one\n", option=RT)
+    with pytest.raises(IndexError):
+        del doc["items"][5]
+
+
 def test_view_unwrap_returns_plain():
     """A view's unwrap() returns a plain Python value."""
     doc = yamlrocks.loads(b"server:\n  host: localhost\n", option=RT)
@@ -238,6 +311,15 @@ def test_multi_document_emit_after_edit():
     assert len(doc) == 2
     doc[0] = {"z": 9}
     assert doc.to_yaml() == b"z: 9\n---\nb: 2\n"
+
+
+def test_delete_document_from_multi():
+    """Deleting one document of a multi-document stream drops it on emit."""
+    doc = yamlrocks.loads(b"a: 1\n---\nb: 2\n---\nc: 3\n", option=RT)
+    assert len(doc) == 3
+    del doc[1]
+    assert len(doc) == 2
+    assert yamlrocks.loads_all(doc.to_yaml()) == [{"a": 1}, {"c": 3}]
 
 
 def test_multi_document_repr_and_len():

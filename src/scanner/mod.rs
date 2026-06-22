@@ -112,8 +112,18 @@ pub struct Scanner<'input> {
     /// key position (`&a key:`). Such a key does not take the inline-key path, so
     /// its `BlockMappingStart`/`Key` must be inserted retroactively, at the
     /// property's column, once a `:` confirms it. Records (token index in
-    /// `tokens`, column, line). Block context only.
-    simple_key: Option<(usize, i32, u32)>,
+    /// `tokens`, column, line, tab-in-indent). The last flag carries whether a
+    /// tab preceded the key, so a `:` can reject it; see [`Self::tab_before_token`].
+    /// Block context only.
+    simple_key: Option<(usize, i32, u32, bool)>,
+    /// Whether a tab was consumed in the whitespace immediately before the token
+    /// now being fetched (block context only; reset at the start of each
+    /// [`Self::scan_to_next_token`]). A tab is valid separation before a plain or
+    /// flow scalar, but it cannot indent a block collection node, so a `-` entry
+    /// or a mapping key positioned right after such a tab is rejected. The check
+    /// is deferred to the node fetch because the tab alone does not say which it
+    /// is (`foo:\n \tbar` is a value and fine; `foo:\n \tbar: 1` is a key and not).
+    tab_before_token: bool,
     stream_started: bool,
     stream_ended: bool,
     simple_key_allowed: bool,
@@ -150,6 +160,7 @@ impl<'input> Scanner<'input> {
             after_block_entry: false,
             unwound_block_level: false,
             simple_key: None,
+            tab_before_token: false,
             stream_started: false,
             stream_ended: false,
             simple_key_allowed: true,
@@ -438,40 +449,46 @@ impl<'input> Scanner<'input> {
         // preceded by whitespace; otherwise it is not a comment indicator and a
         // `#` reaching the token dispatcher is rejected as stray content.
         //
-        // `at_line_start` tracks whether the cursor is still in a line's leading
-        // whitespace (the indentation region). A tab there, in block context, is
-        // invalid (YAML indentation is spaces only), while a tab used for
-        // separation mid-line is fine.
-        let mut at_line_start = self.reader.column() == 0;
+        // A tab is never indentation (YAML indents with spaces), but it is valid
+        // separation before a plain or flow scalar. Whether a leading or
+        // separating tab is an error therefore depends on the node it precedes,
+        // so we only record that a tab was seen and defer the verdict to the node
+        // fetch (`fetch_block_entry`, the key promotions); see `tab_before_token`.
+        self.tab_before_token = false;
         loop {
             match self.reader.peek() {
-                '\t' if at_line_start && self.flow_level == 0 => {
-                    // A leading tab cannot indent block content. It is allowed,
-                    // though, before a top-level flow collection (separation, not
-                    // indentation) or on an otherwise-blank line. Look past the
-                    // leading blanks to decide.
-                    let next = self.reader.peek_after_blanks();
-                    if matches!(next, Some('[' | '{' | '\n' | '\r') | None) {
-                        self.reader.advance();
-                    } else {
-                        return Err(ScanError::new(
-                            "a tab cannot be used for indentation",
-                            self.reader.span(),
-                        ));
-                    }
+                ' ' => {
+                    self.reader.advance();
                 }
-                ' ' | '\t' => {
+                '\t' => {
+                    if self.flow_level == 0 {
+                        self.tab_before_token = true;
+                    } else if self.reader.column() == 0 {
+                        // A flow collection spanning lines indents continuation
+                        // lines with spaces, so a tab opening a line is invalid
+                        // indentation (`[\n\tfoo]`). It is allowed only when it
+                        // merely separates flow punctuation (`\t[`) or sits on a
+                        // blank line; a tab after leading spaces is separation,
+                        // not indentation, so this only fires at column 0.
+                        let next = self.reader.peek_after_blanks();
+                        let separating = next.map_or(true, |c| is_break(c) || is_flow_indicator(c));
+                        if !separating {
+                            return Err(tab_indent_error(self.reader.span()));
+                        }
+                    }
                     self.reader.advance();
                 }
                 '\n' | '\r' => {
                     self.reader.advance_line();
-                    at_line_start = true;
                     self.on_doc_start_line = false;
+                    // Only a tab on the token's own line is indentation for it; a
+                    // tab on an intervening blank line is just blank content.
+                    self.tab_before_token = false;
                     // A block simple key must complete on its own line; once the
                     // line ends with no `:`, it was an ordinary node.
                     if self
                         .simple_key
-                        .is_some_and(|(_, _, line)| line != self.reader.line())
+                        .is_some_and(|(_, _, line, _)| line != self.reader.line())
                     {
                         self.simple_key = None;
                     }
@@ -782,6 +799,11 @@ impl<'input> Scanner<'input> {
     fn fetch_block_entry(&mut self, after_entry: bool) -> Result<(), ScanError> {
         let column = self.reader.column() as i32;
         let span = self.reader.span();
+        // A tab cannot indent a block sequence entry, whether it leads the line
+        // or separates the entry from a parent indicator (`-\t-`, `- \t-`).
+        if self.tab_before_token {
+            return Err(tab_indent_error(span));
+        }
         // A block sequence value must begin on the line after its mapping key,
         // not inline after the `:` (`key: - a`).
         if span.line == self.value_indicator_line {
@@ -829,11 +851,21 @@ impl<'input> Scanner<'input> {
 
     fn fetch_key(&mut self) -> Result<(), ScanError> {
         let span = self.reader.span();
+        // A `?` opens a block mapping; a tab cannot indent it, so a leading tab
+        // before the `?` is invalid.
+        if self.flow_level == 0 && self.tab_before_token {
+            return Err(tab_indent_error(span));
+        }
         if self.flow_level == 0 {
             let column = self.reader.column() as i32;
             self.roll_indent(column, span, TokenKind::BlockMappingStart)?;
         }
         self.reader.advance(); // skip '?'
+
+        // Nor can a tab indent the explicit key's own node (`?\tkey`).
+        if self.flow_level == 0 && self.reader.peek() == '\t' {
+            return Err(tab_indent_error(self.reader.span()));
+        }
         if !self.reader.is_eof() && self.reader.peek() == ' ' {
             self.reader.advance();
         }
@@ -851,11 +883,15 @@ impl<'input> Scanner<'input> {
     fn fetch_value(&mut self) -> Result<(), ScanError> {
         let span = self.reader.span();
         if self.flow_level == 0 {
-            if let Some((index, key_col, key_line)) = self
+            if let Some((index, key_col, key_line, key_had_tab)) = self
                 .simple_key
                 .take()
-                .filter(|&(_, _, line)| line == span.line)
+                .filter(|&(_, _, line, _)| line == span.line)
             {
+                // A tab cannot indent the mapping this key opens.
+                if key_had_tab {
+                    return Err(tab_indent_error(span));
+                }
                 // A property-prefixed key (`&a key:`) confirmed by this `:`.
                 // Insert the mapping-start and key marker retroactively at the
                 // key's own column, before its buffered tokens.
@@ -920,7 +956,12 @@ impl<'input> Scanner<'input> {
     /// potential key is recorded.
     fn note_possible_simple_key(&mut self, span: Span) {
         if self.flow_level == 0 && self.simple_key_allowed && self.simple_key.is_none() {
-            self.simple_key = Some((self.tokens.len(), span.column as i32, span.line));
+            self.simple_key = Some((
+                self.tokens.len(),
+                span.column as i32,
+                span.line,
+                self.tab_before_token,
+            ));
         }
     }
 
@@ -1182,6 +1223,10 @@ impl<'input> Scanner<'input> {
         let was_simple_key_allowed = self.simple_key_allowed;
         let start_line = self.reader.line();
         let span = self.reader.span();
+        // Captured before scanning: whether a tab preceded this scalar. It only
+        // matters if the scalar turns out to be a mapping key (a tab cannot
+        // indent the mapping); a plain scalar value after a tab is fine.
+        let had_leading_tab = self.tab_before_token;
         let (value, content_end) =
             scalar::scan_plain(&mut self.reader, self.flow_level > 0, self.current_indent)?;
 
@@ -1196,7 +1241,7 @@ impl<'input> Scanner<'input> {
         if self.flow_level == 0
             && self
                 .simple_key
-                .is_some_and(|(_, _, line)| line != self.reader.line())
+                .is_some_and(|(_, _, line, _)| line != self.reader.line())
         {
             self.simple_key = None;
         }
@@ -1242,6 +1287,12 @@ impl<'input> Scanner<'input> {
                     ));
                 }
                 if self.flow_level == 0 {
+                    // A tab cannot indent the mapping this key opens, so a key
+                    // reached past a leading tab (`foo:\n \tbar: 1`) is invalid,
+                    // unlike the same scalar used as a plain value (`foo:\n \tbar`).
+                    if had_leading_tab {
+                        return Err(tab_indent_error(span));
+                    }
                     let key_col = span.column as i32;
                     self.roll_indent(key_col, span, TokenKind::BlockMappingStart)?;
                 }
@@ -1361,4 +1412,11 @@ fn reserved_indicator_error(ch: char, span: Span) -> ScanError {
         format!("'{ch}' is a reserved indicator and cannot start a plain scalar"),
         span,
     )
+}
+
+/// The error for a tab where a block collection node expects indentation. YAML
+/// indents with spaces only, so a `-` entry or a mapping key reached past a tab
+/// is invalid (a tab before a plain or flow scalar is valid separation, though).
+fn tab_indent_error(span: Span) -> ScanError {
+    ScanError::new("a tab cannot be used for indentation", span)
 }

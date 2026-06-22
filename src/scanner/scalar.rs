@@ -108,17 +108,35 @@ fn fold_quoted_break(
 ) -> Result<(), ScanError> {
     reader.advance_line();
     let mut blank_lines = 0;
-    while !reader.is_eof() {
-        skip_blanks(reader);
-        if reader.peek() == '\n' || reader.peek() == '\r' {
-            blank_lines += 1;
-            reader.advance_line();
-        } else {
+    loop {
+        if reader.is_eof() {
             break;
         }
+        // Indentation is leading spaces only; a tab is never indentation, so skip
+        // just the spaces here and let the indent check see the true column. A
+        // tab that follows is content separation, consumed after the check.
+        while reader.peek() == ' ' {
+            reader.advance();
+        }
+        // A line is blank when only whitespace precedes its break; a tab may pad
+        // such a line but cannot indent a content line.
+        let blank = match reader.peek() {
+            '\n' | '\r' => true,
+            '\t' => matches!(reader.peek_after_blanks(), Some('\n' | '\r')),
+            _ => false,
+        };
+        if !blank {
+            break;
+        }
+        blank_lines += 1;
+        skip_blanks(reader);
+        if reader.is_eof() {
+            break;
+        }
+        reader.advance_line();
     }
-    skip_blanks(reader);
     check_quoted_continuation_indent(reader, parent_indent)?;
+    skip_blanks(reader);
     if blank_lines > 0 {
         for _ in 0..blank_lines {
             value.push('\n');

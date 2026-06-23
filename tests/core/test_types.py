@@ -228,6 +228,26 @@ def test_unsupported_type_still_errors():
         yamlrocks.dumps({"x": object()})
 
 
+def test_compact_block_mapping_as_explicit_key():
+    """A compact block mapping used as an explicit key loads as a tuple of pairs.
+
+    Spec example 8.19: ``? earth: blue`` is a block mapping ``{earth: blue}`` used
+    as the key, with ``: moon: white`` a block mapping value. A mapping is not a
+    hashable Python key, so it renders as a tuple of (key, value) pairs.
+    """
+    doc = yamlrocks.loads(b"- sun: yellow\n- ? earth: blue\n  : moon: white\n")
+    assert doc == [
+        {"sun": "yellow"},
+        {(("earth", "blue"),): {"moon": "white"}},
+    ]
+
+
+def test_compact_block_sequence_as_explicit_key():
+    """A compact block sequence used as an explicit key loads as a tuple."""
+    doc = yamlrocks.loads(b"? - a\n  - b\n: value\n")
+    assert doc == {("a", "b"): "value"}
+
+
 def test_default_callback_still_works():
     """The default callback handles otherwise unsupported types."""
     out = yamlrocks.dumps({"x": object()}, default=lambda o: "fallback")

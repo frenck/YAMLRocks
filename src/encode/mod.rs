@@ -111,6 +111,10 @@ pub fn encode(value: &Value<'_>, options: &EmitOptions) -> Vec<u8> {
 struct Emitter<'a> {
     buf: Vec<u8>,
     options: &'a EmitOptions,
+    /// True while emitting a mapping key. A key must stay on one line to remain a
+    /// valid implicit key, so all width-driven line breaking (scalar folding and
+    /// flow-separator breaks) is suppressed for the whole key subtree.
+    emitting_key: bool,
 }
 
 impl<'a> Emitter<'a> {
@@ -122,6 +126,7 @@ impl<'a> Emitter<'a> {
             // for tiny ones.
             buf: Vec::with_capacity(1024),
             options,
+            emitting_key: false,
         }
     }
 
@@ -394,7 +399,13 @@ impl<'a> Emitter<'a> {
     /// scalar key sits in block context (`false`); a collection key descends into
     /// flow internally, flagging its own elements.
     fn emit_key(&mut self, key: &Value) {
+        // Suppress all width-driven line breaking for the whole key subtree: a
+        // key folded or broken across lines is no longer a valid implicit key, so
+        // the `:` after it detaches and the data changes on reload.
+        let was_key = self.emitting_key;
+        self.emitting_key = true;
         self.emit_inline(key, false);
+        self.emitting_key = was_key;
     }
 
     fn emit_float(&mut self, value: f64) {
@@ -415,8 +426,9 @@ impl<'a> Emitter<'a> {
             // scalar would end the entry or collection early; quoting keeps it a
             // single value. In block context those bytes are ordinary content.
             self.emit_quoted_string(value);
-        } else if self.options.width > 0 && !in_flow {
-            // Fold long plain scalars to the width, but only in block context. A
+        } else if self.options.width > 0 && !in_flow && !self.emitting_key {
+            // Fold long plain scalars to the width, but only in block value
+            // position (never a key, see `emit_key`). A
             // fold inserts a newline at a space; in a flow collection the next
             // line can then begin with `?` or `:`, which are indicators there (an
             // explicit key, a value), so the break would change the decoded value
@@ -440,10 +452,11 @@ impl<'a> Emitter<'a> {
             && !value.contains('\n')
             && !value.contains('\r')
             && !value.bytes().any(|b| b < 0x20 || b == 0x7f);
-        if self.options.width > 0 {
+        if self.options.width > 0 && !self.emitting_key {
             // Fold the (already-escaped) body between the quotes. A space in the
             // body folds the same way as in a plain scalar; the surrounding
-            // quotes are unaffected.
+            // quotes are unaffected. Never fold a key: a quoted key spread across
+            // lines stops being a valid implicit key, so the `:` detaches.
             let cont_indent = self.current_line_indent() + self.step();
             let (quote, body) = if single_ok {
                 (b'\'', crate::emit_util::single_quoted_body(value))
@@ -489,10 +502,14 @@ impl<'a> Emitter<'a> {
 
     /// The `, ` between flow entries, broken onto a new indented line when the
     /// current line has reached the width. Whitespace between flow tokens is
-    /// insignificant, so a break here never changes the decoded value.
+    /// insignificant, so a break here never changes the decoded value, except
+    /// inside a key, where it would split the implicit key across lines.
     fn emit_flow_separator(&mut self, cont_indent: usize) {
         self.buf.push(b',');
-        if self.options.width > 0 && self.current_column() >= self.options.width {
+        if self.options.width > 0
+            && !self.emitting_key
+            && self.current_column() >= self.options.width
+        {
             self.buf.push(b'\n');
             self.write_indent(cont_indent);
         } else {
@@ -760,6 +777,24 @@ mod tests {
     }
     fn emit(value: &Value<'_>, options: &EmitOptions) -> String {
         String::from_utf8(encode(value, options)).unwrap()
+    }
+
+    #[test]
+    fn a_quoted_key_is_not_folded_across_a_width_break() {
+        // A mapping key must stay on one line to remain a valid implicit key.
+        // Folding a long quoted key at a small width would split it across lines,
+        // detaching the `:` so the value reads back as a separate node. The key
+        // here needs quoting (control byte) and is long enough to tempt a fold.
+        let v = Value::Mapping(vec![(s("a long \u{1} key here"), Value::Null)]);
+        let opts = EmitOptions {
+            width: 1,
+            ..EmitOptions::default()
+        };
+        let out = emit(&v, &opts);
+        let reparsed =
+            crate::decode::decode_with(&out, crate::resolver::Schema::Yaml12, false, false)
+                .unwrap();
+        assert_eq!(reparsed, vec![v], "quoted key round-trips: {out:?}");
     }
 
     #[test]

@@ -52,9 +52,10 @@ bespoke reimplementation of what submodules already do natively).
   submodule in the main test matrix (keeping it fast) and the full set in the
   coverage and real-world jobs.
 - The compliance harness reads the suite's `data`-branch layout directly,
-  exercising the single-document cases (those with a top-level `in.yaml`) and
-  skipping the multi-document variants; `expectations.json` baselines the cases
-  the pragmatic parser does not yet handle.
+  exercising every case (including the variants stored in numbered
+  subdirectories). yamlrocks passes the suite in full, so the harness asserts
+  compliance directly against each case's filesystem markers rather than against
+  a recorded baseline.
 - The real-world category surfaced and fixed a real parser bug on day one: a
   plain scalar's continuation line beginning with a quote (`text\n  'more'`) was
   wrongly rejected; in block context quotes are ordinary plain-scalar characters,

@@ -45,6 +45,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "differential_options"
+path = "fuzz_targets/differential_options.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 # Keep line-level debug info so libFuzzer/ASan crash reports are legible.
 debug = 1

@@ -200,15 +200,18 @@ impl<'input> Reader<'input> {
         let bytes = self.input.as_bytes();
         let start = self.pos;
         let mut i = self.pos;
-        let mut content_end = self.pos;
         while i < bytes.len() && !table[bytes[i] as usize] {
-            if !is_blank_byte(bytes[i]) {
-                content_end = i + 1;
-            }
             i += 1;
         }
         self.pos = i;
         self.column += (i - start) as u32;
+        // Trailing blanks before the stopping byte are not content, so the
+        // content ends at the last non-blank byte. Trimming once here keeps the
+        // scan loop above a pure table walk instead of testing every byte.
+        let mut content_end = i;
+        while content_end > start && is_blank_byte(bytes[content_end - 1]) {
+            content_end -= 1;
+        }
         (&self.input[start..i], content_end)
     }
 

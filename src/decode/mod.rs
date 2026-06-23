@@ -60,17 +60,15 @@ pub fn decode_collecting(
         span: e.span,
     })?;
 
-    // Move each scalar's text out of its event up front. The decoder then owns
-    // these strings and can move them straight into `Value::String`, avoiding
-    // the re-allocation a borrowing `resolve` would do for every string scalar.
-    let scalars = take_scalar_strings(&mut events);
-
-    let mut decoder = Decoder::new(schema, scalars);
+    let mut decoder = Decoder::new(schema);
     decoder.duplicate_keys_error = duplicate_keys_error;
     decoder.reject_complex_keys = reject_complex_keys;
     decoder.duplicate_keys_warn = warn.duplicate_keys;
     decoder.yaml_11_warn = warn.yaml_1_1;
-    let mut documents = decoder.decode_stream(&events)?;
+    // The decoder moves each scalar's text straight out of its event into the
+    // value tree as it goes, so it borrows the events mutably; there is no
+    // separate pre-pass copying scalar texts into a side table.
+    let mut documents = decoder.decode_stream(&mut events)?;
     // The merge post-pass walks the whole tree; skip it unless a `<<` was seen.
     if decoder.saw_merge {
         for document in &mut documents {
@@ -88,17 +86,15 @@ pub fn is_custom_tag(tag: &str) -> bool {
     !(tag.starts_with("!!") || tag.starts_with("tag:yaml.org,2002:"))
 }
 
-/// Move the text out of every `Scalar` event into a position-indexed table, so
-/// the decoder can hand ownership of each string to a `Value::String` without a
-/// copy. The event still carries its style (the text field is left empty).
-fn take_scalar_strings<'input>(events: &mut [Event<'input>]) -> Vec<Option<Cow<'input, str>>> {
-    events
-        .iter_mut()
-        .map(|event| match &mut event.kind {
-            EventKind::Scalar(text, _) => Some(std::mem::take(text)),
-            _ => None,
-        })
-        .collect()
+/// Move ownership of the scalar text out of the `Scalar` event at `pos`, leaving
+/// the event's text empty. The decoder calls this exactly once as it consumes a
+/// scalar, handing the string straight to a `Value::String` without a copy. The
+/// caller has already matched the event at `pos` as a scalar.
+fn take_scalar<'input>(events: &mut [Event<'input>], pos: usize) -> Cow<'input, str> {
+    match &mut events[pos].kind {
+        EventKind::Scalar(text, _) => std::mem::take(text),
+        _ => Cow::default(),
+    }
 }
 
 /// Count the total number of nodes in a value tree (used to bound alias
@@ -255,8 +251,6 @@ fn named_tag_handle(tag: &str) -> Option<&str> {
 struct Decoder<'input> {
     /// The scalar-resolution schema (1.2, 1.1, or 1.1-PyYAML).
     schema: Schema,
-    /// Scalar texts moved out of the events, indexed by event position.
-    scalars: Vec<Option<Cow<'input, str>>>,
     // Each anchor stores its resolved value and its precomputed node count, so
     // an alias is an O(1) budget check instead of re-walking the subtree on
     // every reference (which also speeds up rejecting an alias bomb).
@@ -293,10 +287,9 @@ struct Decoder<'input> {
 }
 
 impl<'input> Decoder<'input> {
-    fn new(schema: Schema, scalars: Vec<Option<Cow<'input, str>>>) -> Self {
+    fn new(schema: Schema) -> Self {
         Self {
             schema,
-            scalars,
             anchors: HashMap::new(),
             duplicate_keys_error: false,
             reject_complex_keys: false,
@@ -374,14 +367,6 @@ impl<'input> Decoder<'input> {
         })
     }
 
-    /// Take ownership of the scalar text recorded for the event at `pos`.
-    fn take_scalar(&mut self, pos: usize) -> Cow<'input, str> {
-        self.scalars
-            .get_mut(pos)
-            .and_then(Option::take)
-            .unwrap_or_default()
-    }
-
     /// Account for `count` newly created nodes, erroring if the budget is
     /// exceeded.
     fn charge_nodes(&mut self, count: usize, span: Span) -> Result<(), DecodeError> {
@@ -398,7 +383,7 @@ impl<'input> Decoder<'input> {
 
     fn decode_stream(
         &mut self,
-        events: &[Event<'input>],
+        events: &mut [Event<'input>],
     ) -> Result<Vec<Value<'input>>, DecodeError> {
         let mut documents = Vec::new();
         // A directive is only meaningful at the start of the stream or right
@@ -552,7 +537,7 @@ impl<'input> Decoder<'input> {
     /// work in [`decode_node_inner`].
     fn decode_node(
         &mut self,
-        events: &[Event<'input>],
+        events: &mut [Event<'input>],
     ) -> Result<Option<Value<'input>>, DecodeError> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
@@ -574,7 +559,7 @@ impl<'input> Decoder<'input> {
 
     fn decode_node_inner(
         &mut self,
-        events: &[Event<'input>],
+        events: &mut [Event<'input>],
     ) -> Result<Option<Value<'input>>, DecodeError> {
         if self.pos >= events.len() {
             return Ok(None);
@@ -675,7 +660,7 @@ impl<'input> Decoder<'input> {
                 // Take ownership of the scanned text; classify the type without
                 // re-allocating, then move the text straight into the string
                 // case instead of cloning it.
-                let text = self.take_scalar(pos);
+                let text = take_scalar(events, pos);
                 if self.yaml_11_warn {
                     if let Some((t11, t12)) = crate::resolver::yaml_11_divergence(
                         self.schema,
@@ -864,7 +849,7 @@ impl<'input> Decoder<'input> {
 
     fn decode_mapping(
         &mut self,
-        events: &[Event<'input>],
+        events: &mut [Event<'input>],
         flow: bool,
     ) -> Result<Vec<(Value<'input>, Value<'input>)>, DecodeError> {
         let mut pairs = Vec::new();
@@ -949,7 +934,7 @@ impl<'input> Decoder<'input> {
 
     fn decode_sequence(
         &mut self,
-        events: &[Event<'input>],
+        events: &mut [Event<'input>],
         flow: bool,
     ) -> Result<Vec<Value<'input>>, DecodeError> {
         let mut items = Vec::new();
@@ -1002,7 +987,7 @@ impl<'input> Decoder<'input> {
     /// is consumed and the pair wrapped in a mapping.
     fn decode_sequence_item(
         &mut self,
-        events: &[Event<'input>],
+        events: &mut [Event<'input>],
         flow: bool,
     ) -> Result<Option<Value<'input>>, DecodeError> {
         // An empty block entry (the next event is a sibling `-` or the
@@ -1050,7 +1035,7 @@ impl<'input> Decoder<'input> {
 
     fn decode_block_sequence(
         &mut self,
-        events: &[Event<'input>],
+        events: &mut [Event<'input>],
     ) -> Result<Vec<Value<'input>>, DecodeError> {
         let mut items = Vec::new();
 

@@ -71,8 +71,11 @@ pub fn decode_collecting(
     decoder.duplicate_keys_warn = warn.duplicate_keys;
     decoder.yaml_11_warn = warn.yaml_1_1;
     let mut documents = decoder.decode_stream(&events)?;
-    for document in &mut documents {
-        apply_merge_keys(document);
+    // The merge post-pass walks the whole tree; skip it unless a `<<` was seen.
+    if decoder.saw_merge {
+        for document in &mut documents {
+            apply_merge_keys(document);
+        }
     }
     Ok((documents, decoder.warnings))
 }
@@ -280,6 +283,10 @@ struct Decoder<'input> {
     /// introduces. Used both to expand shorthand tags and to reject undefined
     /// named handles.
     tag_handles: HashMap<String, String>,
+    /// Whether a merge key (`<<`) was produced anywhere in the stream. The merge
+    /// post-pass walks the whole value tree, so skip it entirely when no document
+    /// used a merge key, which is the common case.
+    saw_merge: bool,
     pos: usize,
     depth: usize,
     nodes: usize,
@@ -297,6 +304,7 @@ impl<'input> Decoder<'input> {
             yaml_11_warn: false,
             warnings: Vec::new(),
             tag_handles: HashMap::new(),
+            saw_merge: false,
             pos: 0,
             depth: 0,
             nodes: 0,
@@ -686,7 +694,10 @@ impl<'input> Decoder<'input> {
                     ScalarKind::BigInt => Value::BigInt(text),
                     ScalarKind::Float(f) => Value::Float(f),
                     ScalarKind::Str => Value::String(text),
-                    ScalarKind::Merge => merge::merge_key_marker(),
+                    ScalarKind::Merge => {
+                        self.saw_merge = true;
+                        merge::merge_key_marker()
+                    }
                 };
                 // Preserve custom (application) tags so the FFI layer can apply
                 // a tag handler or pass them through as `YAMLRocksTag` objects.

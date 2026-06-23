@@ -264,6 +264,20 @@ data = yamlrocks.loads(source)
 assert data == {(("x", 1),): "nested"}
 ```
 
+The key may also be a compact block collection written after the `?`, the form
+used in [spec example
+8.19](https://yaml.org/spec/1.2.2/#example-compact-block-mappings):
+
+```python
+source = """
+? earth: blue
+: moon: white
+"""
+
+data = yamlrocks.loads(source)
+assert data == {(("earth", "blue"),): {"moon": "white"}}
+```
+
 The conversion is recursive, so nested collections inside a key are made hashable
 too. It applies on every load path that builds Python values, plain `loads`,
 [annotated mode](/guides/annotated/), and custom-tag resolution, so they all

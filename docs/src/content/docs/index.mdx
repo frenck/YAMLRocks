@@ -47,8 +47,8 @@ feedback. See [stability and roadmap](/stability-roadmap/) for the 1.0 contract.
     files is roughly 18 times faster than a PyYAML constructor.
   </Card>
   <Card title="Correct" icon="approve-check">
-    A custom YAML 1.2 scanner and parser, exercised against the official YAML
-    test suite plus snapshot and fuzz corpora, and actively tested against
+    A custom YAML 1.2 scanner and parser that passes the complete official YAML
+    test suite, backed by snapshot and fuzz corpora, and actively tested against
     thousands of real-world configuration files from dozens of public
     repositories across many ecosystems. See [real-world
     verification](/verification/real-world-corpus/).
@@ -229,9 +229,9 @@ doc.save()
 YAMLRocks implements fast load/dump, JSON export, YAML 1.1 mode, annotated mode,
 native includes, round-trip preservation, writable includes, JSON Schema
 validation (including in-file `$schema` references), the `!secret` and `!env_var`
-config tags, a PyYAML compatibility shim, and rich standard-library type support. It is
-verified against the official YAML test suite and thousands of real-world configs
-from many ecosystems, behind a code-coverage gate, and is safe against the common
+config tags, a PyYAML compatibility shim, and rich standard-library type support. It
+passes the complete official YAML test suite and is verified against thousands of
+real-world configs from many ecosystems, behind a code-coverage gate, and is safe against the common
 YAML attack classes, with hot paths tuned via the raw CPython API and zero-copy
 scalar parsing. See [stability and roadmap](/stability-roadmap/) for what is
 stable today, what may still change, and what blocks 1.0.

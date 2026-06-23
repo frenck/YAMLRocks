@@ -415,7 +415,14 @@ impl<'a> Emitter<'a> {
             // scalar would end the entry or collection early; quoting keeps it a
             // single value. In block context those bytes are ordinary content.
             self.emit_quoted_string(value);
-        } else if self.options.width > 0 {
+        } else if self.options.width > 0 && !in_flow {
+            // Fold long plain scalars to the width, but only in block context. A
+            // fold inserts a newline at a space; in a flow collection the next
+            // line can begin with `?`, `:`, or `-`, which there are indicators
+            // (an explicit key, a value, a block entry), so the break would
+            // change the decoded value (`{k: a ? b}` folding to `a\n  ? b` reads
+            // back as the value `a` plus a key `b`). Width is a soft limit, so a
+            // flow plain scalar simply stays on one line instead.
             let cont_indent = self.current_line_indent() + self.step();
             self.emit_folded(value, cont_indent);
         } else {
@@ -753,6 +760,25 @@ mod tests {
     }
     fn emit(value: &Value<'_>, options: &EmitOptions) -> String {
         String::from_utf8(encode(value, options)).unwrap()
+    }
+
+    #[test]
+    fn flow_plain_scalar_is_not_folded_across_a_width_break() {
+        // A plain scalar carrying ` ? ` inside a flow mapping must not be folded
+        // to honor the width: a fold puts `? ...` at the start of a flow line,
+        // where `?` is an explicit-key indicator, so the value would read back as
+        // a value plus a spurious key. Width is a soft limit, so it stays inline.
+        let v = Value::Mapping(vec![(s("k"), s("a ? b c d e f"))]);
+        let opts = EmitOptions {
+            flow_style: true,
+            width: 8,
+            ..EmitOptions::default()
+        };
+        let out = emit(&v, &opts);
+        let reparsed =
+            crate::decode::decode_with(&out, crate::resolver::Schema::Yaml12, false, false)
+                .unwrap();
+        assert_eq!(reparsed, vec![v], "flow plain scalar round-trips: {out:?}");
     }
 
     #[test]

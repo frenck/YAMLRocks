@@ -88,12 +88,16 @@ pub fn is_custom_tag(tag: &str) -> bool {
 
 /// Move ownership of the scalar text out of the `Scalar` event at `pos`, leaving
 /// the event's text empty. The decoder calls this exactly once as it consumes a
-/// scalar, handing the string straight to a `Value::String` without a copy. The
-/// caller has already matched the event at `pos` as a scalar.
+/// scalar, handing the string straight to a `Value::String` without a copy.
+///
+/// The caller has just matched the event at `pos` as a scalar, so the non-scalar
+/// arm is unreachable; it panics rather than returning an empty string, so a
+/// future caller that breaks that invariant fails loudly instead of silently
+/// decoding the wrong event as `""`.
 fn take_scalar<'input>(events: &mut [Event<'input>], pos: usize) -> Cow<'input, str> {
     match &mut events[pos].kind {
         EventKind::Scalar(text, _) => std::mem::take(text),
-        _ => Cow::default(),
+        other => unreachable!("take_scalar called on a non-scalar event: {other:?}"),
     }
 }
 

@@ -63,6 +63,17 @@ jobs:
       - name: 🏗 Build and install yamlrocks (instrumented)
         run: uv run --no-sync maturin develop
       - name: 🚀 Run pytest to exercise the Rust core
+        # The llvm-cov-instrumented build carries far more baseline memory than
+        # the normal extension (per-region counters, larger code, profile
+        # buffers), so the default address-space guard in `tests/conftest.py`
+        # (1536 MiB, tuned for the uninstrumented suite) is too tight here: the
+        # process high-water creeps up across the full run and a large
+        # real-world round-trip then fails to allocate, which under
+        # `panic = "abort"` shows up as `Fatal Python error: Aborted`. Give the
+        # instrumented run generous headroom; the guard still catches a true
+        # runaway well below the 16 GiB runner.
+        env:
+          YAMLROCKS_AS_LIMIT_MIB: "8192"
         run: uv run --no-sync python -m pytest
       - name: 📊 Generate Cobertura coverage report
         run: cargo llvm-cov report --cobertura --output-path coverage.xml

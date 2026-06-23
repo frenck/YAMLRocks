@@ -72,6 +72,15 @@ fn classify_plain_11(value: &str, pyyaml_compat: bool) -> ScalarKind {
         return ScalarKind::Bool(b);
     }
 
+    // Every 1.1 number starts with a digit, a sign, or a dot: decimal, `0x`/`0o`/
+    // `0b`, sexagesimal (`1:30`), underscored (`1_000`), and floats including
+    // `.inf`/`.nan`. The bool words (`yes`, `on`, ...) are letters and were just
+    // ruled out, so a value starting with anything else is a string, no need to
+    // try three numeric parses. `is_null` already consumed the empty string.
+    if !matches!(value.as_bytes()[0], b'0'..=b'9' | b'-' | b'+' | b'.') {
+        return ScalarKind::Str;
+    }
+
     // Integer
     if let Some(int) = try_parse_int_11(value) {
         return ScalarKind::Int(int);

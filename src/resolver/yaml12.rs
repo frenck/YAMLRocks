@@ -53,6 +53,15 @@ fn classify_plain_12(value: &str) -> ScalarKind {
         return ScalarKind::Bool(false);
     }
 
+    // Every integer and float starts with a digit, a sign, or a dot (`-5`, `.5`,
+    // `.inf`); anything else cannot be a number, so skip the int and float parse
+    // attempts. This is the common case (names, paths, words) and the parses are
+    // not free. `is_null` already consumed the empty string above, so there is a
+    // first byte to read.
+    if !matches!(value.as_bytes()[0], b'0'..=b'9' | b'-' | b'+' | b'.') {
+        return ScalarKind::Str;
+    }
+
     // Integer
     if let Some(int) = try_parse_int_12(value) {
         return ScalarKind::Int(int);

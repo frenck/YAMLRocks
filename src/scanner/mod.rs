@@ -79,6 +79,11 @@ pub struct Scanner<'input> {
     /// Whether the cursor is still on the line of a `---` document-start marker.
     /// A block collection may not begin inline there (`--- key: value`).
     on_doc_start_line: bool,
+    /// Whether a `%` directive is allowed at the current point: only at the start
+    /// of the stream or right after a `...` document-end marker. Any document
+    /// content or a `---` start closes the window; a `...` reopens it. A directive
+    /// reached while closed (`%YAML 1.2\n---\n%YAML 1.2`) is invalid.
+    directives_allowed: bool,
     /// Source line on which the outermost open flow collection began. Used to
     /// reject a multiline flow collection used as an implicit mapping key.
     flow_start_line: u32,
@@ -161,6 +166,7 @@ impl<'input> Scanner<'input> {
             unwound_block_level: false,
             simple_key: None,
             tab_before_token: false,
+            directives_allowed: true,
             stream_started: false,
             stream_ended: false,
             simple_key_allowed: true,
@@ -392,6 +398,16 @@ impl<'input> Scanner<'input> {
         // entry can tell whether it follows an empty parent entry.
         let after_entry = self.after_block_entry;
         self.after_block_entry = false;
+        // Directives are only valid before a document. A `%` keeps the window
+        // open and `...` reopens it (handled in their fetchers); anything else
+        // here, document content or a `---` start, closes it.
+        let is_directive = ch == '%' && self.reader.column() == 0;
+        let is_doc_end = ch == '.'
+            && self.reader.check_ahead("...")
+            && self.reader.peek_at(3).map_or(true, is_whitespace_or_break);
+        if !is_directive && !is_doc_end {
+            self.directives_allowed = false;
+        }
         match ch {
             '-' if self.reader.check_next_is_blank()
                 || self.reader.check_next_is_break_or_eof() =>
@@ -664,12 +680,23 @@ impl<'input> Scanner<'input> {
             ));
         }
         self.simple_key_allowed = false;
+        // A `...` ends the document, so directives may introduce the next one.
+        self.directives_allowed = true;
         self.tokens
             .push_back(Token::new(TokenKind::DocumentEnd, span));
         Ok(())
     }
 
     fn fetch_directive(&mut self) -> Result<(), ScanError> {
+        // A directive is valid only at the start of the stream or right after a
+        // `...` document-end marker; otherwise the previous document is still
+        // open and must be closed with `...` first.
+        if !self.directives_allowed {
+            return Err(ScanError::new(
+                "a directive must start the stream or follow a document-end marker (...)",
+                self.reader.span(),
+            ));
+        }
         self.unwind_indents(-1);
         let span = self.reader.span();
         self.reader.advance(); // skip '%'

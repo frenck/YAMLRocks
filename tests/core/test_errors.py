@@ -102,3 +102,21 @@ def test_tab_in_document_level_quoted_continuation_is_separation():
     """A document-level quoted scalar has no block to out-indent, so a leading
     tab on its continuation line is just folded separation (spec example 7.6)."""
     assert yamlrocks.loads(b'"a\n\tb"\n') == "a b"
+
+
+def test_directive_after_open_document_is_rejected():
+    """A directive must start the stream or follow a `...` document-end marker.
+
+    The second `%YAML` here belongs to a new document, but the first was started
+    by `---` and never closed with `...`, so it is invalid (suite case MUS6/01).
+    """
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="directive"):
+        yamlrocks.loads_all(b"%YAML 1.2\n---\n%YAML 1.2\n---\n")
+
+
+def test_directive_after_document_end_is_allowed():
+    """A directive may introduce a new document once the previous one ended."""
+    assert yamlrocks.loads_all(b"%YAML 1.2\n---\nfoo\n...\n%YAML 1.2\n---\nbar\n") == [
+        "foo",
+        "bar",
+    ]

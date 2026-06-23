@@ -197,15 +197,18 @@ overrides the flag for a single call.
 
 By default `dumps` never wraps: a long scalar or flow collection emits on one
 line. Pass `width=N` to fold lines to a best-effort maximum, the way PyYAML's
-`width` does. Plain and quoted scalars fold at spaces, and flow collections break
-after commas:
+`width` does. A long scalar folds at spaces and flow collections break after
+commas. A plain scalar that needs wrapping is emitted double-quoted, because a
+bare plain scalar cannot fold safely (a continuation line could start an
+indicator or land at an enclosing indent), whereas a break inside quotes always
+folds back to a single space:
 
 ```python
 import yamlrocks
 
 config = {"description": "a fairly long sentence that we would like wrapped onto a few lines"}
 yamlrocks.dumps(config, width=40)
-# b'description: a fairly long sentence that\n  we would like wrapped onto a few lines\n'
+# b'description: "a fairly long sentence\n             that we would like wrapped\n             onto a few lines"\n'
 ```
 
 The one rule that is never broken is **value fidelity**: a fold only happens

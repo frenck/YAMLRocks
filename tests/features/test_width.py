@@ -24,11 +24,17 @@ def test_default_does_not_wrap():
 
 
 def test_plain_scalar_wraps_and_round_trips():
-    """A long plain scalar folds at spaces and reloads unchanged."""
+    """A long plain scalar wraps to the width and reloads unchanged.
+
+    Wrapping a bare plain scalar is unsafe (a continuation line can start an
+    indicator or collide with an enclosing indent), so a plain value that needs
+    wrapping is emitted double-quoted and folded inside the quotes instead.
+    """
     obj = {"msg": "one two three four five six seven eight nine ten eleven twelve"}
     out = yamlrocks.dumps(obj, width=30)
     assert yamlrocks.loads(out) == obj
     assert _max_line(out) <= 30
+    assert b'"' in out  # wrapped by quoting, which is the only safe way to fold
 
 
 def test_quoted_scalar_wraps_and_round_trips():

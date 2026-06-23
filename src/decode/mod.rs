@@ -646,7 +646,12 @@ impl<'input> Decoder<'input> {
                     ScalarKind::BigInt => Value::String(Cow::Borrowed("")),
                     ScalarKind::Float(f) => Value::Float(f),
                     ScalarKind::Str => Value::String(Cow::Borrowed("")),
-                    ScalarKind::Merge => merge::merge_key_marker(),
+                    // An empty node tagged `!!merge` (1.1) is a merge marker, so
+                    // record it for the merge post-pass just like the plain `<<`.
+                    ScalarKind::Merge => {
+                        self.saw_merge = true;
+                        merge::merge_key_marker()
+                    }
                 };
                 let value = if is_custom_tag(tag) {
                     Value::Tagged(tag.clone(), Box::new(resolved))

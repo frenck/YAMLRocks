@@ -226,3 +226,13 @@ def test_pyyaml_compat_carries_into_migration_warning(caplog):
     messages = [r.message for r in caplog.records]
     assert any("'yes'" in m for m in messages)
     assert not any("'y'" in m for m in messages)
+
+
+def test_merge_tag_marker_resolves_under_the_merge_skip_optimization():
+    """An empty `!!merge`-tagged node still triggers the merge post-pass (1.1).
+
+    The decoder skips the merge post-pass when no merge marker was produced; a
+    marker created from the `!!merge` tag (not just a plain `<<`) must set that
+    flag, or it would leak unresolved. Regression guard for that path.
+    """
+    assert yamlrocks.loads(b"x: !!merge\n", option=yamlrocks.OPT_YAML_1_1) == {"x": "<<"}

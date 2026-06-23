@@ -903,10 +903,16 @@ impl<'input> Composer<'input> {
     }
 
     /// Compose the value of a block sequence entry whose `-` was just consumed.
-    /// An empty entry (the next event is a sibling `-` or a terminator) is a null
-    /// node, mirroring the fast decoder's `decode_sequence_item`. Returning here
-    /// keeps [`compose_node`](Self::compose_node) from absorbing the sibling `-`
-    /// as a nested sequence, so `-\n-\n-` stays three nulls, not `[[[]]]`.
+    /// An empty entry (the next event is a sibling `-`, a terminator, or a sibling
+    /// mapping key) is a null node, mirroring the fast decoder's
+    /// `decode_block_sequence`. Returning here keeps
+    /// [`compose_node`](Self::compose_node) from absorbing the sibling `-` as a
+    /// nested sequence, so `-\n-\n-` stays three nulls, not `[[[]]]`. `Key`
+    /// covers the indentless case: an empty entry whose sibling mapping key sits
+    /// at the sequence's own column dedents straight to a `Key` with no
+    /// `BlockEnd` (the sequence shares the mapping's level), e.g. `9:\n-\nq:`. A
+    /// non-empty `- key: val` entry opens with `MappingStart`, never a bare `Key`,
+    /// so this never drops real content.
     fn compose_block_entry(
         &mut self,
         events: &[Event],
@@ -919,6 +925,7 @@ impl<'input> Composer<'input> {
                     | EventKind::SequenceEnd
                     | EventKind::MappingEnd
                     | EventKind::BlockEnd
+                    | EventKind::Key
             )
         {
             return Ok(Some(YamlNode::new(YamlNodeKind::Null, dash_span)));
@@ -1002,6 +1009,23 @@ mod tests {
         let r = root("a: 1\nlist:\n  - x\n  - y\n");
         assert!(matches!(r.kind, YamlNodeKind::Mapping(_)));
         assert!(matches!(get(&r, "list").kind, YamlNodeKind::Sequence(_)));
+    }
+
+    #[test]
+    fn empty_indentless_entry_before_a_sibling_key_keeps_its_null() {
+        // The composer shares the fast decoder's empty-entry rule: an empty
+        // indentless `-` whose sibling mapping key dedents to a bare `Key` (no
+        // `BlockEnd`) is a null entry, not a dropped one. Keeping it in the AST is
+        // what lets an unmodified document re-emit byte-for-byte.
+        let src = "9:\n-\nq:\n";
+        let r = root(src);
+        let YamlNodeKind::Sequence(items) = &get(&r, "9").kind else {
+            panic!("expected a sequence under key 9");
+        };
+        assert_eq!(items.len(), 1, "the empty entry survives as one null");
+        assert!(matches!(items[0].kind, YamlNodeKind::Null));
+        let out = crate::roundtrip::emit::emit_roundtrip(&r);
+        assert_eq!(out, src.as_bytes(), "re-emits byte-for-byte");
     }
 
     #[test]

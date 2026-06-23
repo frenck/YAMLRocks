@@ -110,7 +110,11 @@ def test_empty_indentless_sequence_entry_before_a_sibling_key():
     the sequence came back empty. Pins it to `[None]`, matching the indented form
     `9:\n  -\nq:`.
     """
-    assert yamlrocks.loads(b"9:\n-\nq:\n") == {9: [None], "q": None}
+    src = b"9:\n-\nq:\n"
+    assert yamlrocks.loads(src) == {9: [None], "q": None}
+    # The round-trip composer has the same empty-entry rule and must keep the
+    # entry too, so an unmodified document still re-emits byte-for-byte.
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_yaml() == src
 
 
 def test_str_input_accepted():

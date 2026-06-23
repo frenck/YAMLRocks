@@ -1233,6 +1233,13 @@ impl<'input> Scanner<'input> {
             ScalarStyle::Folded
         };
         self.simple_key_allowed = true;
+        // A block scalar is a complete node and can never be an implicit key (a
+        // key must fit on one line). A property (tag or anchor) before it noted a
+        // speculative simple key at its own token; the block scalar consumes all
+        // of its lines in one go, so the per-line clearing in `scan_to_next_token`
+        // never runs to retract that note. Clear it here, or the stale entry
+        // suppresses the next line's key detection (`- !t |-\n  x\n- !t k: v`).
+        self.simple_key = None;
         // Record the block's source extent so the round-trip path can replay it
         // verbatim (folding a `>` block discards the original line breaks).
         let mut token = Token::new(TokenKind::Scalar(value, style), span);

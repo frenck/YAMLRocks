@@ -174,6 +174,18 @@ def test_literal_strip_chomping():
     assert yamlrocks.loads(b"x: |-\n  line1\n  line2\n")["x"] == "line1\nline2"
 
 
+def test_tagged_block_scalar_does_not_swallow_a_following_tagged_key():
+    """A tagged key after a tagged block scalar item still opens its mapping.
+
+    The block scalar's own tag noted a speculative simple key that the per-line
+    clearing never ran to retract (the block consumes all its lines at once), so
+    the stale note suppressed the next line's key detection: the tagged key was
+    read as a bare scalar and its ``:`` started a phantom mapping. Pins that the
+    second item stays a single-pair mapping.
+    """
+    assert yamlrocks.loads(b"- !t |-\n  f\n- !t k: v\n") == ["f", {"k": "v"}]
+
+
 @pytest.mark.parametrize(
     ("src", "expected"),
     [

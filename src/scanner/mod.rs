@@ -17,6 +17,7 @@ mod reader;
 mod scalar;
 mod token;
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
 pub use comment::Comment;
@@ -1121,78 +1122,54 @@ impl<'input> Scanner<'input> {
         let was_simple_key_allowed = self.simple_key_allowed;
         let had_leading_tab = self.tab_before_token;
         let span = self.reader.span();
-        let parent_indent = if self.flow_level == 0 {
-            self.current_indent
-        } else {
-            i32::MIN
-        };
+        let parent_indent = self.quoted_parent_indent();
         let value = scalar::scan_single_quoted(&mut self.reader, parent_indent)?;
-        // The reader now sits just past the closing quote: the scalar's true end.
-        let content_end = self.reader.offset();
-        let end_line = self.reader.line();
-        self.simple_key_allowed = false;
-
-        if was_simple_key_allowed
-            && !(self.flow_level > 0 && self.flow_explicit_key)
-            && self.check_value_after_scalar()
-        {
-            if self.flow_level == 0 && span.line != end_line {
-                return Err(ScanError::new(
-                    "an implicit mapping key cannot span multiple lines",
-                    span,
-                ));
-            }
-            if self.flow_level == 0 {
-                // A tab cannot indent the mapping this quoted key opens, matching
-                // the plain-key rule (`a:\n\t'b': c`).
-                if had_leading_tab {
-                    return Err(tab_indent_error(span));
-                }
-                let key_col = span.column as i32;
-                self.roll_indent(key_col, span, TokenKind::BlockMappingStart)?;
-            }
-            self.tokens.push_back(Token::new(TokenKind::Key, span));
-            let mut scalar = Token::new(TokenKind::Scalar(value, ScalarStyle::SingleQuoted), span);
-            scalar.end_offset = content_end;
-            self.tokens.push_back(scalar);
-            let val_span = self.reader.span();
-            if self.flow_level == 0 {
-                self.value_indicator_line = val_span.line;
-                self.block_value_pending = true;
-            }
-            self.reader.advance(); // skip ':'
-            if !self.reader.is_eof() && self.reader.peek() == ' ' {
-                self.reader.advance();
-            }
-            self.tokens
-                .push_back(Token::new(TokenKind::Value, val_span));
-            self.flow_need_sep = false;
-            return Ok(());
-        }
-
-        self.check_no_block_trailing("quoted scalar")?;
-        let mut scalar = Token::new(TokenKind::Scalar(value, ScalarStyle::SingleQuoted), span);
-        scalar.end_offset = content_end;
-        self.tokens.push_back(scalar);
-        if self.flow_level > 0 {
-            self.flow_need_sep = true;
-            self.flow_pending_key_line = span.line;
-            self.flow_prev_json = true;
-        }
-        Ok(())
+        self.finish_quoted_scalar(
+            value,
+            ScalarStyle::SingleQuoted,
+            span,
+            was_simple_key_allowed,
+            had_leading_tab,
+        )
     }
 
     fn fetch_double_quoted_scalar(&mut self) -> Result<(), ScanError> {
         let was_simple_key_allowed = self.simple_key_allowed;
         let had_leading_tab = self.tab_before_token;
         let span = self.reader.span();
-        let parent_indent = if self.flow_level == 0 {
+        let parent_indent = self.quoted_parent_indent();
+        let value = scalar::scan_double_quoted(&mut self.reader, parent_indent)?;
+        self.finish_quoted_scalar(
+            value,
+            ScalarStyle::DoubleQuoted,
+            span,
+            was_simple_key_allowed,
+            had_leading_tab,
+        )
+    }
+
+    /// The block indentation a quoted scalar's continuation lines must beat, or
+    /// `i32::MIN` inside a flow collection (where the check does not apply).
+    fn quoted_parent_indent(&self) -> i32 {
+        if self.flow_level == 0 {
             self.current_indent
         } else {
             i32::MIN
-        };
-        let value = scalar::scan_double_quoted(&mut self.reader, parent_indent)?;
-        // The reader now sits just past the closing quote: the scalar's true end.
+        }
+    }
+
+    /// Shared tail of the single- and double-quoted scalar fetchers, which differ
+    /// only in their scan function and `ScalarStyle`. The reader sits just past
+    /// the closing quote. Emits the scalar as a mapping key when a `:` follows it,
+    /// otherwise as a plain value.
+    fn finish_quoted_scalar(
+        &mut self,
+        value: Cow<'input, str>,
+        style: ScalarStyle,
+        span: Span,
+        was_simple_key_allowed: bool,
+        had_leading_tab: bool,
+    ) -> Result<(), ScanError> {
         let content_end = self.reader.offset();
         let end_line = self.reader.line();
         self.simple_key_allowed = false;
@@ -1217,7 +1194,7 @@ impl<'input> Scanner<'input> {
                 self.roll_indent(key_col, span, TokenKind::BlockMappingStart)?;
             }
             self.tokens.push_back(Token::new(TokenKind::Key, span));
-            let mut scalar = Token::new(TokenKind::Scalar(value, ScalarStyle::DoubleQuoted), span);
+            let mut scalar = Token::new(TokenKind::Scalar(value, style), span);
             scalar.end_offset = content_end;
             self.tokens.push_back(scalar);
             let val_span = self.reader.span();
@@ -1236,7 +1213,7 @@ impl<'input> Scanner<'input> {
         }
 
         self.check_no_block_trailing("quoted scalar")?;
-        let mut scalar = Token::new(TokenKind::Scalar(value, ScalarStyle::DoubleQuoted), span);
+        let mut scalar = Token::new(TokenKind::Scalar(value, style), span);
         scalar.end_offset = content_end;
         self.tokens.push_back(scalar);
         if self.flow_level > 0 {

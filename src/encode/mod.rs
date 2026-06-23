@@ -426,17 +426,17 @@ impl<'a> Emitter<'a> {
             // scalar would end the entry or collection early; quoting keeps it a
             // single value. In block context those bytes are ordinary content.
             self.emit_quoted_string(value);
-        } else if self.options.width > 0 && !in_flow && !self.emitting_key {
-            // Fold long plain scalars to the width, but only in block value
-            // position (never a key, see `emit_key`). A
-            // fold inserts a newline at a space; in a flow collection the next
-            // line can then begin with `?` or `:`, which are indicators there (an
-            // explicit key, a value), so the break would change the decoded value
-            // (`{k: a ? b}` folding to `a\n  ? b` reads back as the value `a` plus
-            // a key `b`). Width is a soft limit, so a flow plain scalar simply
-            // stays on one line instead.
-            let cont_indent = self.current_line_indent() + self.step();
-            self.emit_folded(value, cont_indent);
+        } else if self.would_wrap(value) {
+            // A plain scalar that would exceed the width is emitted double-quoted
+            // and folded inside the quotes, never folded as a bare plain scalar.
+            // Inserting a newline into a plain scalar is unsafe: the continuation
+            // line can begin with an indicator (`?`/`:`/`!`/`&`/`*`/...) or land
+            // at an enclosing collection's indent, either of which changes the
+            // decoded value (`M !` folding to `M\n  !` reads `!` as a tag;
+            // `{k: a ? b}` folding reads `? b` as a key). A break inside quotes
+            // always folds back to a single space, so quoting makes wrapping safe
+            // in every position. Keys are excluded by `would_wrap`.
+            self.emit_quoted_string(value);
         } else {
             self.buf.extend_from_slice(value.as_bytes());
         }
@@ -457,7 +457,13 @@ impl<'a> Emitter<'a> {
             // body folds the same way as in a plain scalar; the surrounding
             // quotes are unaffected. Never fold a key: a quoted key spread across
             // lines stops being a valid implicit key, so the `:` detaches.
-            let cont_indent = self.current_line_indent() + self.step();
+            //
+            // Continuation lines indent to the scalar's start column, which always
+            // sits past the enclosing key/dash (the scalar is emitted after them).
+            // A multi-line quoted scalar must be indented past its block context,
+            // so the line's leading indent is too shallow for a value after a dash
+            // (`- k: ...`, where it would land at the mapping's own column).
+            let cont_indent = self.current_column();
             let (quote, body) = if single_ok {
                 (b'\'', crate::emit_util::single_quoted_body(value))
             } else {
@@ -555,13 +561,25 @@ impl<'a> Emitter<'a> {
         self.buf[start..].iter().take_while(|&&b| b == b' ').count()
     }
 
+    /// Whether a plain `value` at the current column would exceed the width and
+    /// has a foldable break point, so it is worth emitting quoted-and-folded
+    /// rather than leaving it to overflow on one line. False in key position: a
+    /// key must stay on one line, so width never applies to it.
+    fn would_wrap(&self, value: &str) -> bool {
+        self.options.width > 0
+            && !self.emitting_key
+            && self.current_column() + value.len() > self.options.width
+            && has_breakable_space(value)
+    }
+
     /// Append `content` to `buf`, folding it across lines so each stays at or
     /// below `self.options.width`. A fold replaces one space with a newline plus
     /// `cont_indent` spaces; on reload that whole break collapses back to the
     /// single space, so the decoded value is unchanged. Breaks are only taken at
     /// a single space flanked by non-spaces, never inside a run of spaces (which
     /// would lose one), so a run of spaces or a break-free span may exceed the
-    /// width. Used for plain and quoted scalar bodies alike.
+    /// width. Used only for quoted scalar bodies (a break inside quotes is safe);
+    /// a plain scalar that needs wrapping is quoted first (see `emit_string_inline`).
     fn emit_folded(&mut self, content: &str, cont_indent: usize) {
         let width = self.options.width;
         let bytes = content.as_bytes();
@@ -612,6 +630,16 @@ fn has_flow_indicator(value: &str) -> bool {
     value
         .bytes()
         .any(|b| matches!(b, b',' | b'[' | b']' | b'{' | b'}'))
+}
+
+/// Whether `value` contains a space flanked by non-spaces: the only place a fold
+/// may break, since breaking inside a run of spaces would drop one. Used to
+/// decide whether wrapping a long scalar can actually shorten any line.
+fn has_breakable_space(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.iter().enumerate().any(|(i, &b)| {
+        b == b' ' && i > 0 && bytes[i - 1] != b' ' && bytes.get(i + 1).is_some_and(|&n| n != b' ')
+    })
 }
 
 /// Determine whether a plain scalar string would be misinterpreted and thus
@@ -779,41 +807,62 @@ mod tests {
         String::from_utf8(encode(value, options)).unwrap()
     }
 
-    #[test]
-    fn a_quoted_key_is_not_folded_across_a_width_break() {
-        // A mapping key must stay on one line to remain a valid implicit key.
-        // Folding a long quoted key at a small width would split it across lines,
-        // detaching the `:` so the value reads back as a separate node. The key
-        // here needs quoting (control byte) and is long enough to tempt a fold.
-        let v = Value::Mapping(vec![(s("a long \u{1} key here"), Value::Null)]);
-        let opts = EmitOptions {
-            width: 1,
-            ..EmitOptions::default()
-        };
-        let out = emit(&v, &opts);
-        let reparsed =
-            crate::decode::decode_with(&out, crate::resolver::Schema::Yaml12, false, false)
-                .unwrap();
-        assert_eq!(reparsed, vec![v], "quoted key round-trips: {out:?}");
+    /// Decode `out` under the 1.2 schema, asserting it is a single document, and
+    /// return that document (borrowing `out`).
+    fn reparse(out: &str) -> Value<'_> {
+        let mut docs =
+            crate::decode::decode_with(out, crate::resolver::Schema::Yaml12, false, false).unwrap();
+        assert_eq!(docs.len(), 1, "one document: {out:?}");
+        docs.remove(0)
     }
 
     #[test]
-    fn flow_plain_scalar_is_not_folded_across_a_width_break() {
-        // A plain scalar carrying ` ? ` inside a flow mapping must not be folded
-        // to honor the width: a fold puts `? ...` at the start of a flow line,
-        // where `?` is an explicit-key indicator, so the value would read back as
-        // a value plus a spurious key. Width is a soft limit, so it stays inline.
+    fn a_key_is_never_wrapped_across_the_width() {
+        // A mapping key must stay on one line to remain a valid implicit key.
+        // Wrapping a long key at a small width would split it across lines,
+        // detaching the `:` so the value reads back as a separate node. The key
+        // needs quoting (control byte) and is long enough to tempt a fold.
+        let v = Value::Mapping(vec![(s("a long \u{1} key here"), Value::Null)]);
+        let out = emit(
+            &v,
+            &EmitOptions {
+                width: 1,
+                ..EmitOptions::default()
+            },
+        );
+        assert_eq!(reparse(&out), v, "key round-trips: {out:?}");
+    }
+
+    #[test]
+    fn a_plain_value_with_an_indicator_word_wraps_safely_under_width() {
+        // A plain value `M !` folded as plain to honor the width would put `!` at
+        // line start, where it reads as a tag (a phantom key). Quote-to-wrap emits
+        // it double-quoted and folds inside the quotes, where the break is safe.
+        let v = Value::Sequence(vec![Value::Mapping(vec![(s("-"), s("M !"))])]);
+        let out = emit(
+            &v,
+            &EmitOptions {
+                width: 1,
+                ..EmitOptions::default()
+            },
+        );
+        assert_eq!(reparse(&out), v, "block plain value round-trips: {out:?}");
+    }
+
+    #[test]
+    fn a_flow_plain_value_with_an_indicator_wraps_safely_under_width() {
+        // Inside flow, folding `a ? b` as plain would start a line with `?` (an
+        // explicit-key indicator). Quote-to-wrap keeps it a single value.
         let v = Value::Mapping(vec![(s("k"), s("a ? b c d e f"))]);
-        let opts = EmitOptions {
-            flow_style: true,
-            width: 8,
-            ..EmitOptions::default()
-        };
-        let out = emit(&v, &opts);
-        let reparsed =
-            crate::decode::decode_with(&out, crate::resolver::Schema::Yaml12, false, false)
-                .unwrap();
-        assert_eq!(reparsed, vec![v], "flow plain scalar round-trips: {out:?}");
+        let out = emit(
+            &v,
+            &EmitOptions {
+                flow_style: true,
+                width: 8,
+                ..EmitOptions::default()
+            },
+        );
+        assert_eq!(reparse(&out), v, "flow plain value round-trips: {out:?}");
     }
 
     #[test]

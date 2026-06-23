@@ -72,12 +72,13 @@ fn classify_plain_11(value: &str, pyyaml_compat: bool) -> ScalarKind {
         return ScalarKind::Bool(b);
     }
 
-    // Every 1.1 number starts with a digit, a sign, or a dot: decimal, `0x`/`0o`/
-    // `0b`, sexagesimal (`1:30`), underscored (`1_000`), and floats including
-    // `.inf`/`.nan`. The bool words (`yes`, `on`, ...) are letters and were just
-    // ruled out, so a value starting with anything else is a string, no need to
-    // try three numeric parses. `is_null` already consumed the empty string.
-    if !matches!(value.as_bytes()[0], b'0'..=b'9' | b'-' | b'+' | b'.') {
+    // A 1.1 number starts with a digit, a sign, a dot (`.inf`), or an underscore:
+    // the int and float parsers strip every underscore before parsing, so a
+    // leading `_` (`_5` -> 5) is numeric here even though it is unusual. The bool
+    // words (`yes`, `on`, ...) are letters and were just ruled out, so a value
+    // starting with anything else is a string and skips the three numeric parses.
+    // `is_null` already consumed the empty string, so there is a first byte.
+    if !matches!(value.as_bytes()[0], b'0'..=b'9' | b'-' | b'+' | b'.' | b'_') {
         return ScalarKind::Str;
     }
 

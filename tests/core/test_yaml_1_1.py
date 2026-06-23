@@ -238,3 +238,18 @@ def test_merge_tag_marker_resolves_under_the_merge_skip_optimization():
     assert yamlrocks.loads(b"x: !!merge\n", option=yamlrocks.OPT_YAML_1_1) == {
         "x": "<<"
     }
+
+
+def test_leading_underscore_numbers_keep_1_1_behavior():
+    """A leading-underscore scalar still resolves as a 1.1 number.
+
+    The 1.1 parsers strip every underscore before parsing, so `_5` resolves to
+    an int, `_1:30` to a sexagesimal int, and `_1.5` to a float (unusual, but the
+    long-standing behavior). The fast-path first-byte gate must not reclassify
+    them as strings. `_hello` is not a number and stays a string.
+    """
+    opt = yamlrocks.OPT_YAML_1_1
+    assert yamlrocks.loads(b"a: _5", option=opt) == {"a": 5}
+    assert yamlrocks.loads(b"a: _1:30", option=opt) == {"a": 90}
+    assert yamlrocks.loads(b"a: _1.5", option=opt) == {"a": 1.5}
+    assert yamlrocks.loads(b"a: _hello", option=opt) == {"a": "_hello"}

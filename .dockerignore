@@ -1,0 +1,26 @@
+# Build context excludes for the ClusterFuzzLite image (.clusterfuzzlite/Dockerfile
+# does `COPY . $SRC/yamlrocks`). The fuzz targets only compile the library and run
+# on generated input, so the multi-gigabyte test corpora, build artifacts, git
+# history, and virtualenvs are pure context bloat. Left in, they push the Docker
+# build context past the CI runner's disk (it transferred 6.7 GB and failed with
+# "no space left on device"); excluded, the context is a few megabytes and the
+# build is reliable. This file only affects `docker build`, not the repo itself.
+
+# Version control history (submodule packs under .git/modules are the bulk of it).
+.git
+
+# Test corpora: the real-world config corpus and the YAML test suite submodules.
+tests/data
+
+# Compiled artifacts and caches.
+target
+fuzz/target
+fuzz/corpus
+fuzz/artifacts
+*.profraw
+
+# Python virtualenvs and the docs site with its node_modules.
+.venv
+.venv-ft
+docs
+node_modules

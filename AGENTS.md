@@ -95,11 +95,10 @@ When working on the round-trip emitter, regenerate snapshots intentionally:
 UPDATE_SNAPSHOTS=1 uv run --no-sync pytest tests/compliance/test_snapshots.py
 ```
 
-Regenerate the YAML test suite baseline after parser changes:
-
-```bash
-uv run --no-sync python tests/data/yaml_test_suite/generate_expectations.py
-```
+The YAML test suite harness (`tests/compliance/test_yaml_test_suite.py`) asserts
+full compliance directly, with no baseline to regenerate: a valid case must load,
+round-trip, and match its canonical JSON; an invalid one must be rejected. If a
+parser change ever regresses a case, the matching assertion fails by name.
 
 ## Quality gates (all enforced in CI)
 

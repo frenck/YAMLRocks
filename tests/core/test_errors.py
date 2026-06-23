@@ -86,3 +86,19 @@ def test_tab_cannot_indent_a_block_collection(src):
 def test_tab_is_valid_separation_before_a_scalar(src, expected):
     """Accept a tab that separates a scalar rather than indenting a collection."""
     assert yamlrocks.loads(src) == expected
+
+
+def test_tab_cannot_indent_a_quoted_continuation_line():
+    """Reject a tab faking indentation on a quoted scalar's continuation line.
+
+    The continuation must be indented past the block with spaces; a tab does not
+    count, so `k: "a\\n\\tb"` is under-indented and invalid.
+    """
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError):
+        yamlrocks.loads(b'k: "a\n\tb"\n')
+
+
+def test_tab_in_document_level_quoted_continuation_is_separation():
+    """A document-level quoted scalar has no block to out-indent, so a leading
+    tab on its continuation line is just folded separation (spec example 7.6)."""
+    assert yamlrocks.loads(b'"a\n\tb"\n') == "a b"

@@ -174,6 +174,29 @@ def test_literal_strip_chomping():
     assert yamlrocks.loads(b"x: |-\n  line1\n  line2\n")["x"] == "line1\nline2"
 
 
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        pytest.param(b"x: |\n", "", id="no-content"),
+        pytest.param(b"x: |\n\n", "", id="clip-one-blank"),
+        pytest.param(b"x: |+\n\n", "\n", id="keep-one-blank"),
+        # An over-indented blank line carries no content in an empty block.
+        pytest.param(b"x: |\n   \n", "", id="clip-overindented-blank"),
+        pytest.param(b"x: |+\n   \n", "\n", id="keep-overindented-blank"),
+        pytest.param(b"x: |+\n   ", "\n", id="keep-overindented-blank-no-newline"),
+    ],
+)
+def test_empty_block_scalar(src, expected):
+    """An empty block scalar yields no content; only keep retains line feeds."""
+    assert yamlrocks.loads(src)["x"] == expected
+
+
+def test_tab_cannot_indent_a_block_scalar():
+    """Reject a tab where an empty block scalar's indentation belongs."""
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="tab"):
+        yamlrocks.loads(b"foo: |\n\t\nbar: 1\n")
+
+
 def test_multiline_plain_scalar_folds():
     """A plain scalar folds its continuation lines with single spaces."""
     assert yamlrocks.loads(b"d: foo bar\n  baz qux\n")["d"] == "foo bar baz qux"

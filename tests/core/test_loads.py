@@ -101,6 +101,18 @@ def test_bare_scalar_document():
     assert yamlrocks.loads(b"hello") == "hello"
 
 
+def test_empty_indentless_sequence_entry_before_a_sibling_key():
+    """An empty indentless `-` entry keeps its null when a sibling key follows.
+
+    The dash sits at the mapping key's column, so dedenting to the sibling key
+    `q` emits a `Key` event with no `BlockEnd` (the sequence shares the mapping's
+    block level). The empty-entry detection missed `Key` and dropped the null, so
+    the sequence came back empty. Pins it to `[None]`, matching the indented form
+    `9:\n  -\nq:`.
+    """
+    assert yamlrocks.loads(b"9:\n-\nq:\n") == {9: [None], "q": None}
+
+
 def test_str_input_accepted():
     """Accept a str input and parse it."""
     assert yamlrocks.loads("key: value") == {"key": "value"}

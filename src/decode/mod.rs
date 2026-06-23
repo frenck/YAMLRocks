@@ -1051,8 +1051,14 @@ impl<'input> Decoder<'input> {
             match &events[self.pos].kind {
                 EventKind::SequenceEntry => {
                     self.pos += 1;
-                    // An empty entry (next is a sibling `-` or the end) is null,
-                    // not a nested sequence absorbing the sibling.
+                    // An empty entry (next is a sibling `-`, the end, or a sibling
+                    // mapping key) is null, not a nested node absorbing it. `Key`
+                    // belongs here for the indentless case: an empty entry whose
+                    // sibling mapping key sits at the sequence's own column dedents
+                    // straight to a `Key` with no `BlockEnd` (the sequence shares
+                    // the mapping's level), e.g. `9:\n-\nq:` is `{9: [null], q: null}`.
+                    // A non-empty `- key: val` entry opens with `MappingStart`, not
+                    // a bare `Key`, so this never swallows real content.
                     if self.pos < events.len()
                         && matches!(
                             events[self.pos].kind,
@@ -1060,6 +1066,7 @@ impl<'input> Decoder<'input> {
                                 | EventKind::SequenceEnd
                                 | EventKind::MappingEnd
                                 | EventKind::BlockEnd
+                                | EventKind::Key
                         )
                     {
                         items.push(Value::Null);

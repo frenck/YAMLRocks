@@ -291,7 +291,7 @@ SOFTWARE.
 [prek]: https://prek.j178.dev
 [project-stage-shield]: https://img.shields.io/badge/project%20stage-experimental-yellow.svg
 [pypi]: https://pypi.org/project/yamlrocks/
-[python-versions-shield]: https://img.shields.io/badge/python-3.12_%7C_3.13_%7C_3.14-blue?logo=python&logoColor=white
+[python-versions-shield]: https://img.shields.io/badge/python-3.12_%7C_3.13_%7C_3.14_%7C_3.15-blue?logo=python&logoColor=white
 [realworld-verification]: https://yaml.rocks/verification/real-world-corpus/
 [releases-shield]: https://img.shields.io/github/release/frenck/yamlrocks.svg
 [releases]: https://github.com/frenck/yamlrocks/releases

@@ -418,11 +418,11 @@ impl<'a> Emitter<'a> {
         } else if self.options.width > 0 && !in_flow {
             // Fold long plain scalars to the width, but only in block context. A
             // fold inserts a newline at a space; in a flow collection the next
-            // line can begin with `?`, `:`, or `-`, which there are indicators
-            // (an explicit key, a value, a block entry), so the break would
-            // change the decoded value (`{k: a ? b}` folding to `a\n  ? b` reads
-            // back as the value `a` plus a key `b`). Width is a soft limit, so a
-            // flow plain scalar simply stays on one line instead.
+            // line can then begin with `?` or `:`, which are indicators there (an
+            // explicit key, a value), so the break would change the decoded value
+            // (`{k: a ? b}` folding to `a\n  ? b` reads back as the value `a` plus
+            // a key `b`). Width is a soft limit, so a flow plain scalar simply
+            // stays on one line instead.
             let cont_indent = self.current_line_indent() + self.step();
             self.emit_folded(value, cont_indent);
         } else {

@@ -87,22 +87,106 @@ pub mod fuzz {
         };
         let options = EmitOptions::default();
         for document in &documents {
-            let emitted = encode(document, &options);
-            let Ok(text) = std::str::from_utf8(&emitted) else {
-                continue;
-            };
-            let Ok(reparsed) = decode_with(text, Schema::Yaml12, false, false) else {
-                continue;
-            };
-            if reparsed.len() != 1 {
-                continue;
-            }
-            assert!(
-                values_equiv(document, &reparsed[0]),
-                "dumps/loads diverged on data\n  input:    {input:?}\n  emitted:  {text:?}\n  original: {document:?}\n  reparsed: {:?}",
-                reparsed[0]
-            );
+            check_emit_roundtrip(input, document, &options);
         }
+    }
+
+    /// Like [`differential`], but emits each document under a matrix of
+    /// *non-default* [`EmitOptions`]: flow style, wider indentation, indentless
+    /// sequences, the alternate null styles, single-quote preference, explicit
+    /// document markers, and several line widths. The emitter must preserve the
+    /// decoded data under every presentation choice; width-driven line breaking
+    /// (scalar folding, flow-separator breaks) and the indentless layout are the
+    /// prime suspects, since each may only break where it cannot change the value.
+    ///
+    /// `sort_keys` is left out on purpose: it reorders mapping pairs, and the data
+    /// comparison is order-sensitive (a YAML mapping is unordered, but the decoded
+    /// `Value` keeps source order), so a sort would diverge by design, not by bug.
+    pub fn differential_options(input: &str) {
+        let Ok(documents) = decode_with(input, Schema::Yaml12, false, false) else {
+            return;
+        };
+        let base = EmitOptions::default();
+        let configs = [
+            EmitOptions {
+                flow_style: true,
+                ..base.clone()
+            },
+            EmitOptions {
+                indent: 4,
+                ..base.clone()
+            },
+            EmitOptions {
+                indentless_sequences: true,
+                ..base.clone()
+            },
+            EmitOptions {
+                null_style: NullStyle::Tilde,
+                ..base.clone()
+            },
+            EmitOptions {
+                null_style: NullStyle::Null,
+                ..base.clone()
+            },
+            EmitOptions {
+                double_quotes: false,
+                ..base.clone()
+            },
+            EmitOptions {
+                explicit_start: true,
+                explicit_end: true,
+                ..base.clone()
+            },
+            EmitOptions {
+                width: 1,
+                ..base.clone()
+            },
+            EmitOptions {
+                width: 20,
+                ..base.clone()
+            },
+            EmitOptions {
+                width: 80,
+                ..base.clone()
+            },
+            EmitOptions {
+                flow_style: true,
+                width: 20,
+                ..base.clone()
+            },
+        ];
+        for document in &documents {
+            for options in &configs {
+                check_emit_roundtrip(input, document, options);
+            }
+        }
+    }
+
+    /// Emit `document` with `options`, re-decode the output, and assert the data
+    /// survived unchanged. Shared by both differential targets so a divergence is
+    /// reported identically (the panic message names the options that triggered
+    /// it). Re-decode failures and multi-document output are skipped, not
+    /// asserted, for the reasons [`roundtrip`] documents.
+    fn check_emit_roundtrip(
+        input: &str,
+        document: &crate::decode::Value<'_>,
+        options: &EmitOptions,
+    ) {
+        let emitted = encode(document, options);
+        let Ok(text) = std::str::from_utf8(&emitted) else {
+            return;
+        };
+        let Ok(reparsed) = decode_with(text, Schema::Yaml12, false, false) else {
+            return;
+        };
+        if reparsed.len() != 1 {
+            return;
+        }
+        assert!(
+            values_equiv(document, &reparsed[0]),
+            "dumps/loads diverged on data\n  options:  {options:?}\n  input:    {input:?}\n  emitted:  {text:?}\n  original: {document:?}\n  reparsed: {:?}",
+            reparsed[0]
+        );
     }
 
     /// Structural equality of two decoded `Value` trees, identical to the

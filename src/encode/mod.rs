@@ -243,7 +243,18 @@ impl<'a> Emitter<'a> {
             Value::Tagged(tag, inner) => {
                 self.buf.push(b' ');
                 self.buf.extend_from_slice(tag.as_bytes());
-                self.emit_value_after_colon(inner, indent);
+                match inner.as_ref() {
+                    // A tagged block sequence always indents under the tag, even
+                    // in indentless mode: the tag sits on the line above, so the
+                    // indentless style (dashes at the key's column) would not bind
+                    // the tag to the sequence and it would be lost on reload. The
+                    // indented layout is what the default mode already produces.
+                    Value::Sequence(s) if self.is_block(inner) => {
+                        self.buf.push(b'\n');
+                        self.emit_block_sequence(s, indent + self.step());
+                    }
+                    _ => self.emit_value_after_colon(inner, indent),
+                }
             }
             _ => {
                 self.buf.push(b' ');
@@ -956,6 +967,28 @@ mod tests {
             ..EmitOptions::default()
         };
         assert_eq!(emit(&v, &opts), "key:\n- 1\n- 2\n");
+    }
+
+    #[test]
+    fn tagged_sequence_value_keeps_its_tag_in_indentless_mode() {
+        // A tagged sequence value must indent under the tag even in indentless
+        // mode: dashes at the key's column would sit below the tag's line without
+        // binding to it, so the tag would be lost on reload. The tagged sequence
+        // therefore emits indented, and the document round-trips.
+        let v = Value::Mapping(vec![(
+            s("k"),
+            Value::Tagged(
+                "!t".to_owned(),
+                Box::new(Value::Sequence(vec![s("a"), s("b")])),
+            ),
+        )]);
+        let opts = EmitOptions {
+            indentless_sequences: true,
+            ..EmitOptions::default()
+        };
+        let out = emit(&v, &opts);
+        assert_eq!(out, "k: !t\n  - a\n  - b\n");
+        assert_eq!(reparse(&out), v, "tag survives the round-trip: {out:?}");
     }
 
     #[test]

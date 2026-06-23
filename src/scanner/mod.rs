@@ -896,7 +896,10 @@ impl<'input> Scanner<'input> {
         if !self.reader.is_eof() && self.reader.peek() == ' ' {
             self.reader.advance();
         }
-        self.simple_key_allowed = self.flow_level > 0;
+        // After `?`, a simple key is allowed: the explicit key's node may be a
+        // compact block mapping or sequence on the same line (`? a: b`, spec
+        // example 8.19). Flow already allowed it; block must too.
+        self.simple_key_allowed = true;
         // A `?` introduces a fresh key, satisfying any owed separator. Mark it
         // explicit so the single-line flow-sequence key rule is relaxed.
         self.flow_need_sep = false;
@@ -947,7 +950,10 @@ impl<'input> Scanner<'input> {
         if !self.reader.is_eof() && self.reader.peek() == ' ' {
             self.reader.advance();
         }
-        self.simple_key_allowed = self.flow_level > 0;
+        // After `:`, a simple key is allowed so the value may be a compact block
+        // mapping on the same line (the `: moon: white` value of an explicit key,
+        // spec example 8.19).
+        self.simple_key_allowed = true;
         // A `:` introduces a fresh value, satisfying any owed separator and
         // closing out any explicit key.
         self.flow_need_sep = false;

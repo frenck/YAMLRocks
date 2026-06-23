@@ -32,9 +32,8 @@ pub mod fuzz {
     /// Drive the fast `loads` decode path (events → `Value` tree) under both the
     /// YAML 1.2 and 1.1 schemas, then re-emit each document through the fast
     /// emitter. This covers code distinct from [`parse`]: direct decoding, merge
-    /// keys, the scalar-string side table, scalar resolution, and the fast
-    /// `dumps` emitter, the path most callers actually hit. The contract is the
-    /// same, never panic on any input.
+    /// keys, scalar resolution, and the fast `dumps` emitter, the path most
+    /// callers actually hit. The contract is the same, never panic on any input.
     pub fn decode(input: &str) {
         for schema in [Schema::Yaml12, Schema::Yaml11] {
             if let Ok(documents) = decode_with(input, schema, false, false) {

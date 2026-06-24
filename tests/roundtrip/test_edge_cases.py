@@ -232,3 +232,37 @@ def test_set_comment_via_api_uses_single_space():
     doc = yamlrocks.loads(b"a: 1\n", option=RT)
     doc.node["a"].comment = "added"
     assert doc.to_yaml() == b"a: 1 # added\n"
+
+
+# -- The round-trip composer rejects malformed block structure --------------
+# Mis-indented input that puts a block collection in mapping-key position, or a
+# bare key with no `:`, is invalid YAML. The fast decoder (and PyYAML) reject it;
+# the composer must too, rather than silently composing a nonsense complex key.
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        b"deps:\n  - a: 1\n  b: 2\n",  # `b:` dedents to the dash column
+        b"x:\n  - 1\n  k: 2\n",
+    ],
+)
+def test_round_trip_rejects_block_collection_as_key(src):
+    """A block collection reaching mapping-key position is rejected in round-trip
+    mode, matching the fast path."""
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="cannot be a mapping key"):
+        yamlrocks.loads(src, option=RT)
+
+
+def test_round_trip_rejects_missing_colon():
+    """A bare scalar key with no `:` in a block mapping is rejected in round-trip
+    mode, matching the fast path."""
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="expected ':'"):
+        yamlrocks.loads(b"a: 1\nbare\n", option=RT)
+
+
+@pytest.mark.parametrize("src", [b"? [a, b]\n: c\n", b"{a, b}\n", b"[a: b]\n"])
+def test_round_trip_keeps_valid_complex_and_flow_keys(src):
+    """The validity check must not reject legitimate explicit `?` complex keys or
+    flow mappings with bare keys; those still compose and round-trip."""
+    assert yamlrocks.loads(src, option=RT).to_yaml() == src

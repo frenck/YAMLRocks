@@ -272,6 +272,38 @@ KNOWN_INVALID: dict[str, str] = {
         "multi-line single-quoted flow scalar continued at the block indent (QB6E "
         "spec error); yamlrocks rejects, PyYAML is lenient"
     ),
+    # Mis-indented block structure that puts a block collection in mapping-key
+    # position, or a bare key with no `:`. Invalid YAML the fast decoder and
+    # PyYAML both reject; the round-trip composer now rejects them too (it
+    # previously accepted them, producing nonsense complex keys).
+    "argo-workflows/argo-rollouts/test/e2e/expectedfailures/analysis-run-failfast.yaml": (
+        "mis-indented block sequence reaching mapping-key position; a deliberate "
+        "`expectedfailures` negative fixture (PyYAML rejects it too)"
+    ),
+    "helm/helm-tool/pkg/cmd/testdata/testcharts/chart-bad-requirements/Chart.yaml": (
+        "a dependency's `version:`/`repository:` dedented to the `-` column, "
+        "putting a block mapping in key position; a deliberately-bad "
+        "`chart-bad-requirements` fixture (PyYAML rejects it too)"
+    ),
+    "home-assistant/arsaboo/automations/automations_manual.yaml": (
+        "a Jinja2 template body (`{%- ... -%}`) with bare lines and no `:`, not "
+        "standalone YAML (PyYAML rejects it too)"
+    ),
+    "home-assistant/nagyrobi/esphome/ble-sensors-ethernet.yaml": (
+        "an ESPHome `lambda: |-` block scalar broken by a comment at the key's "
+        "own indent, leaving the C++ body as bare mapping keys (PyYAML rejects "
+        "it too)"
+    ),
+    "home-assistant/thomasloven/lovelace/functions/presence.yaml": (
+        "a Jinja2-templated Lovelace config (`{% if %}`) that dedents a sequence "
+        "into mapping-key position, not standalone YAML (PyYAML rejects it too)"
+    ),
+    "dbt/dbt-core/.github/ISSUE_TEMPLATE/bug-report-vsce.yml": (
+        "an unquoted `description:` value contains `: ` (in `Developer: Reload "
+        "Window`), read as a nested mapping that puts a block collection in "
+        "mapping-key position; PyYAML rejects it too (`mapping values are not "
+        "allowed in this context`)"
+    ),
 }
 
 # opentelemetry-collector-contrib ships Go-templated e2e test fixtures: K8s

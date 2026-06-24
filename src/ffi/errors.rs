@@ -112,8 +112,29 @@ pub fn schema_error(
 /// An `!include`/`!secret`/`!env_var` resolution failure, mapped to the precise
 /// subclass and carrying the file plus (for include errors) the include chain.
 pub fn include_error(py: Python<'_>, e: &IncludeError) -> PyErr {
-    let message = format!("{e}");
     let file = e.path.to_string_lossy().into_owned();
+
+    // A malformed included file is a parse error that happens to live behind an
+    // include. Surface it exactly like the same content errors as a root: a
+    // located `YAMLRocksParseError` pointing at the included file, not an opaque
+    // `YAMLRocksIncludeError`. The include chain is still attached for context.
+    if e.kind == IncludeErrorKind::Parse {
+        let span = e.span.unwrap_or_default();
+        let err = YAMLRocksParseError::new_err(located_message(&e.message, span.line, span.column));
+        let value = err.value(py);
+        let _ = value.setattr("file", Some(file));
+        let _ = value.setattr("line", Some(span.line + 1));
+        let _ = value.setattr("column", Some(span.column + 1));
+        let stack: Vec<(String, u32)> = e
+            .include_stack
+            .iter()
+            .map(|(path, line)| (path.to_string_lossy().into_owned(), line + 1))
+            .collect();
+        let _ = value.setattr("include_stack", stack);
+        return err;
+    }
+
+    let message = format!("{e}");
     let stack: Vec<(String, u32)> = e
         .include_stack
         .iter()
@@ -128,6 +149,8 @@ pub fn include_error(py: Python<'_>, e: &IncludeError) -> PyErr {
         IncludeErrorKind::SecretNotFound => (YAMLRocksSecretNotFoundError::new_err(message), false),
         IncludeErrorKind::EnvVarUndefined => (YAMLRocksEnvVarError::new_err(message), false),
         IncludeErrorKind::Invalid => (YAMLRocksIncludeError::new_err(message), true),
+        // Handled by the early return above (a located YAMLRocksParseError).
+        IncludeErrorKind::Parse => unreachable!("Parse is handled before this match"),
     };
 
     let value = err.value(py);

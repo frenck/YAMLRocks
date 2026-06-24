@@ -403,7 +403,11 @@ impl<'input> Scanner<'input> {
         // open and `...` reopens it (handled in their fetchers); anything else
         // here, document content or a `---` start, closes it.
         let is_directive = ch == '%' && self.reader.column() == 0;
+        // A document-end marker is only one at column 0; an indented `...` is a
+        // plain scalar (`key: ...`, `- ...`), so it must not reopen the directive
+        // window any more than it ends the document below.
         let is_doc_end = ch == '.'
+            && self.reader.column() == 0
             && self.reader.check_ahead("...")
             && self.reader.peek_at(3).map_or(true, is_whitespace_or_break);
         if !is_directive && !is_doc_end {
@@ -415,12 +419,18 @@ impl<'input> Scanner<'input> {
             {
                 self.fetch_block_entry(after_entry)
             }
-            '-' if self.reader.check_ahead("---")
+            // `---`/`...` are document markers only at the start of a line
+            // (column 0). Indented, they are ordinary plain-scalar content in a
+            // mapping value or sequence item (`key: ...`, `- ---`), which the spec
+            // and PyYAML both read as the literal string, not a marker.
+            '-' if self.reader.column() == 0
+                && self.reader.check_ahead("---")
                 && self.reader.peek_at(3).map_or(true, is_whitespace_or_break) =>
             {
                 self.fetch_document_start()
             }
-            '.' if self.reader.check_ahead("...")
+            '.' if self.reader.column() == 0
+                && self.reader.check_ahead("...")
                 && self.reader.peek_at(3).map_or(true, is_whitespace_or_break) =>
             {
                 self.fetch_document_end()

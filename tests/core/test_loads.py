@@ -377,3 +377,35 @@ def test_loads_all_rejects_unsupported_options(option):
     """
     with pytest.raises(ValueError, match="loads_all"):
         yamlrocks.loads_all(b"a: 1\n", option=option)
+
+
+# -- `---`/`...` are document markers only at column 0 -------------------------
+# An indented `---`/`...` is ordinary plain-scalar content (a mapping value or a
+# sequence item), not a document marker. Treating it as a marker silently turned
+# the value into None and could swallow following keys; the spec and PyYAML both
+# read it as the literal string. Regression test for that fast-path bug.
+
+
+@pytest.mark.parametrize("marker", ["...", "---"])
+def test_indented_marker_is_a_plain_scalar_value(marker):
+    """An indented `---`/`...` as a mapping value is the literal string."""
+    assert yamlrocks.loads(f"top: {marker}\n".encode()) == {"top": marker}
+
+
+@pytest.mark.parametrize("marker", ["...", "---"])
+def test_indented_marker_does_not_swallow_following_keys(marker):
+    """A `...`/`---` value must not end the document and drop later keys."""
+    src = f"m:\n  n: {marker}\n  o: 2\n".encode()
+    assert yamlrocks.loads(src) == {"m": {"n": marker, "o": 2}}
+
+
+@pytest.mark.parametrize("marker", ["...", "---"])
+def test_indented_marker_as_sequence_item(marker):
+    """An indented `---`/`...` sequence item is the literal string, not a marker."""
+    src = f"a:\n  - {marker}\n  - b\n".encode()
+    assert yamlrocks.loads(src) == {"a": [marker, "b"]}
+
+
+def test_column_zero_markers_still_delimit_documents():
+    """The fix must not stop real column-0 markers from delimiting documents."""
+    assert yamlrocks.loads_all(b"---\nx\n...\n---\ny\n") == ["x", "y"]

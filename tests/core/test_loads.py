@@ -388,8 +388,14 @@ def test_loads_all_rejects_unsupported_options(option):
 
 @pytest.mark.parametrize("marker", ["...", "---"])
 def test_indented_marker_is_a_plain_scalar_value(marker):
-    """An indented `---`/`...` as a mapping value is the literal string."""
-    assert yamlrocks.loads(f"top: {marker}\n".encode()) == {"top": marker}
+    """An indented `---`/`...` as a mapping value is the literal string.
+
+    The scanner is shared with the round-trip path, so pin both: the fast path
+    decodes the string, and round-trip re-emits byte-for-byte.
+    """
+    src = f"top: {marker}\n".encode()
+    assert yamlrocks.loads(src) == {"top": marker}
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_yaml() == src
 
 
 @pytest.mark.parametrize("marker", ["...", "---"])
@@ -397,6 +403,7 @@ def test_indented_marker_does_not_swallow_following_keys(marker):
     """A `...`/`---` value must not end the document and drop later keys."""
     src = f"m:\n  n: {marker}\n  o: 2\n".encode()
     assert yamlrocks.loads(src) == {"m": {"n": marker, "o": 2}}
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_yaml() == src
 
 
 @pytest.mark.parametrize("marker", ["...", "---"])
@@ -404,6 +411,7 @@ def test_indented_marker_as_sequence_item(marker):
     """An indented `---`/`...` sequence item is the literal string, not a marker."""
     src = f"a:\n  - {marker}\n  - b\n".encode()
     assert yamlrocks.loads(src) == {"a": [marker, "b"]}
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_yaml() == src
 
 
 def test_column_zero_markers_still_delimit_documents():

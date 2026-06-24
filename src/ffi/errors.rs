@@ -120,11 +120,7 @@ pub fn include_error(py: Python<'_>, e: &IncludeError) -> PyErr {
     // `YAMLRocksIncludeError`. The include chain is still attached for context.
     if e.kind == IncludeErrorKind::Parse {
         let span = e.span.unwrap_or_default();
-        let err = YAMLRocksParseError::new_err(located_message(
-            &e.message,
-            span.line,
-            span.column,
-        ));
+        let err = YAMLRocksParseError::new_err(located_message(&e.message, span.line, span.column));
         let value = err.value(py);
         let _ = value.setattr("file", Some(file));
         let _ = value.setattr("line", Some(span.line + 1));

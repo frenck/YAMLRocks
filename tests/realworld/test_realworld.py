@@ -298,6 +298,12 @@ KNOWN_INVALID: dict[str, str] = {
         "a Jinja2-templated Lovelace config (`{% if %}`) that dedents a sequence "
         "into mapping-key position, not standalone YAML (PyYAML rejects it too)"
     ),
+    "dbt/dbt-core/.github/ISSUE_TEMPLATE/bug-report-vsce.yml": (
+        "an unquoted `description:` value contains `: ` (in `Developer: Reload "
+        "Window`), read as a nested mapping that puts a block collection in "
+        "mapping-key position; PyYAML rejects it too (`mapping values are not "
+        "allowed in this context`)"
+    ),
 }
 
 # opentelemetry-collector-contrib ships Go-templated e2e test fixtures: K8s

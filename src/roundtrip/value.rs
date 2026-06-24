@@ -303,7 +303,10 @@ fn assigned_string_style(value: &str, double_quotes: bool) -> ScalarStyle {
     // weaker check: a divergent copy let edited values (newlines, `...`, number
     // and bool/null look-alikes, leading indicators) emit unquoted and reparse
     // as a different value or as broken YAML, defeating round-trip fidelity.
-    if !crate::encode::needs_quoting(value) {
+    // Quote by the default (1.2) rules here; round-trip assignment is not yet
+    // schema-aware (a follow-up threads the document's schema through). This keeps
+    // edited-scalar quoting exactly as before.
+    if !crate::encode::needs_quoting(value, Schema::Yaml12) {
         ScalarStyle::Plain
     } else if double_quotes || value.contains('\'') || value.contains('\n') || value.contains('\r')
     {

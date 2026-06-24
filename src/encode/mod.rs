@@ -77,6 +77,12 @@ pub struct EmitOptions {
     /// (so a run of spaces, or a line with no break opportunity, may still
     /// exceed it). A soft limit, like PyYAML's `width`.
     pub width: usize,
+    /// The YAML version the output targets. Governs quoting: strict YAML 1.1
+    /// (`Schema::Yaml11`) additionally quotes the scalars only that schema reads
+    /// as non-strings (bare `y`/`n` booleans, sexagesimal `1:30`), so the output
+    /// re-reads identically under 1.1. The default (`Yaml12`) and the
+    /// PyYAML-compat 1.1 variant keep the conservative cross-schema quoting.
+    pub schema: Schema,
 }
 
 impl Default for EmitOptions {
@@ -91,6 +97,7 @@ impl Default for EmitOptions {
             double_quotes: true,
             indentless_sequences: false,
             width: 0,
+            schema: Schema::Yaml12,
         }
     }
 }
@@ -432,7 +439,9 @@ impl<'a> Emitter<'a> {
                 b"''".as_slice()
             };
             self.buf.extend_from_slice(empty);
-        } else if needs_quoting(value) || (in_flow && has_flow_indicator(value)) {
+        } else if needs_quoting(value, self.options.schema)
+            || (in_flow && has_flow_indicator(value))
+        {
             // Inside a flow collection, a `,`/`[`/`]`/`{`/`}` anywhere in the
             // scalar would end the entry or collection early; quoting keeps it a
             // single value. In block context those bytes are ordinary content.
@@ -656,7 +665,7 @@ fn has_breakable_space(value: &str) -> bool {
 /// Determine whether a plain scalar string would be misinterpreted and thus
 /// needs quoting. Shared with the round-trip assignment path so an edited string
 /// value is quoted by exactly the same rules as a freshly dumped one.
-pub(crate) fn needs_quoting(value: &str) -> bool {
+pub(crate) fn needs_quoting(value: &str, schema: Schema) -> bool {
     if value.is_empty() {
         return true;
     }
@@ -723,6 +732,14 @@ pub(crate) fn needs_quoting(value: &str) -> bool {
         return true;
     }
 
+    // Strict YAML 1.1 reads bare `y`/`Y`/`n`/`N` as booleans. The default schema
+    // and the PyYAML-compat 1.1 variant both treat them as plain strings (the
+    // common, legitimate config use), so they are quoted only when the output
+    // targets strict 1.1, where leaving them bare would flip a string to a bool.
+    if schema == Schema::Yaml11 && matches!(value, "y" | "Y" | "n" | "N") {
+        return true;
+    }
+
     let bytes = value.as_bytes();
 
     // Leading indicator characters that change the meaning of the line.
@@ -780,10 +797,11 @@ pub(crate) fn needs_quoting(value: &str) -> bool {
     // This also makes emit-quoting agree with decode-resolution by construction:
     // `dumps` never produces a scalar `loads` reads back as a different type.
     //
-    // The one exception is a colon-bearing value (`1:30`): YAML 1.1 reads it as
+    // A colon-bearing value (`1:30`, MAC-like `01:02:03`) is YAML 1.1
     // sexagesimal, but that overlaps with timestamps (`15:30:45`, emitted as an
-    // unquoted literal by design), so it is left unquoted for the 1.1 caller who
-    // opted into those semantics, exactly as before.
+    // unquoted literal). Strict 1.1 output quotes it so it stays a string under a
+    // 1.1 reader; the default and PyYAML-compat schemas leave it bare (they do not
+    // read sexagesimal), exactly as before.
     //
     // Cheap gate first: every YAML int/float begins with a digit, sign, or dot,
     // so a value that does not cannot be a number. This skips the (relatively
@@ -792,8 +810,13 @@ pub(crate) fn needs_quoting(value: &str) -> bool {
     if !matches!(bytes[0], b'0'..=b'9' | b'+' | b'-' | b'.') {
         return false;
     }
-    resolves_to_number(value, Schema::Yaml12)
-        || (!value.contains(':') && resolves_to_number(value, Schema::Yaml11))
+    if resolves_to_number(value, Schema::Yaml12) {
+        return true;
+    }
+    match schema {
+        Schema::Yaml11 => resolves_to_number(value, Schema::Yaml11),
+        _ => !value.contains(':') && resolves_to_number(value, Schema::Yaml11),
+    }
 }
 
 /// Whether `value` resolves to an integer or float (not a string, bool, or null)
@@ -810,6 +833,7 @@ fn resolves_to_number(value: &str, schema: Schema) -> bool {
 mod tests {
     use super::{encode, EmitOptions, NullStyle};
     use crate::decode::Value;
+    use crate::resolver::Schema;
 
     fn s(text: &str) -> Value<'static> {
         Value::String(text.to_owned().into())
@@ -1043,6 +1067,38 @@ mod tests {
         let v = Value::Mapping(vec![(s("version"), s("1.0"))]);
         let out = emit(&v, &EmitOptions::default());
         assert!(out.contains("\"1.0\""), "{out}");
+    }
+
+    #[test]
+    fn strict_yaml_1_1_quotes_its_extra_ambiguities() {
+        // Bare `y`/`n` and sexagesimal (`1:30`, `01:02:03`) are non-strings only
+        // under strict YAML 1.1, so they are left bare by default but quoted when
+        // the output targets 1.1, keeping them strings for a 1.1 reader.
+        let v = Value::Mapping(vec![
+            (s("a"), s("y")),
+            (s("b"), s("N")),
+            (s("c"), s("01:02:03")),
+        ]);
+        // Default (1.2): all bare.
+        let dflt = emit(&v, &EmitOptions::default());
+        assert_eq!(dflt, "a: y\nb: N\nc: 01:02:03\n");
+        // Strict 1.1: all quoted.
+        let y11 = EmitOptions {
+            schema: Schema::Yaml11,
+            ..EmitOptions::default()
+        };
+        let out = emit(&v, &y11);
+        assert!(
+            out.contains("\"y\"") && out.contains("\"N\"") && out.contains("\"01:02:03\""),
+            "{out}"
+        );
+        // The PyYAML-compat 1.1 variant matches the default (no bare-y/n bools,
+        // no sexagesimal), so those stay unquoted.
+        let pyyaml = EmitOptions {
+            schema: Schema::Yaml11PyYaml,
+            ..EmitOptions::default()
+        };
+        assert_eq!(emit(&v, &pyyaml), dflt);
     }
 
     #[test]

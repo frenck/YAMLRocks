@@ -23,7 +23,7 @@ document.
 
 | Flag                         | Effect                                                                                                                                                                                                                                                                                                                                                            |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPT_YAML_1_1`               | Use the YAML 1.1 schema: `yes`/`no`/`on`/`off` booleans (and bare `y`/`n`, per the spec), `0777` octals, and sexagesimal numbers.                                                                                                                                                                                                                                 |
+| `OPT_YAML_1_1`               | Use the YAML 1.1 schema: `yes`/`no`/`on`/`off` booleans (and bare `y`/`n`, per the spec), `0777` octals, and sexagesimal numbers. On `dumps`, also quotes the strings only 1.1 reads as non-strings (bare `y`/`n`, sexagesimal) so the output re-reads identically under 1.1.                                                                                       |
 | `OPT_PYYAML_COMPAT`          | Use PyYAML's deliberately off-spec boolean set: `yes`/`no`/`on`/`off`/`true`/`false` but **not** bare `y`/`n` (they stay strings). Implies the 1.1 schema; matches the PyYAML ecosystem.                                                                                                                                                                          |
 | `OPT_ROUND_TRIP`             | Return a [`YAMLRocksDocument`](/reference/api/#yamlrocksdocument) preserving comments, anchors, and formatting.                                                                                                                                                                                                                                                   |
 | `OPT_ANNOTATED`              | Return [`dict`/`list`/`str` subclasses](/reference/api/#yamlrocksannotateddict-yamlrocksannotatedlist-yamlrocksannotatedstr) carrying source line and column.                                                                                                                                                                                                     |
@@ -49,6 +49,17 @@ import yamlrocks
 
 yamlrocks.loads(b"a: yes")                              # {'a': 'yes'}
 yamlrocks.loads(b"a: yes", option=yamlrocks.OPT_YAML_1_1)  # {'a': True}
+```
+
+The same flag makes `dumps` produce 1.1-safe output: a string only YAML 1.1 reads
+as a non-string (a bare `y`/`n`, or sexagesimal like `01:02:03`) is quoted, so it
+survives a round-trip through a 1.1 reader:
+
+```python
+import yamlrocks
+
+yamlrocks.dumps({"mac": "01:02:03"})                              # b'mac: 01:02:03\n'
+yamlrocks.dumps({"mac": "01:02:03"}, option=yamlrocks.OPT_YAML_1_1)  # b'mac: "01:02:03"\n'
 ```
 
 `OPT_DUPLICATE_KEYS_ERROR` rejects a repeated key with the offending location in

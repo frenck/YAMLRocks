@@ -67,7 +67,9 @@ class _Writable(Protocol):
 
 _Source = str | os.PathLike[str] | _Readable
 
-# Reading: schema and YAML version.
+# Schema and YAML version. On reading, selects how scalars resolve; on dumping,
+# OPT_YAML_1_1 quotes the scalars only strict 1.1 reads as non-strings (bare
+# `y`/`n`, sexagesimal) so the output re-reads identically under YAML 1.1.
 OPT_YAML_1_1: int
 OPT_PYYAML_COMPAT: int
 OPT_UPGRADE_1_1: int

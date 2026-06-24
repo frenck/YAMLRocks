@@ -491,3 +491,42 @@ def test_dumps_accepts_document_view():
         b"a:\n  b:\n    c: 1\n    d: 2\n", option=yamlrocks.OPT_ROUND_TRIP
     )
     assert yamlrocks.loads(yamlrocks.dumps(doc["a"]["b"])) == {"c": 1, "d": 2}
+
+
+# -- YAML 1.1 dump mode (OPT_YAML_1_1 on dumps) -------------------------------
+# Targeting 1.1 output quotes the scalars only strict 1.1 reads as non-strings,
+# bare `y`/`n` booleans and sexagesimal (`1:30`, `01:02:03`), so the output
+# re-reads identically under 1.1. The default (1.2) leaves them bare.
+
+Y11 = yamlrocks.OPT_YAML_1_1
+
+
+@pytest.mark.parametrize("value", ["y", "Y", "n", "N", "1:30", "01:02:03:04:05:06"])
+def test_dumps_yaml_1_1_quotes_1_1_only_ambiguities(value):
+    """A string only YAML 1.1 reads as a non-string is quoted under OPT_YAML_1_1,
+    but left bare by default (those forms are plain strings under 1.2)."""
+    assert b'"' not in yamlrocks.dumps({"k": value})
+    assert b'"' in yamlrocks.dumps({"k": value}, option=Y11)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["y", "n", "N", "1:30", "01:02:03:04:05:06", "yes", "0777", "on"],
+)
+def test_dumps_yaml_1_1_round_trips_under_1_1(value):
+    """1.1 dump output re-reads identically under a 1.1 loader: the quoting keeps
+    every 1.1-ambiguous string a string."""
+    obj = {"k": value}
+    out = yamlrocks.dumps(obj, option=Y11)
+    assert yamlrocks.loads(out, option=Y11) == obj
+
+
+def test_dumps_pyyaml_compat_leaves_single_letter_bools_bare():
+    """The PyYAML-compat 1.1 variant does not treat bare `y`/`n` as booleans, so
+    (like the default) it leaves them unquoted, matching the ecosystem."""
+    assert yamlrocks.dumps({"k": "y"}, option=yamlrocks.OPT_PYYAML_COMPAT) == b"k: y\n"
+
+
+def test_dumps_default_is_unchanged_by_the_1_1_dump_work():
+    """The 1.2 default output is untouched: a 1.1-only ambiguity stays bare."""
+    assert yamlrocks.dumps({"mac": "01:02:03:04:05:06"}) == b"mac: 01:02:03:04:05:06\n"

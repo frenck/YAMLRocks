@@ -190,14 +190,14 @@ impl IncludeResolver {
         // (in-memory `loads(bytes)`), fall back to a placeholder *inside* the
         // base directory so includes still resolve relative to `base_dir`.
         let root = root_path.unwrap_or_else(|| self.base_dir.join("<root>"));
-        let file_id = self.register_file(root, Some(content.to_owned()));
+        let file_id = self.register_file(root.clone(), Some(content.to_owned()));
 
         let nodes = compose_with_file_id(content, file_id).map_err(|e| IncludeError {
-            kind: IncludeErrorKind::Invalid,
+            kind: IncludeErrorKind::Parse,
             message: e.message,
-            path: self.base_dir.clone(),
+            path: root.clone(),
             include_stack: Vec::new(),
-            span: None,
+            span: Some(e.span),
         })?;
 
         let mut resolved = Vec::new();
@@ -679,11 +679,11 @@ impl IncludeResolver {
         })?;
         let file_id = self.register_file(path.to_path_buf(), Some(content.clone()));
         let nodes = compose_with_file_id(&content, file_id).map_err(|e| IncludeError {
-            kind: IncludeErrorKind::Invalid,
+            kind: IncludeErrorKind::Parse,
             message: e.message,
             path: path.to_path_buf(),
             include_stack: stack.to_vec(),
-            span: None,
+            span: Some(e.span),
         })?;
         Ok((file_id, nodes))
     }
@@ -792,7 +792,11 @@ pub enum IncludeErrorKind {
     SecretNotFound,
     /// An `!env_var` references an undefined variable with no default.
     EnvVarUndefined,
-    /// A malformed argument or malformed included document. The catch-all.
+    /// An included file is not valid YAML (the composer rejected it). Carries the
+    /// failing span so it surfaces as a located `YAMLRocksParseError` pointing at
+    /// the included file, identical to how the same content errors as a root.
+    Parse,
+    /// A malformed argument or other resolution failure. The catch-all.
     #[default]
     Invalid,
 }

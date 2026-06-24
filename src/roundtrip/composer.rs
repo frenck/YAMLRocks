@@ -630,7 +630,7 @@ impl<'input> Composer<'input> {
                 } else {
                     NodeStyle::Block
                 };
-                let pairs = self.compose_mapping(events)?;
+                let pairs = self.compose_mapping(events, *flow)?;
                 YamlNode::new(YamlNodeKind::Mapping(pairs), span).with_style(style)
             }
 
@@ -729,6 +729,7 @@ impl<'input> Composer<'input> {
     fn compose_mapping(
         &mut self,
         events: &[Event],
+        flow: bool,
     ) -> Result<Vec<(YamlNode, YamlNode)>, ScanError> {
         let mut pairs = Vec::new();
 
@@ -763,6 +764,22 @@ impl<'input> Composer<'input> {
                 }
                 _ => {
                     let start_pos = self.pos;
+                    let key_span = events[self.pos].span;
+                    // A bare plain scalar (no anchor/tag property) in key position
+                    // with no `:` after it is a missing colon; a property-carrying
+                    // key is structured differently and handled as before.
+                    let bare_scalar_key = matches!(events[self.pos].kind, EventKind::Scalar(..));
+                    // Reject a block collection sitting in mapping-key position
+                    // (mis-indented content), using the same shared check as the
+                    // fast decoder so both paths agree on what is valid.
+                    if let Some(span) =
+                        crate::parser::block_collection_key_span(events, self.pos, flow)
+                    {
+                        return Err(ScanError::new(
+                            crate::parser::BLOCK_COLLECTION_KEY_MESSAGE,
+                            span,
+                        ));
+                    }
                     let key = self
                         .compose_node(events)?
                         .unwrap_or_else(|| YamlNode::new(YamlNodeKind::Null, Span::default()));
@@ -770,6 +787,14 @@ impl<'input> Composer<'input> {
                         && matches!(events[self.pos].kind, EventKind::Value);
                     if has_value {
                         self.pos += 1;
+                    } else if !flow && bare_scalar_key {
+                        // A bare key in a block mapping must be followed by `:`;
+                        // its absence is mis-indented content, rejected by the fast
+                        // decoder and PyYAML alike.
+                        return Err(ScanError::new(
+                            crate::parser::MISSING_COLON_MESSAGE,
+                            key_span,
+                        ));
                     }
                     // A flow-mapping entry with a key but no `:` (`{a, b}`) has a
                     // null value; composing one here would wrongly absorb the next

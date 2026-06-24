@@ -797,25 +797,30 @@ pub(crate) fn needs_quoting(value: &str, schema: Schema) -> bool {
     // This also makes emit-quoting agree with decode-resolution by construction:
     // `dumps` never produces a scalar `loads` reads back as a different type.
     //
-    // A colon-bearing value (`1:30`, MAC-like `01:02:03`) is YAML 1.1
-    // sexagesimal, but that overlaps with timestamps (`15:30:45`, emitted as an
-    // unquoted literal). Strict 1.1 output quotes it so it stays a string under a
-    // 1.1 reader; the default and PyYAML-compat schemas leave it bare (they do not
-    // read sexagesimal), exactly as before.
+    // When the output targets a YAML 1.1 schema, quote exactly what *that* schema
+    // re-reads as a number, so the value survives a round-trip through it. Both
+    // 1.1 variants read sexagesimal (`1:30`, MAC-like `01:02:03`) and leading-
+    // underscore numerics (`_5`); PyYAML-compat differs from strict 1.1 only in
+    // its boolean set (the bare `y`/`n` case handled above), not in numbers. The
+    // 1.2 default keeps its conservative cross-schema quoting: it quotes 1.1
+    // numbers for stability but leaves sexagesimal bare (it overlaps timestamps,
+    // and 1.2 does not read it), exactly as before.
     //
-    // Cheap gate first: every YAML int/float begins with a digit, sign, or dot,
-    // so a value that does not cannot be a number. This skips the (relatively
-    // costly) resolver classification for the overwhelmingly common non-numeric
-    // string value, which is what `dumps` spends most of its quoting time on.
-    if !matches!(bytes[0], b'0'..=b'9' | b'+' | b'-' | b'.') {
+    // Cheap gate first: every YAML int/float begins with a digit, sign, or dot
+    // (and, under 1.1 only, a leading `_`), so a value that does not cannot be a
+    // number. This skips the (relatively costly) resolver classification for the
+    // overwhelmingly common non-numeric string value.
+    let numeric_start = matches!(bytes[0], b'0'..=b'9' | b'+' | b'-' | b'.')
+        || (bytes[0] == b'_' && schema != Schema::Yaml12);
+    if !numeric_start {
         return false;
     }
     if resolves_to_number(value, Schema::Yaml12) {
         return true;
     }
     match schema {
-        Schema::Yaml11 => resolves_to_number(value, Schema::Yaml11),
-        _ => !value.contains(':') && resolves_to_number(value, Schema::Yaml11),
+        Schema::Yaml12 => !value.contains(':') && resolves_to_number(value, Schema::Yaml11),
+        Schema::Yaml11 | Schema::Yaml11PyYaml => resolves_to_number(value, schema),
     }
 }
 
@@ -1070,35 +1075,37 @@ mod tests {
     }
 
     #[test]
-    fn strict_yaml_1_1_quotes_its_extra_ambiguities() {
-        // Bare `y`/`n` and sexagesimal (`1:30`, `01:02:03`) are non-strings only
-        // under strict YAML 1.1, so they are left bare by default but quoted when
-        // the output targets 1.1, keeping them strings for a 1.1 reader.
+    fn yaml_1_1_quotes_what_its_schema_reads_as_non_strings() {
+        // `y`/`N` are booleans only under strict 1.1; sexagesimal (`01:02:03`) is
+        // a number under both 1.1 variants. Each schema quotes exactly what it
+        // would re-read as a non-string, so the output round-trips under it.
         let v = Value::Mapping(vec![
             (s("a"), s("y")),
             (s("b"), s("N")),
             (s("c"), s("01:02:03")),
         ]);
-        // Default (1.2): all bare.
+        // Default (1.2): none of these are non-strings, so all bare.
         let dflt = emit(&v, &EmitOptions::default());
         assert_eq!(dflt, "a: y\nb: N\nc: 01:02:03\n");
-        // Strict 1.1: all quoted.
-        let y11 = EmitOptions {
-            schema: Schema::Yaml11,
-            ..EmitOptions::default()
-        };
-        let out = emit(&v, &y11);
-        assert!(
-            out.contains("\"y\"") && out.contains("\"N\"") && out.contains("\"01:02:03\""),
-            "{out}"
+        // Strict 1.1: bare `y`/`N` bools and sexagesimal all quoted.
+        let y11 = emit(
+            &v,
+            &EmitOptions {
+                schema: Schema::Yaml11,
+                ..EmitOptions::default()
+            },
         );
-        // The PyYAML-compat 1.1 variant matches the default (no bare-y/n bools,
-        // no sexagesimal), so those stay unquoted.
-        let pyyaml = EmitOptions {
-            schema: Schema::Yaml11PyYaml,
-            ..EmitOptions::default()
-        };
-        assert_eq!(emit(&v, &pyyaml), dflt);
+        assert_eq!(y11, "a: \"y\"\nb: \"N\"\nc: \"01:02:03\"\n");
+        // PyYAML-compat 1.1: bare `y`/`N` are NOT booleans (left bare), but it
+        // still reads sexagesimal, so `01:02:03` is quoted.
+        let pyyaml = emit(
+            &v,
+            &EmitOptions {
+                schema: Schema::Yaml11PyYaml,
+                ..EmitOptions::default()
+            },
+        );
+        assert_eq!(pyyaml, "a: y\nb: N\nc: \"01:02:03\"\n");
     }
 
     #[test]

@@ -68,6 +68,13 @@ pub fn check_duplicate_keys(nodes: &[YamlNode], schema: Schema) -> Result<(), Sc
 }
 
 fn check_node_duplicate_keys(node: &YamlNode, schema: Schema) -> Result<(), ScanError> {
+    // Grow the native stack on demand: this recurses once per nesting level over
+    // attacker-controlled AST depth (bounded by the composer's MAX_DEPTH), so a
+    // small thread stack could otherwise overflow. See [`crate::stack`].
+    crate::stack::guard(|| check_node_duplicate_keys_inner(node, schema))
+}
+
+fn check_node_duplicate_keys_inner(node: &YamlNode, schema: Schema) -> Result<(), ScanError> {
     match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
             // A `HashSet` of key signatures gives O(1) membership; a linear scan
@@ -109,6 +116,12 @@ pub fn collect_duplicate_keys(nodes: &[YamlNode], schema: Schema) -> Vec<String>
 }
 
 fn collect_node_duplicate_keys(node: &YamlNode, schema: Schema, out: &mut Vec<String>) {
+    // Grow the native stack on demand (see `check_node_duplicate_keys`); this
+    // recurses over attacker-controlled AST depth.
+    crate::stack::guard(|| collect_node_duplicate_keys_inner(node, schema, out))
+}
+
+fn collect_node_duplicate_keys_inner(node: &YamlNode, schema: Schema, out: &mut Vec<String>) {
     match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
             // `HashSet` membership is O(1); a linear scan made a large mapping

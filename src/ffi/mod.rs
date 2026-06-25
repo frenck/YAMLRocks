@@ -1207,6 +1207,11 @@ fn build_emit_options(opts: u64) -> EmitOptions {
         indentless_sequences: opts & OPT_INDENTLESS_SEQUENCES != 0,
         // Resolved separately from the `width=` argument by the caller.
         width: 0,
+        // The target YAML version governs quoting. `OPT_YAML_1_1` selects strict
+        // 1.1 (which quotes bare `y`/`n` and sexagesimal so they survive a 1.1
+        // reader); `OPT_PYYAML_COMPAT` selects the off-spec 1.1 variant; neither
+        // gives the 1.2 default. Same mapping as the load side.
+        schema: Schema::new(opts & OPT_YAML_1_1 != 0, opts & OPT_PYYAML_COMPAT != 0),
     }
 }
 

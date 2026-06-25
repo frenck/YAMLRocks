@@ -136,15 +136,23 @@ flag.
 
 ### PyYAML-compatible booleans
 
-`OPT_YAML_1_1` follows the literal YAML 1.1 spec, where bare `y`/`Y`/`n`/`N` are
-booleans alongside `yes`/`no`/`on`/`off`. PyYAML deliberately drops the
-single-letter forms (its resolver lists `y`/`n` as candidates but its regex does
-not match them), so a `y:` key, common for coordinates, stays a string there. The
-PyYAML-based ecosystem (Home Assistant, ESPHome, Ansible) relies on that quirk.
+There are three scalar schemas in play: **YAML 1.2** (the default), **strict YAML
+1.1** (`OPT_YAML_1_1`), and **PyYAML-compat** (`OPT_PYYAML_COMPAT`). The third is
+not a fourth set of rules to learn: it is strict YAML 1.1 with exactly one
+exception.
 
-`OPT_PYYAML_COMPAT` selects PyYAML's set instead: `yes`/`no`/`on`/`off`/`true`/
-`false` (and their case variants) resolve as booleans, but bare `y`/`n` stay
-strings. It implies the 1.1 schema, so it works on its own, and it carries
+`OPT_YAML_1_1` follows the literal YAML 1.1 spec, where bare `y`/`Y`/`n`/`N` are
+booleans alongside `yes`/`no`/`on`/`off`. That is spec-correct, but it is a sharp
+edge: a `y:` key, common for coordinates, becomes the boolean key `True`, and a
+value `n` becomes `False`. PyYAML deliberately drops the single-letter forms (its
+resolver lists `y`/`n` as candidates but its regex does not match them), and the
+PyYAML-based ecosystem (Home Assistant, ESPHome, Ansible) relies on that.
+
+`OPT_PYYAML_COMPAT` is that one exception: identical to strict 1.1 in every way
+(`yes`/`no`/`on`/`off`/`true`/`false` and their case variants are booleans,
+`0777` is octal, `1:30` is sexagesimal), **except** bare `y`/`Y`/`n`/`N` stay
+strings. If you are reading configs written for the PyYAML ecosystem, this is the
+flag you want. It implies the 1.1 schema, so it works on its own, and it carries
 through the migration paths above, `OPT_UPGRADE_1_1` and `OPT_YAML_1_1_WARN` both
 treat `y`/`n` as strings under it.
 

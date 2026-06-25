@@ -297,8 +297,7 @@ def test_edit_in_a_default_document_stays_bare():
 
 
 def test_round_trip_to_dict_resolves_under_the_loaded_1_1_schema():
-    """Round-trip to_dict() under OPT_YAML_1_1 resolves like the fast path; the
-    1.2 default keeps the same scalars as strings."""
+    """Round-trip to_dict() under OPT_YAML_1_1 matches the fast path; default 1.2 keeps these scalars as strings."""
     src = b"a: yes\nb: 0777\nc: plain\n"
     fast = yamlrocks.loads(src, option=yamlrocks.OPT_YAML_1_1)
     rt = yamlrocks.loads(src, option=RT | yamlrocks.OPT_YAML_1_1).to_dict()
@@ -315,3 +314,36 @@ def test_round_trip_view_and_walk_resolve_under_1_1():
     doc = yamlrocks.loads(b"m:\n  k: yes\n", option=RT | yamlrocks.OPT_YAML_1_1)
     assert doc["m"]["k"] is True
     assert list(doc.walk()) == [(("m", "k"), True)]
+
+
+def test_round_trip_access_matches_the_resolved_key_under_1_1():
+    """Indexed access matches the resolved mapping key (a `yes:` key is `True`), so it stays consistent with keys()/walk()."""
+    doc = yamlrocks.loads(b"yes: 1\nplain: 2\n", option=RT | yamlrocks.OPT_YAML_1_1)
+    resolved_keys = list(doc.keys())
+    assert resolved_keys == [True, "plain"]
+    assert doc[True] == 1  # resolved key
+    assert [doc[k] for k in resolved_keys] == [
+        1,
+        2,
+    ]  # keys() round-trips through access
+    with pytest.raises(KeyError):
+        doc["yes"]  # the lexeme is not the key under 1.1
+
+
+def test_round_trip_default_access_uses_the_string_key():
+    """Under the 1.2 default the same key stays the string `yes`, so `doc['yes']` works."""
+    doc = yamlrocks.loads(b"yes: 1\n", option=RT)
+    assert list(doc.keys()) == ["yes"]
+    assert doc["yes"] == 1
+
+
+def test_round_trip_assign_by_resolved_key_updates_the_entry():
+    """Assigning by the resolved key updates the matching entry in place; a new bool key emits a bool scalar."""
+    doc = yamlrocks.loads(b"yes: 1\n", option=RT | yamlrocks.OPT_YAML_1_1)
+    doc[True] = 9
+    assert doc.to_yaml() == b"yes: 9\n"  # existing entry updated, lexeme kept
+    doc[False] = 7  # a new bool key
+    assert yamlrocks.loads(doc.to_yaml(), option=yamlrocks.OPT_YAML_1_1) == {
+        True: 9,
+        False: 7,
+    }

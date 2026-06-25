@@ -13,9 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
-
-use crate::scanner::ScalarStyle;
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 
 use super::anchors::{
     alias_target_path, build_anchor_map, collect_alias_paths, collect_anchor_paths,
@@ -138,7 +136,16 @@ impl YAMLRocksDocument {
         let double_quotes = self.double_quotes;
         let schema = self.schema;
         if self.nodes.len() == 1 {
-            set_child(py, &mut self.nodes[0], key, value, double_quotes, schema)
+            let anchors = build_anchor_map(&self.nodes);
+            set_child(
+                py,
+                &mut self.nodes[0],
+                key,
+                value,
+                double_quotes,
+                schema,
+                &anchors,
+            )
         } else {
             let idx: usize = key.extract()?;
             let node = self
@@ -500,9 +507,10 @@ impl YAMLRocksDocumentView {
         let mut doc = self.root.borrow_mut(py);
         let double_quotes = doc.double_quotes;
         let schema = doc.schema;
+        let anchors = build_anchor_map(&doc.nodes);
         let node = resolve_path_mut(&mut doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        set_child(py, node, key, value, double_quotes, schema)
+        set_child(py, node, key, value, double_quotes, schema, &anchors)
     }
 
     fn __delitem__(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -1149,6 +1157,27 @@ pub(crate) fn scalar_eq(key: &YamlNode, name: &str) -> bool {
     matches!(&key.kind, YamlNodeKind::Scalar(s, _) if s == name)
 }
 
+/// Whether `key_node`, resolved under `schema`, equals the Python `key`. Indexed
+/// access and assignment match the *resolved* mapping key, so `doc[True]` reaches
+/// a `yes:` entry under YAML 1.1 (and `doc['yes']` does not), consistent with
+/// `keys()`/`to_dict()` and with Python dict semantics (e.g. `True == 1`). Only
+/// scalar keys are addressable this way; a collection key is not.
+fn key_node_matches(
+    py: Python<'_>,
+    key_node: &YamlNode,
+    key: &Bound<'_, PyAny>,
+    schema: Schema,
+    anchors: &HashMap<String, YamlNode>,
+) -> bool {
+    if !matches!(key_node.kind, YamlNodeKind::Scalar(..)) {
+        return false;
+    }
+    node_to_python_with(py, key_node, schema, anchors)
+        .bind(py)
+        .eq(key)
+        .unwrap_or(false)
+}
+
 // -- Child access shared by YAMLRocksDocument and YAMLRocksDocumentView --
 
 /// Read a child of `node`: scalars resolve to plain Python; containers return a
@@ -1162,7 +1191,22 @@ fn access_child(
     anchors: &HashMap<String, YamlNode>,
     schema: Schema,
 ) -> PyResult<Py<PyAny>> {
-    let seg = seg_from_key(key)?;
+    // For a mapping, match the looked-up key against each key resolved under the
+    // schema (so `doc[True]` finds a `yes:` entry), recording the matched key's
+    // lexeme for the path. Sequences index by position as before.
+    let seg = match &node.kind {
+        YamlNodeKind::Mapping(pairs) => {
+            let (k, _) = pairs
+                .iter()
+                .find(|(k, _)| key_node_matches(py, k, key, schema, anchors))
+                .ok_or_else(|| key_error(node, key))?;
+            let YamlNodeKind::Scalar(lexeme, _) = &k.kind else {
+                unreachable!("key_node_matches only matches scalar keys")
+            };
+            PathSeg::Key(lexeme.clone())
+        }
+        _ => seg_from_key(key)?,
+    };
     let child = child_ref(node, &seg).ok_or_else(|| key_error(node, key))?;
 
     let mut path = parent_path.to_vec();
@@ -1205,16 +1249,16 @@ fn set_child(
     value: &Bound<'_, PyAny>,
     double_quotes: bool,
     schema: Schema,
+    anchors: &HashMap<String, YamlNode>,
 ) -> PyResult<()> {
     match &mut node.kind {
         YamlNodeKind::Mapping(pairs) => {
-            let key_str: String = key
-                .extract()
-                .map_err(|_| pyo3::exceptions::PyTypeError::new_err("mapping keys must be str"))?;
             let mut new_val = python_to_node(py, value, double_quotes, schema)?;
             new_val.mark_modified();
+            // Match an existing key by its resolved value (so `doc[True] = x`
+            // updates a `yes:` entry under 1.1), mirroring read access.
             for (k, v) in pairs.iter_mut() {
-                if scalar_eq(k, &key_str) {
+                if key_node_matches(py, k, key, schema, anchors) {
                     // Replacing a value keeps the metadata attached to it (its
                     // comments, anchor, and tag), matching `YAMLRocksNode.set_value`, so
                     // an edit does not silently drop nearby comments or markup.
@@ -1229,10 +1273,11 @@ fn set_child(
                     return Ok(());
                 }
             }
-            let new_key = YamlNode::new(
-                YamlNodeKind::Scalar(key_str, ScalarStyle::Plain),
-                crate::scanner::Span::default(),
-            );
+            // No key matched: add one, building the key node from the Python key
+            // so a non-string key (`doc[True] = ...`) and a string that needs
+            // quoting under the schema both emit correctly.
+            let mut new_key = python_to_node(py, key, double_quotes, schema)?;
+            new_key.mark_modified();
             pairs.push((new_key, new_val));
             Ok(())
         }
@@ -1431,8 +1476,10 @@ fn collect_leaves_inner(
     match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
             for (key, val) in pairs {
-                if let YamlNodeKind::Scalar(name, _) = &key.kind {
-                    path.push(PyString::new(py, name).into_any().unbind());
+                if let YamlNodeKind::Scalar(_, _) = &key.kind {
+                    // Resolve the path key under the schema so `walk()` paths match
+                    // `keys()` and indexed access (a `yes:` key is `True` under 1.1).
+                    path.push(node_to_python_with(py, key, schema, anchors));
                     collect_leaves(py, val, path, out, anchors, schema)?;
                     path.pop();
                 }

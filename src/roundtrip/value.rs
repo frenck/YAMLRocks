@@ -197,8 +197,9 @@ pub(crate) fn python_to_node(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     double_quotes: bool,
+    schema: Schema,
 ) -> PyResult<YamlNode> {
-    python_to_node_depth(py, obj, double_quotes, 0)
+    python_to_node_depth(py, obj, double_quotes, schema, 0)
 }
 
 #[allow(clippy::only_used_in_recursion)]
@@ -206,12 +207,13 @@ fn python_to_node_depth(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     double_quotes: bool,
+    schema: Schema,
     depth: u32,
 ) -> PyResult<YamlNode> {
     // Grow the native stack on demand so assigning a deeply nested object
     // (bounded by `MAX_ASSIGN_DEPTH`) cannot overflow a small thread stack; the
     // recursion re-enters here per level. See [`crate::stack`].
-    crate::stack::guard(|| python_to_node_depth_inner(py, obj, double_quotes, depth))
+    crate::stack::guard(|| python_to_node_depth_inner(py, obj, double_quotes, schema, depth))
 }
 
 #[allow(clippy::only_used_in_recursion)]
@@ -219,6 +221,7 @@ fn python_to_node_depth_inner(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     double_quotes: bool,
+    schema: Schema,
     depth: u32,
 ) -> PyResult<YamlNode> {
     use crate::scanner::Span;
@@ -267,13 +270,19 @@ fn python_to_node_depth_inner(
         ));
     }
     if let Ok(s) = obj.extract::<String>() {
-        let style = assigned_string_style(&s, double_quotes);
+        let style = assigned_string_style(&s, double_quotes, schema);
         return Ok(YamlNode::new(YamlNodeKind::Scalar(s, style), span));
     }
     if let Ok(list) = obj.cast::<PyList>() {
         let mut items = Vec::new();
         for item in list.iter() {
-            items.push(python_to_node_depth(py, &item, double_quotes, depth + 1)?);
+            items.push(python_to_node_depth(
+                py,
+                &item,
+                double_quotes,
+                schema,
+                depth + 1,
+            )?);
         }
         return Ok(YamlNode::new(YamlNodeKind::Sequence(items), span));
     }
@@ -281,8 +290,8 @@ fn python_to_node_depth_inner(
         let mut pairs = Vec::new();
         for (k, v) in dict.iter() {
             pairs.push((
-                python_to_node_depth(py, &k, double_quotes, depth + 1)?,
-                python_to_node_depth(py, &v, double_quotes, depth + 1)?,
+                python_to_node_depth(py, &k, double_quotes, schema, depth + 1)?,
+                python_to_node_depth(py, &v, double_quotes, schema, depth + 1)?,
             ));
         }
         return Ok(YamlNode::new(YamlNodeKind::Mapping(pairs), span));
@@ -298,15 +307,14 @@ fn python_to_node_depth_inner(
 /// plain; otherwise the document's quote preference (double by default). A
 /// single-quoted scalar cannot hold a line break or a literal quote, so those
 /// fall back to double even in single-quote mode, mirroring the fast encoder.
-fn assigned_string_style(value: &str, double_quotes: bool) -> ScalarStyle {
+fn assigned_string_style(value: &str, double_quotes: bool, schema: Schema) -> ScalarStyle {
     // Use the fast encoder's quoting rules verbatim rather than a second,
     // weaker check: a divergent copy let edited values (newlines, `...`, number
     // and bool/null look-alikes, leading indicators) emit unquoted and reparse
-    // as a different value or as broken YAML, defeating round-trip fidelity.
-    // Quote by the default (1.2) rules here; round-trip assignment is not yet
-    // schema-aware (a follow-up threads the document's schema through). This keeps
-    // edited-scalar quoting exactly as before.
-    if !crate::encode::needs_quoting(value, Schema::Yaml12) {
+    // as a different value or as broken YAML, defeating round-trip fidelity. The
+    // document's schema governs, so an edit to a 1.1 document quotes a `y`/`1:30`
+    // that only 1.1 would re-read as a non-string.
+    if !crate::encode::needs_quoting(value, schema) {
         ScalarStyle::Plain
     } else if double_quotes || value.contains('\'') || value.contains('\n') || value.contains('\r')
     {

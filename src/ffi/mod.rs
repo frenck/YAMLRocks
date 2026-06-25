@@ -1037,11 +1037,17 @@ fn loads_roundtrip(
         }
     }
     validate_schema_root(py, &nodes, schema, yaml_schema.is_yaml_11())?;
+    // The schema governs how an edited-in scalar is quoted, so it must match what
+    // the document re-emits as. An upgraded document is rewritten to canonical
+    // YAML 1.2 (and stamped `%YAML 1.2`), so its edits quote by 1.2 rules even
+    // though it was read as 1.1; otherwise edits follow the loaded schema.
+    let emit_schema = if upgrade { Schema::Yaml12 } else { yaml_schema };
     let doc = YAMLRocksDocument::with_file_map(nodes, file_map, file_sources)
         .with_source(input.to_owned())
         .with_null_style(null_style)
         .with_double_quotes(double_quotes)
-        .with_upgraded(upgrade);
+        .with_upgraded(upgrade)
+        .with_schema(emit_schema);
     Ok(Py::new(py, doc)?.into_any())
 }
 

@@ -26,6 +26,7 @@ use super::emit;
 use super::emit::{emit_roundtrip_all_with, emit_roundtrip_with};
 use super::value::{node_to_python, python_to_node};
 use crate::encode::NullStyle;
+use crate::resolver::Schema;
 
 /// A single step along a path into the AST: a mapping key or sequence index.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +74,11 @@ pub struct YAMLRocksDocument {
     /// re-emission stamps a `%YAML 1.2` directive so the written-back file
     /// declares its version and is read back as 1.2 (not re-upgraded).
     pub upgraded: bool,
+    /// The schema the document was loaded under. A freshly assigned scalar is
+    /// quoted by this schema's rules so an edit stays the type it reads as (e.g.
+    /// a string `y` keeps quotes under strict 1.1); loaded scalars keep their
+    /// original text. Defaults to 1.2.
+    pub schema: Schema,
 }
 
 /// Free the document's AST without unbounded native recursion. The derived drop
@@ -129,15 +135,16 @@ impl YAMLRocksDocument {
         value: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let double_quotes = self.double_quotes;
+        let schema = self.schema;
         if self.nodes.len() == 1 {
-            set_child(py, &mut self.nodes[0], key, value, double_quotes)
+            set_child(py, &mut self.nodes[0], key, value, double_quotes, schema)
         } else {
             let idx: usize = key.extract()?;
             let node = self
                 .nodes
                 .get_mut(idx)
                 .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
-            *node = python_to_node(py, value, double_quotes)?;
+            *node = python_to_node(py, value, double_quotes, schema)?;
             node.mark_modified();
             Ok(())
         }
@@ -347,6 +354,7 @@ impl YAMLRocksDocument {
             null_style: NullStyle::Empty,
             double_quotes: true,
             upgraded: false,
+            schema: Schema::Yaml12,
         }
     }
 
@@ -366,6 +374,7 @@ impl YAMLRocksDocument {
             null_style: NullStyle::Empty,
             double_quotes: true,
             upgraded: false,
+            schema: Schema::Yaml12,
         }
     }
 
@@ -390,6 +399,13 @@ impl YAMLRocksDocument {
     /// Set whether freshly assigned strings that need quoting use double quotes.
     pub fn with_double_quotes(mut self, double_quotes: bool) -> Self {
         self.double_quotes = double_quotes;
+        self
+    }
+
+    /// Set the schema whose rules govern quoting of freshly assigned scalars, so
+    /// an edit to a document loaded under YAML 1.1 stays 1.1-safe.
+    pub fn with_schema(mut self, schema: Schema) -> Self {
+        self.schema = schema;
         self
     }
 
@@ -482,9 +498,10 @@ impl YAMLRocksDocumentView {
     ) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);
         let double_quotes = doc.double_quotes;
+        let schema = doc.schema;
         let node = resolve_path_mut(&mut doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        set_child(py, node, key, value, double_quotes)
+        set_child(py, node, key, value, double_quotes, schema)
     }
 
     fn __delitem__(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -623,8 +640,9 @@ impl YAMLRocksNode {
     fn set_value(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);
         let double_quotes = doc.double_quotes;
+        let schema = doc.schema;
         let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
-        let mut new_val = python_to_node(py, value, double_quotes)?;
+        let mut new_val = python_to_node(py, value, double_quotes, schema)?;
         new_val.comments.head = std::mem::take(&mut node.comments.head);
         new_val.comments.inline = node.comments.inline.take();
         // Keep the alignment padding around the value so an edit preserves the
@@ -1183,13 +1201,14 @@ fn set_child(
     key: &Bound<'_, PyAny>,
     value: &Bound<'_, PyAny>,
     double_quotes: bool,
+    schema: Schema,
 ) -> PyResult<()> {
     match &mut node.kind {
         YamlNodeKind::Mapping(pairs) => {
             let key_str: String = key
                 .extract()
                 .map_err(|_| pyo3::exceptions::PyTypeError::new_err("mapping keys must be str"))?;
-            let mut new_val = python_to_node(py, value, double_quotes)?;
+            let mut new_val = python_to_node(py, value, double_quotes, schema)?;
             new_val.mark_modified();
             for (k, v) in pairs.iter_mut() {
                 if scalar_eq(k, &key_str) {
@@ -1219,7 +1238,7 @@ fn set_child(
             let target = items
                 .get_mut(idx)
                 .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
-            let mut new_val = python_to_node(py, value, double_quotes)?;
+            let mut new_val = python_to_node(py, value, double_quotes, schema)?;
             new_val.mark_modified();
             // Carry the replaced item's metadata (comments, anchor, tag) onto
             // the new value so editing a list entry preserves the markup around

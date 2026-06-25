@@ -266,3 +266,26 @@ def test_round_trip_keeps_valid_complex_and_flow_keys(src):
     """The validity check must not reject legitimate explicit `?` complex keys or
     flow mappings with bare keys; those still compose and round-trip."""
     assert yamlrocks.loads(src, option=RT).to_yaml() == src
+
+
+# -- Editing a document quotes the edit by the document's schema --------------
+# A scalar assigned into a round-trip document loaded under YAML 1.1 is quoted by
+# 1.1's rules, so it stays the type it reads as. (Unmodified nodes keep their
+# original text; only the edited value is re-quoted.)
+
+
+@pytest.mark.parametrize("value", ["y", "01:02:03", "_5"])
+def test_edit_in_a_1_1_document_is_quoted_1_1_safely(value):
+    """An edit into a 1.1-loaded document is quoted so it re-reads as a string under 1.1."""
+    doc = yamlrocks.loads(b"k: hello\n", option=RT | yamlrocks.OPT_YAML_1_1)
+    doc["k"] = value
+    out = doc.to_yaml()
+    assert b'"' in out
+    assert yamlrocks.loads(out, option=yamlrocks.OPT_YAML_1_1) == {"k": value}
+
+
+def test_edit_in_a_default_document_stays_bare():
+    """The same edit in a 1.2 document stays unquoted (1.2 reads `y` as a string)."""
+    doc = yamlrocks.loads(b"k: hello\n", option=RT)
+    doc["k"] = "y"
+    assert doc.to_yaml() == b"k: y\n"

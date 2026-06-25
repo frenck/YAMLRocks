@@ -24,7 +24,7 @@ use super::anchors::{
 use super::ast::{NodeStyle, YamlNode, YamlNodeKind};
 use super::emit;
 use super::emit::{emit_roundtrip_all_with, emit_roundtrip_with};
-use super::value::{node_to_python, python_to_node};
+use super::value::{node_to_python_with, python_to_node};
 use crate::encode::NullStyle;
 use crate::resolver::Schema;
 
@@ -112,8 +112,9 @@ impl YAMLRocksDocument {
         let py = slf.py();
         let this = slf.borrow();
         let anchors = build_anchor_map(&this.nodes);
+        let schema = this.schema;
         if this.nodes.len() == 1 {
-            access_child(py, slf, &[], &this.nodes[0], key, &anchors)
+            access_child(py, slf, &[], &this.nodes[0], key, &anchors, schema)
         } else {
             let idx: usize = key.extract().map_err(|_| {
                 pyo3::exceptions::PyKeyError::new_err(
@@ -124,7 +125,7 @@ impl YAMLRocksDocument {
                 .nodes
                 .get(idx)
                 .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
-            wrap_node(py, slf, vec![PathSeg::Index(idx)], node, &anchors)
+            wrap_node(py, slf, vec![PathSeg::Index(idx)], node, &anchors, schema)
         }
     }
 
@@ -187,7 +188,7 @@ impl YAMLRocksDocument {
     fn keys(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         if self.nodes.len() == 1 {
             let anchors = build_anchor_map(&self.nodes);
-            node_keys(py, &self.nodes[0], &anchors)
+            node_keys(py, &self.nodes[0], &anchors, self.schema)
         } else {
             Err(pyo3::exceptions::PyTypeError::new_err(
                 "keys() is only available on a single mapping document",
@@ -311,11 +312,11 @@ impl YAMLRocksDocument {
     fn to_dict(&self, py: Python<'_>) -> Py<PyAny> {
         let anchors = build_anchor_map(&self.nodes);
         if self.nodes.len() == 1 {
-            node_to_python(py, &self.nodes[0], &anchors)
+            node_to_python_with(py, &self.nodes[0], self.schema, &anchors)
         } else {
             let list = PyList::empty(py);
             for node in &self.nodes {
-                let _ = list.append(node_to_python(py, node, &anchors));
+                let _ = list.append(node_to_python_with(py, node, self.schema, &anchors));
             }
             list.into_any().unbind()
         }
@@ -337,7 +338,7 @@ impl YAMLRocksDocument {
         let mut out: Vec<(Vec<Py<PyAny>>, Py<PyAny>)> = Vec::new();
         let anchors = build_anchor_map(&self.nodes);
         if let Some(root) = self.nodes.first() {
-            collect_leaves(py, root, &mut Vec::new(), &mut out, &anchors)?;
+            collect_leaves(py, root, &mut Vec::new(), &mut out, &anchors, self.schema)?;
         }
         leaves_to_list(py, out)
     }
@@ -487,7 +488,7 @@ impl YAMLRocksDocumentView {
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         let anchors = build_anchor_map(&doc.nodes);
         let root_bound = root.bind(py);
-        access_child(py, root_bound, &this.path, node, key, &anchors)
+        access_child(py, root_bound, &this.path, node, key, &anchors, doc.schema)
     }
 
     fn __setitem__(
@@ -535,7 +536,7 @@ impl YAMLRocksDocumentView {
         let node = resolve_path(&doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         let anchors = build_anchor_map(&doc.nodes);
-        node_keys(py, node, &anchors)
+        node_keys(py, node, &anchors, doc.schema)
     }
 
     /// The [`YAMLRocksNode`] cursor for this view's node: a metadata-bearing handle
@@ -557,7 +558,7 @@ impl YAMLRocksDocumentView {
         let node = resolve_path(&doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         let anchors = build_anchor_map(&doc.nodes);
-        Ok(node_to_python(py, node, &anchors))
+        Ok(node_to_python_with(py, node, doc.schema, &anchors))
     }
 
     /// Alias for [`unwrap`](Self::unwrap): the resolved plain-Python value.
@@ -582,7 +583,7 @@ impl YAMLRocksDocumentView {
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         let anchors = build_anchor_map(&doc.nodes);
         let mut out: Vec<(Vec<Py<PyAny>>, Py<PyAny>)> = Vec::new();
-        collect_leaves(py, node, &mut Vec::new(), &mut out, &anchors)?;
+        collect_leaves(py, node, &mut Vec::new(), &mut out, &anchors, doc.schema)?;
         leaves_to_list(py, out)
     }
 
@@ -632,7 +633,7 @@ impl YAMLRocksNode {
         let doc = self.root.borrow(py);
         let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_node)?;
         let anchors = build_anchor_map(&doc.nodes);
-        Ok(node_to_python(py, node, &anchors))
+        Ok(node_to_python_with(py, node, doc.schema, &anchors))
     }
 
     /// Replace this node's value, preserving its comments, anchor, and tag.
@@ -1159,13 +1160,14 @@ fn access_child(
     node: &YamlNode,
     key: &Bound<'_, PyAny>,
     anchors: &HashMap<String, YamlNode>,
+    schema: Schema,
 ) -> PyResult<Py<PyAny>> {
     let seg = seg_from_key(key)?;
     let child = child_ref(node, &seg).ok_or_else(|| key_error(node, key))?;
 
     let mut path = parent_path.to_vec();
     path.push(seg);
-    wrap_node(py, root, path, child, anchors)
+    wrap_node(py, root, path, child, anchors, schema)
 }
 
 /// Wrap a node for return to Python: scalars as plain values, containers as
@@ -1176,6 +1178,7 @@ fn wrap_node(
     path: Vec<PathSeg>,
     node: &YamlNode,
     anchors: &HashMap<String, YamlNode>,
+    schema: Schema,
 ) -> PyResult<Py<PyAny>> {
     match &node.kind {
         YamlNodeKind::Mapping(_) | YamlNodeKind::Sequence(_) => {
@@ -1188,10 +1191,10 @@ fn wrap_node(
         // An alias cannot resolve to a live view: it has no path of its own, so
         // we follow it to its anchor and return a plain snapshot instead.
         YamlNodeKind::Alias(name) => match anchors.get(name) {
-            Some(target) => wrap_node(py, root, path, target, anchors),
+            Some(target) => wrap_node(py, root, path, target, anchors, schema),
             None => Ok(py.None()),
         },
-        _ => Ok(node_to_python(py, node, anchors)),
+        _ => Ok(node_to_python_with(py, node, schema, anchors)),
     }
 }
 
@@ -1310,12 +1313,13 @@ fn node_keys(
     py: Python<'_>,
     node: &YamlNode,
     anchors: &HashMap<String, YamlNode>,
+    schema: Schema,
 ) -> PyResult<Py<PyAny>> {
     match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
             let list = PyList::empty(py);
             for (k, _) in pairs {
-                list.append(node_to_python(py, k, anchors))?;
+                list.append(node_to_python_with(py, k, schema, anchors))?;
             }
             Ok(list.into_any().unbind())
         }
@@ -1409,10 +1413,11 @@ fn collect_leaves(
     path: &mut Vec<Py<PyAny>>,
     out: &mut Vec<(Vec<Py<PyAny>>, Py<PyAny>)>,
     anchors: &HashMap<String, YamlNode>,
+    schema: Schema,
 ) -> PyResult<()> {
     // Grow the native stack on demand so walking a deeply nested document cannot
     // overflow a small thread stack. See [`crate::stack`].
-    crate::stack::guard(|| collect_leaves_inner(py, node, path, out, anchors))
+    crate::stack::guard(|| collect_leaves_inner(py, node, path, out, anchors, schema))
 }
 
 fn collect_leaves_inner(
@@ -1421,13 +1426,14 @@ fn collect_leaves_inner(
     path: &mut Vec<Py<PyAny>>,
     out: &mut Vec<(Vec<Py<PyAny>>, Py<PyAny>)>,
     anchors: &HashMap<String, YamlNode>,
+    schema: Schema,
 ) -> PyResult<()> {
     match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
             for (key, val) in pairs {
                 if let YamlNodeKind::Scalar(name, _) = &key.kind {
                     path.push(PyString::new(py, name).into_any().unbind());
-                    collect_leaves(py, val, path, out, anchors)?;
+                    collect_leaves(py, val, path, out, anchors, schema)?;
                     path.pop();
                 }
             }
@@ -1435,11 +1441,11 @@ fn collect_leaves_inner(
         YamlNodeKind::Sequence(items) => {
             for (i, item) in items.iter().enumerate() {
                 path.push(i.into_pyobject(py)?.into_any().unbind());
-                collect_leaves(py, item, path, out, anchors)?;
+                collect_leaves(py, item, path, out, anchors, schema)?;
                 path.pop();
             }
         }
-        _ => out.push((path.clone(), node_to_python(py, node, anchors))),
+        _ => out.push((path.clone(), node_to_python_with(py, node, schema, anchors))),
     }
     Ok(())
 }

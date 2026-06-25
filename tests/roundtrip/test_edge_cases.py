@@ -289,3 +289,29 @@ def test_edit_in_a_default_document_stays_bare():
     doc = yamlrocks.loads(b"k: hello\n", option=RT)
     doc["k"] = "y"
     assert doc.to_yaml() == b"k: y\n"
+
+
+# -- Round-trip projection resolves under the document's loaded schema --------
+# to_dict()/view access/walk() type scalars with the schema the document was
+# loaded under, matching the fast loads() path, instead of always 1.2.
+
+
+def test_round_trip_to_dict_resolves_under_the_loaded_1_1_schema():
+    """Round-trip to_dict() under OPT_YAML_1_1 resolves like the fast path; the
+    1.2 default keeps the same scalars as strings."""
+    src = b"a: yes\nb: 0777\nc: plain\n"
+    fast = yamlrocks.loads(src, option=yamlrocks.OPT_YAML_1_1)
+    rt = yamlrocks.loads(src, option=RT | yamlrocks.OPT_YAML_1_1).to_dict()
+    assert rt == fast == {"a": True, "b": 511, "c": "plain"}
+    assert yamlrocks.loads(src, option=RT).to_dict() == {
+        "a": "yes",
+        "b": "0777",
+        "c": "plain",
+    }
+
+
+def test_round_trip_view_and_walk_resolve_under_1_1():
+    """A nested view value and walk() honor the loaded 1.1 schema too."""
+    doc = yamlrocks.loads(b"m:\n  k: yes\n", option=RT | yamlrocks.OPT_YAML_1_1)
+    assert doc["m"]["k"] is True
+    assert list(doc.walk()) == [(("m", "k"), True)]

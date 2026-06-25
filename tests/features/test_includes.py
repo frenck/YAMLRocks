@@ -265,6 +265,27 @@ def test_missing_include_raises(tmp_path):
         )
 
 
+def test_missing_relative_include_is_not_found_not_confinement(tmp_path, monkeypatch):
+    """A missing in-tree file with a relative include_dir is not-found, not a
+    confinement escape. Regression: a relative dir left the candidate path
+    relative, so it failed the absolute-base check and was misreported as an
+    attempt to escape the include directory."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(yamlrocks.YAMLRocksIncludeNotFoundError):
+        yamlrocks.loads(
+            b"x: !include missing.yaml\n",
+            option=yamlrocks.OPT_INCLUDES,
+            include_dir=".",
+        )
+    # A genuine escape is still a confinement error, even with a relative dir.
+    with pytest.raises(yamlrocks.YAMLRocksIncludeConfinementError):
+        yamlrocks.loads(
+            b"x: !include ../escape.yaml\n",
+            option=yamlrocks.OPT_INCLUDES,
+            include_dir=".",
+        )
+
+
 def test_include_resolver_composes_tag_families(tmp_path, monkeypatch):
     """The include resolver expands !include, !secret, and !env_var together.
 

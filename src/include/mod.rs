@@ -624,7 +624,22 @@ impl IncludeResolver {
                 Ok(resolved)
             }
             Err(_) => {
-                let lexical = lexical_normalize(&candidate);
+                // The path does not canonicalize (it is missing, or a dangling
+                // symlink), so it is checked lexically. `canonical_base` is
+                // absolute, so a relative candidate must be anchored to the
+                // current directory first (the same directory `canonical_base`
+                // was resolved against). Otherwise a relative `include_dir` like
+                // "." leaves the candidate relative, and a missing in-tree file
+                // (`missing.yaml`) fails `starts_with` and is misreported as a
+                // confinement escape instead of a plain not-found.
+                let absolute = if candidate.is_absolute() {
+                    candidate.clone()
+                } else {
+                    std::env::current_dir()
+                        .map(|cwd| cwd.join(&candidate))
+                        .unwrap_or_else(|_| candidate.clone())
+                };
+                let lexical = lexical_normalize(&absolute);
                 if !lexical.starts_with(&self.canonical_base) {
                     return Err(confinement());
                 }

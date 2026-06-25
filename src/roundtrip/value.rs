@@ -14,18 +14,9 @@ use crate::resolver::{ResolvedValue, Schema};
 use crate::roundtrip::ast::{YamlNode, YamlNodeKind};
 use crate::scanner::ScalarStyle;
 
-/// Resolve a node to a plain Python value (used for scalars and `unwrap()`),
-/// using the YAML 1.2 scalar schema. `anchors` resolves `*alias` nodes.
-pub fn node_to_python(
-    py: Python<'_>,
-    node: &YamlNode,
-    anchors: &HashMap<String, YamlNode>,
-) -> Py<PyAny> {
-    node_to_python_with(py, node, Schema::Yaml12, anchors)
-}
-
-/// Like [`node_to_python`], but `schema` selects the YAML 1.1 scalar schema so
-/// `yes`/`no` resolve as booleans and `0777` as an octal int.
+/// Resolve a node to a plain Python value (scalars, and `to_dict`/`unwrap`),
+/// using `schema` for scalar typing (so under 1.1 `yes`/`no` are booleans and
+/// `0777` an octal int). `anchors` resolves `*alias` nodes.
 pub fn node_to_python_with(
     py: Python<'_>,
     node: &YamlNode,

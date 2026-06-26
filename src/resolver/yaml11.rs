@@ -230,18 +230,58 @@ fn parse_sexagesimal_float(value: &str) -> Option<f64> {
 }
 
 fn classify_tagged_11(value: &str, tag: &str, pyyaml_compat: bool) -> ScalarKind {
+    // An explicit core tag whose content does not match the type (`!!int nope`,
+    // `!!bool maybe`) is kept as a string rather than coerced to a wrong-but-valid
+    // value (which silently turned `!!int nope` into `0`). A conforming value
+    // still resolves to its type, including an integer too large for i64.
     match tag {
-        "!!null" | "tag:yaml.org,2002:null" => ScalarKind::Null,
-        "!!bool" | "tag:yaml.org,2002:bool" => {
-            ScalarKind::Bool(try_parse_bool_11(value, pyyaml_compat).unwrap_or(false))
+        "!!null" | "tag:yaml.org,2002:null" => {
+            if super::is_null(value) {
+                ScalarKind::Null
+            } else {
+                ScalarKind::Str
+            }
         }
-        "!!int" | "tag:yaml.org,2002:int" => ScalarKind::Int(try_parse_int_11(value).unwrap_or(0)),
-        "!!float" | "tag:yaml.org,2002:float" => {
-            ScalarKind::Float(try_parse_float_11(value).unwrap_or(0.0))
+        "!!bool" | "tag:yaml.org,2002:bool" => match try_parse_bool_11(value, pyyaml_compat) {
+            Some(b) => ScalarKind::Bool(b),
+            None => ScalarKind::Str,
+        },
+        "!!int" | "tag:yaml.org,2002:int" => {
+            if let Some(int) = try_parse_int_11(value) {
+                ScalarKind::Int(int)
+            } else if is_big_decimal_int_11(value) {
+                ScalarKind::BigInt
+            } else {
+                ScalarKind::Str
+            }
         }
+        "!!float" | "tag:yaml.org,2002:float" => match try_parse_float_11_tagged(value) {
+            Some(float) => ScalarKind::Float(float),
+            None => ScalarKind::Str,
+        },
         "!!merge" | "tag:yaml.org,2002:merge" => ScalarKind::Merge,
         _ => ScalarKind::Str,
     }
+}
+
+/// Parse a value carrying an explicit `!!float` tag under YAML 1.1. Unlike the
+/// plain-scalar [`try_parse_float_11`] (which requires a `.`/`e`/`E` so a bare
+/// integer stays an int), an integer-form value is a conforming float here:
+/// `42` resolves to `42.0` and the sexagesimal `1:30` to `90.0`, matching
+/// PyYAML. Hexadecimal and octal forms are not part of the float production, so
+/// they fall through to a string rather than being coerced.
+fn try_parse_float_11_tagged(value: &str) -> Option<f64> {
+    if let Some(f) = super::parse_special_float(value) {
+        return Some(f);
+    }
+    // Strip underscores (allocation-free unless any are present).
+    let cleaned = strip_underscores(value);
+    let clean: &str = &cleaned;
+    if clean.contains(':') {
+        // Sexagesimal, integer (`1:30`) or fractional (`1:30.5`).
+        return parse_sexagesimal_float(clean);
+    }
+    clean.parse::<f64>().ok()
 }
 
 #[cfg(test)]
@@ -378,9 +418,9 @@ mod tests {
     #[test]
     fn tagged_scalars_classify_by_tag() {
         let r = Yaml11Resolver::default();
-        // Each explicit core-schema tag drives its own classification arm.
+        // A conforming value resolves to the tagged type.
         assert_eq!(
-            r.resolve("anything", ScalarStyle::Plain, Some("!!null")),
+            r.resolve("~", ScalarStyle::Plain, Some("!!null")),
             ResolvedValue::Null
         );
         assert_eq!(
@@ -395,6 +435,35 @@ mod tests {
             r.resolve("1.5", ScalarStyle::Plain, Some("!!float")),
             ResolvedValue::Float(1.5)
         );
+        // Integer-form and sexagesimal values are conforming floats under an
+        // explicit tag (`42` -> `42.0`, `1:30` -> `90.0`), matching PyYAML.
+        assert_eq!(
+            r.resolve("42", ScalarStyle::Plain, Some("!!float")),
+            ResolvedValue::Float(42.0)
+        );
+        assert_eq!(
+            r.resolve("1:30", ScalarStyle::Plain, Some("!!float")),
+            ResolvedValue::Float(90.0)
+        );
+    }
+
+    #[test]
+    fn explicit_tag_with_nonconforming_content_stays_a_string() {
+        // An explicit core tag whose content does not match the type is kept as a
+        // string, not coerced to a wrong-but-valid value (`!!int nope` was `0`).
+        let r = Yaml11Resolver::default();
+        for (value, tag) in [
+            ("nope", "!!int"),
+            ("x", "!!float"),
+            ("maybe", "!!bool"),
+            ("text", "!!null"),
+        ] {
+            assert_eq!(
+                r.resolve(value, ScalarStyle::Plain, Some(tag)),
+                ResolvedValue::String(value.to_owned()),
+                "{tag} {value:?}"
+            );
+        }
     }
 
     #[test]

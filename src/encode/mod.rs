@@ -749,6 +749,17 @@ pub(crate) fn needs_quoting(value: &str, schema: Schema) -> bool {
         return true;
     }
 
+    // A string beginning with the document-end marker `...` followed by a space
+    // or tab also reparses as the end of the document (the marker needs only
+    // trailing whitespace, not a bare line), so everything after it is lost. The
+    // exact `...` is covered by the keyword match above; the `---` document-start
+    // marker (bare or with trailing content) is covered by the leading-`-`
+    // indicator check below.
+    if value.as_bytes().starts_with(b"...") && matches!(value.as_bytes().get(3), Some(b' ' | b'\t'))
+    {
+        return true;
+    }
+
     // Strict YAML 1.1 reads bare `y`/`Y`/`n`/`N` as booleans. The default schema
     // and the PyYAML-compat 1.1 variant both treat them as plain strings (the
     // common, legitimate config use), so they are quoted only when the output
@@ -1082,6 +1093,21 @@ mod tests {
             ..EmitOptions::default()
         };
         assert!(emit(&v, &single).contains("'yes'"));
+    }
+
+    #[test]
+    fn document_marker_strings_are_quoted() {
+        // A `...` document-end marker needs only trailing whitespace, so a string
+        // like `... y` re-reads as the end of the document and loses everything
+        // after it unless quoted. The exact `...` and any `---`-prefixed string
+        // are covered too; a `...` with non-whitespace after it (`...x`) is not a
+        // marker and stays bare.
+        for marker in ["...", "... y", "...  z", "---", "--- y"] {
+            let out = emit(&s(marker), &EmitOptions::default());
+            assert_eq!(reparse(&out), s(marker), "marker round-trips: {out:?}");
+        }
+        // Not a marker: no trailing whitespace, so no quoting is forced.
+        assert_eq!(emit(&s("...x"), &EmitOptions::default()), "...x\n");
     }
 
     #[test]

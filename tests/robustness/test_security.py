@@ -450,6 +450,44 @@ def test_dumps_mutating_container_does_not_use_after_free():
         pass
 
 
+def test_roundtrip_assign_mutating_dict_does_not_panic():
+    """Assigning a dict whose conversion mutates it must not panic the process.
+
+    Building the AST node runs Python (here a value's ``__float__`` adds a key);
+    the round-trip converter snapshots the entries first, so it does not iterate
+    the live dict (which raised ``dictionary changed size during iteration``).
+    """
+    doc = yamlrocks.loads(b"x: 1\n", option=yamlrocks.OPT_ROUND_TRIP)
+
+    class Evil:
+        def __init__(self, d):
+            self.d = d
+
+        def __float__(self):
+            self.d["injected"] = 99  # mutate the dict mid-conversion
+            return 1.0
+
+    data = {"a": None, "b": None}
+    data["a"] = Evil(data)
+    doc["x"] = data  # must not crash
+    assert b"a: 1.0" in yamlrocks.dumps(doc)
+
+
+def test_roundtrip_assign_mutating_list_does_not_panic():
+    """The same protection for a list assigned into a round-trip document."""
+    doc = yamlrocks.loads(b"x: 1\n", option=yamlrocks.OPT_ROUND_TRIP)
+    items: list = []
+
+    class Evil:
+        def __float__(self):
+            items.append("injected")  # mutate the list mid-conversion
+            return 2.0
+
+    items.extend([Evil(), None])
+    doc["x"] = items  # must not crash
+    yamlrocks.dumps(doc)
+
+
 def test_annotated_alias_bomb_is_bounded():
     """A doubling alias bomb (2^N nodes at N hops) must be bounded on the
     annotated/round-trip paths, not expand until OOM."""

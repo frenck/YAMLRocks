@@ -512,7 +512,13 @@ impl<'a> Emitter<'a> {
             // A multi-line quoted scalar must be indented past its block context,
             // so the line's leading indent is too shallow for a value after a dash
             // (`- k: ...`, where it would land at the mapping's own column).
-            let cont_indent = self.current_column();
+            //
+            // Clamp a root scalar's column 0 to 1: a continuation line at column 0
+            // that happens to start with `---`/`...` re-reads as a document marker
+            // ("a document marker cannot appear inside a quoted scalar"). The fold
+            // already strips a continuation line's leading whitespace on reload, so
+            // the extra space leaves the value unchanged.
+            let cont_indent = self.current_column().max(1);
             let (quote, body) = if single_ok {
                 (b'\'', crate::emit_util::single_quoted_body(value))
             } else {
@@ -1144,6 +1150,27 @@ mod tests {
         }
         // Not a marker: no trailing whitespace, so no quoting is forced.
         assert_eq!(emit(&s("...x"), &EmitOptions::default()), "...x\n");
+    }
+
+    #[test]
+    fn folded_root_scalar_never_starts_a_line_with_a_marker() {
+        // Folding a quoted scalar at the document root indents continuation lines
+        // to column 0, where a piece like `---`/`...` re-reads as a document marker
+        // ("a document marker cannot appear inside a quoted scalar"). Continuation
+        // indent is clamped to 1 so no line begins at column 0; the leading space
+        // is stripped on reload, so the value is unchanged.
+        let opts = EmitOptions {
+            width: 1,
+            ..EmitOptions::default()
+        };
+        for value in ["p= ---  ]", "x --- y", "a ... b", "..."] {
+            let out = emit(&s(value), &opts);
+            assert_eq!(
+                reparse(&out),
+                s(value),
+                "folded marker round-trips: {out:?}"
+            );
+        }
     }
 
     #[test]

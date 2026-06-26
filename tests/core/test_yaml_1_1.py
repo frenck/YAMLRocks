@@ -225,6 +225,40 @@ def test_pyyaml_compat_keeps_word_booleans():
     assert loadpy("no") is False
 
 
+def test_pyyaml_compat_float_requires_dot_and_signed_exponent():
+    """Under PyYAML-compat a float needs a dot, and an exponent an explicit sign.
+
+    PyYAML's resolver rejects `1e3` and `1.0e3` as floats (they stay strings),
+    while `1.5e+3` is a float. The lenient default 1.1 reading keeps `1e3` a
+    float, so this only narrows PyYAML-compat.
+    """
+    for value in ["1e3", "1E3", "1.0e3", ".5e3"]:
+        assert loadpy(value) == value
+        assert isinstance(loadpy(value), str)
+    assert loadpy("1.5e+3") == 1500.0
+    assert loadpy("1.5e-3") == 0.0015
+    assert loadpy(".5e+3") == 500.0
+    assert loadpy("1.") == 1.0
+    # The lenient default 1.1 mode still reads a dotless exponent as a float.
+    assert load11("1e3") == 1000.0
+
+
+def test_pyyaml_compat_rejects_a_leading_underscore():
+    """A leading underscore is not numeric under PyYAML-compat (`_5` is a string).
+
+    Only an interior separator (`1_000`) is allowed; PyYAML never starts a number
+    with `_`. The lenient default 1.1 mode keeps `_5` an int.
+    """
+    for value in ["_5", "_1.5", "-_5"]:
+        assert loadpy(value) == value
+        assert isinstance(loadpy(value), str)
+    # Interior and trailing underscores stay numeric, matching PyYAML.
+    assert loadpy("1_000") == 1000
+    assert loadpy("5_") == 5
+    # The lenient default 1.1 mode still reads a leading underscore as numeric.
+    assert load11("_5") == 5
+
+
 def test_yaml_1_1_alone_is_spec_correct():
     """Plain OPT_YAML_1_1 keeps bare y/n as booleans, per the real 1.1 spec."""
     assert load11("y") is True

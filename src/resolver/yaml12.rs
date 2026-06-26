@@ -123,15 +123,36 @@ fn try_parse_float_12(value: &str) -> Option<f64> {
 }
 
 fn classify_tagged(value: &str, tag: &str) -> ScalarKind {
+    // An explicit core tag whose content does not match the type (`!!int nope`,
+    // `!!bool maybe`) is kept as a string rather than coerced to a wrong-but-valid
+    // value (which silently turned `!!int nope` into `0`). A conforming value
+    // still resolves to its type, including an integer too large for i64.
     match tag {
-        "!!null" | "tag:yaml.org,2002:null" => ScalarKind::Null,
-        "!!bool" | "tag:yaml.org,2002:bool" => {
-            ScalarKind::Bool(matches!(value, "true" | "True" | "TRUE"))
+        "!!null" | "tag:yaml.org,2002:null" => {
+            if super::is_null(value) {
+                ScalarKind::Null
+            } else {
+                ScalarKind::Str
+            }
         }
-        "!!int" | "tag:yaml.org,2002:int" => ScalarKind::Int(try_parse_int_12(value).unwrap_or(0)),
-        "!!float" | "tag:yaml.org,2002:float" => {
-            ScalarKind::Float(try_parse_float_12(value).unwrap_or(0.0))
+        "!!bool" | "tag:yaml.org,2002:bool" => match value {
+            "true" | "True" | "TRUE" => ScalarKind::Bool(true),
+            "false" | "False" | "FALSE" => ScalarKind::Bool(false),
+            _ => ScalarKind::Str,
+        },
+        "!!int" | "tag:yaml.org,2002:int" => {
+            if let Some(int) = try_parse_int_12(value) {
+                ScalarKind::Int(int)
+            } else if super::is_big_decimal_int(value) {
+                ScalarKind::BigInt
+            } else {
+                ScalarKind::Str
+            }
         }
+        "!!float" | "tag:yaml.org,2002:float" => match try_parse_float_12(value) {
+            Some(float) => ScalarKind::Float(float),
+            None => ScalarKind::Str,
+        },
         _ => ScalarKind::Str,
     }
 }
@@ -262,7 +283,7 @@ mod tests {
             ResolvedValue::Bool(true)
         );
         assert_eq!(
-            r.resolve("anything", ScalarStyle::Plain, Some("!!null")),
+            r.resolve("null", ScalarStyle::Plain, Some("!!null")),
             ResolvedValue::Null
         );
         // The float tag drives its own classification arm.
@@ -270,15 +291,24 @@ mod tests {
             r.resolve("1.5", ScalarStyle::Plain, Some("!!float")),
             ResolvedValue::Float(1.5)
         );
-        // A non-float text under !!float falls back to 0.0 rather than erroring.
+        // A non-conforming value under an explicit core tag is kept as a string,
+        // not coerced to a wrong-but-valid 0/0.0/false/null.
+        for (value, tag) in [
+            ("nope", "!!int"),
+            ("nope", "!!float"),
+            ("maybe", "!!bool"),
+            ("anything", "!!null"),
+        ] {
+            assert_eq!(
+                r.resolve(value, ScalarStyle::Plain, Some(tag)),
+                ResolvedValue::String(value.to_owned()),
+                "{tag} {value:?}"
+            );
+        }
+        // A conforming integer too large for i64 still resolves as an integer.
         assert_eq!(
-            r.resolve("nope", ScalarStyle::Plain, Some("!!float")),
-            ResolvedValue::Float(0.0)
-        );
-        // A non-int text under !!int falls back to 0.
-        assert_eq!(
-            r.resolve("nope", ScalarStyle::Plain, Some("!!int")),
-            ResolvedValue::Int(0)
+            r.resolve("99999999999999999999", ScalarStyle::Plain, Some("!!int")),
+            ResolvedValue::BigInt("99999999999999999999".to_owned())
         );
     }
 }

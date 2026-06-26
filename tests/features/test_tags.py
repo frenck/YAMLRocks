@@ -56,6 +56,21 @@ def test_standard_tags_not_treated_as_custom():
     assert yamlrocks.loads(b"x: !!str 42") == {"x": "42"}
 
 
+def test_explicit_core_tag_with_nonconforming_content_stays_a_string():
+    """A core tag whose content does not match the type is kept as a string, not
+    coerced to a wrong-but-valid value (`!!int nope` used to become 0)."""
+    assert yamlrocks.loads(b"x: !!int nope") == {"x": "nope"}
+    assert yamlrocks.loads(b"x: !!float nope") == {"x": "nope"}
+    assert yamlrocks.loads(b"x: !!bool maybe") == {"x": "maybe"}
+    assert yamlrocks.loads(b"x: !!null text") == {"x": "text"}
+    # A conforming value still resolves to its type (including a big int).
+    assert yamlrocks.loads(b"x: !!int 42") == {"x": 42}
+    assert yamlrocks.loads(b"x: !!null") == {"x": None}
+    assert yamlrocks.loads(b"x: !!int 99999999999999999999") == {
+        "x": 99999999999999999999
+    }
+
+
 def test_nested_custom_tags():
     """tag_handler is applied to custom tags nested within other custom tags."""
     result = yamlrocks.loads(

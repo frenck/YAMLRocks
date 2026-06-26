@@ -212,21 +212,40 @@ fn try_parse_float_11(value: &str) -> Option<f64> {
 }
 
 fn parse_sexagesimal_float(value: &str) -> Option<f64> {
-    let parts: Vec<&str> = value.split(':').collect();
-    if parts.is_empty() {
+    // The sign applies to the whole magnitude, not just the high-order segment
+    // (`-1:30.5` is `-90.5`, not `-29.5`). Strip it first and reapply at the end,
+    // mirroring the integer path; the callers pass the signed string in as-is.
+    let (negative, rest) = super::split_sign(value)?;
+    let parts: Vec<&str> = rest.split(':').collect();
+    // A sexagesimal value has at least one colon; the caller only routes here
+    // when one is present, but guard anyway.
+    if parts.len() < 2 {
         return None;
     }
 
+    let last = parts.len() - 1;
     let mut result: f64 = 0.0;
     for (i, part) in parts.iter().enumerate() {
-        let n: f64 = part.parse().ok()?;
-        if i == 0 {
-            result = n;
-        } else {
-            result = result * 60.0 + n;
+        // Only the final segment may carry a fraction (`1:30.5`). A dot in any
+        // earlier segment (`1.5:30`) is not a valid sexagesimal value; PyYAML's
+        // resolver rejects it, so it stays a string here too.
+        if i != last && part.contains('.') {
+            return None;
         }
+        // Every segment after the first is a base-60 digit: its integer part
+        // must be in 0..60 (`1:70.5` is invalid). The first (high-order) segment
+        // is unbounded (`90:00.0`). This mirrors `parse_sexagesimal_int`, which
+        // already validated the no-fraction form.
+        if i > 0 {
+            match part.split('.').next().unwrap_or("").parse::<u32>() {
+                Ok(n) if n < 60 => {}
+                _ => return None,
+            }
+        }
+        let n: f64 = part.parse().ok()?;
+        result = result * 60.0 + n;
     }
-    Some(result)
+    Some(if negative { -result } else { result })
 }
 
 fn classify_tagged_11(value: &str, tag: &str, pyyaml_compat: bool) -> ScalarKind {
@@ -413,6 +432,19 @@ mod tests {
         // with an exponent but no dot (`1:3e2`) is not sexagesimal and must stay
         // a string, not be read as 1*60 + 300.
         assert!(matches!(plain("1:3e2"), ResolvedValue::String(_)));
+        // The high-order segment is unbounded; later segments are base-60 digits.
+        assert_eq!(plain("90:00.0"), ResolvedValue::Float(5400.0));
+        // The sign applies to the whole magnitude, not just the first segment.
+        assert_eq!(plain("-1:30.5"), ResolvedValue::Float(-90.5));
+        assert_eq!(plain("+1:30.5"), ResolvedValue::Float(90.5));
+        // A base-60 digit out of range, a fraction on a non-final segment, or a
+        // fractional first segment are all invalid and stay strings.
+        for value in ["1:70.5", "1:60.0", "1.5:30", "1:5.5:30"] {
+            assert!(
+                matches!(plain(value), ResolvedValue::String(_)),
+                "{value:?}"
+            );
+        }
     }
 
     #[test]

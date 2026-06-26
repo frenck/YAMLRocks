@@ -267,6 +267,33 @@ def test_dumps_verbatim_tag_with_commas_is_allowed():
     assert out == b"!<tag:example.com,2024:foo> v\n"
 
 
+def test_dumps_shorthand_tag_with_flow_indicator_is_rejected():
+    """A flow indicator terminates a shorthand tag scan, so it would corrupt.
+
+    `YAMLRocksTag("!foo,bar", "v")` would emit `!foo,bar v`, reloading as the
+    tag `!foo` on the value `,bar v` (which is itself malformed).
+    """
+    import pytest
+
+    for bad in ["!foo,bar", "!foo]bar", "!foo}bar", "!!str,x"]:
+        with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="flow indicator"):
+            yamlrocks.dumps(yamlrocks.YAMLRocksTag(bad, "v"))
+
+
+def test_dumps_shorthand_tag_with_bracket_or_brace_is_allowed():
+    """`[`/`{` do not terminate a tag scan, so they stay part of the tag."""
+    assert yamlrocks.dumps(yamlrocks.YAMLRocksTag("!foo[bar", "v")) == b"!foo[bar v\n"
+
+
+def test_dumps_malformed_verbatim_tag_is_rejected():
+    """A verbatim tag must be `!<...>` with non-empty content and a closing `>`."""
+    import pytest
+
+    for bad in ["!<>", "!<unterminated", "!<tag:foo"]:
+        with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="verbatim tag"):
+            yamlrocks.dumps(yamlrocks.YAMLRocksTag(bad, "v"))
+
+
 def test_to_json_drops_tag():
     """to_json emits the inner value and drops the tag."""
     data = yamlrocks.loads(b"x: !input foo\n", option=yamlrocks.OPT_PASSTHROUGH_TAG)

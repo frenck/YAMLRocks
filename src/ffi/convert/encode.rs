@@ -158,10 +158,15 @@ fn python_to_value_inner(
 }
 
 /// Reject a tag that cannot be emitted as a single tag token. A tag is written
-/// verbatim before its value (`!tag value`), so a tag containing whitespace or a
-/// control character (or one not starting with `!`) would split on re-parse and
-/// silently corrupt the document: `YAMLRocksTag("!bad tag", "v")` would emit
-/// `!bad tag v`, reloading as the tag `!bad` on the value `"tag v"`.
+/// verbatim before its value (`!tag value`), so one that the scanner would read
+/// only part of splits on re-parse and silently corrupts the document.
+///
+/// Whitespace and control characters are invalid in any tag. For a shorthand tag
+/// (`!foo`, `!!foo`, `!handle!foo`) a flow indicator `,`/`]`/`}` also terminates
+/// the scan, so `YAMLRocksTag("!foo,bar", "v")` would emit `!foo,bar v` and
+/// reload as the tag `!foo` on a (broken) value `,bar v`. A verbatim tag
+/// (`!<...>`) is delimited by its closing `>` and may carry such characters
+/// (URI commas), so it is exempt from the flow-indicator check but must close.
 fn validate_tag(tag: &str) -> PyResult<()> {
     if tag.is_empty() || !tag.starts_with('!') {
         return Err(errors::encode_error(format!(
@@ -171,6 +176,19 @@ fn validate_tag(tag: &str) -> PyResult<()> {
     if let Some(bad) = tag.chars().find(|c| c.is_whitespace() || c.is_control()) {
         return Err(errors::encode_error(format!(
             "invalid tag {tag:?}: a tag cannot contain whitespace or control characters (found {bad:?})"
+        )));
+    }
+    if let Some(verbatim) = tag.strip_prefix("!<") {
+        // A verbatim tag is `!<` + non-empty URI + `>`; the scanner rejects an
+        // unterminated or empty one on read, so refuse to emit one here too.
+        if verbatim.strip_suffix('>').map_or(true, str::is_empty) {
+            return Err(errors::encode_error(format!(
+                "invalid tag {tag:?}: a verbatim tag must be '!<...>' with non-empty content"
+            )));
+        }
+    } else if let Some(bad) = tag.chars().find(|c| matches!(c, ',' | ']' | '}')) {
+        return Err(errors::encode_error(format!(
+            "invalid tag {tag:?}: a shorthand tag cannot contain a flow indicator (found {bad:?})"
         )));
     }
     Ok(())

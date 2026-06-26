@@ -7,8 +7,10 @@
 //! A practical subset of JSON Schema (draft 7-ish) is supported: `type`,
 //! `enum`, `const`, `properties`, `required`, `additionalProperties` (boolean),
 //! `items`, `minimum`/`maximum`, `exclusiveMinimum`/`exclusiveMaximum`,
-//! `minLength`/`maxLength`, `minItems`/`maxItems`, and the `allOf`/`anyOf`/
-//! `oneOf`/`not` combinators. Unknown keywords are ignored.
+//! `minLength`/`maxLength`, `minItems`/`maxItems`, the `allOf`/`anyOf`/`oneOf`/
+//! `not` combinators, and `$ref` to local `#/...` pointers (including
+//! `#/$defs/...`). Other keywords are ignored; an unresolvable `$ref` is an
+//! error rather than silently permissive.
 
 mod directive;
 
@@ -32,6 +34,34 @@ const MAX_ALIAS_DEPTH: usize = 100;
 /// validator cannot be turned into an uncatchable process abort.
 const MAX_ALIAS_NODES: usize = 1_000_000;
 
+/// Maximum chain of `$ref` follows before validation gives up, fast-failing a
+/// cyclic reference (`#/$defs/a` whose schema is `{"$ref": "#/$defs/a"}`).
+/// Counts only consecutive `$ref` hops at one node; descending into a child node
+/// resets it, so a legitimately deep document with many refs is not truncated.
+const MAX_REF_DEPTH: usize = 128;
+
+/// Validation context threaded through the recursive walk: the root schema (for
+/// resolving `#/...` `$ref` pointers, which are document-relative), the scalar
+/// schema to resolve leaves with, and the current `$ref` follow depth. Cheap to
+/// copy (a reference plus two scalars).
+#[derive(Clone, Copy)]
+struct Ctx<'a, 'v> {
+    root: &'a Value<'v>,
+    yaml_11: bool,
+    ref_depth: usize,
+}
+
+impl<'a, 'v> Ctx<'a, 'v> {
+    /// Context for validating a child node: the `$ref` depth resets because
+    /// descending the document is finite progress, not a reference cycle.
+    fn child(self) -> Self {
+        Self {
+            ref_depth: 0,
+            ..self
+        }
+    }
+}
+
 /// A single schema validation failure.
 pub struct SchemaError {
     pub message: String,
@@ -54,7 +84,12 @@ pub fn validate(node: &YamlNode, schema: &Value, yaml_11: bool) -> Vec<SchemaErr
     let resolved = expand_aliases(node, &anchors, 0, &mut budget);
 
     let mut errors = Vec::new();
-    validate_node(&resolved, schema, "$", yaml_11, &mut errors);
+    let ctx = Ctx {
+        root: schema,
+        yaml_11,
+        ref_depth: 0,
+    };
+    validate_node(&resolved, schema, "$", ctx, &mut errors);
     errors
 }
 
@@ -153,20 +188,20 @@ fn validate_node(
     node: &YamlNode,
     schema: &Value,
     path: &str,
-    yaml_11: bool,
+    ctx: Ctx<'_, '_>,
     errors: &mut Vec<SchemaError>,
 ) {
     // Grow the native stack on demand so validating a deeply nested document
     // cannot overflow a small thread stack; the recursion re-enters here per
     // level. See [`crate::stack`].
-    crate::stack::guard(|| validate_node_inner(node, schema, path, yaml_11, errors))
+    crate::stack::guard(|| validate_node_inner(node, schema, path, ctx, errors))
 }
 
 fn validate_node_inner(
     node: &YamlNode,
     schema: &Value,
     path: &str,
-    yaml_11: bool,
+    ctx: Ctx<'_, '_>,
     errors: &mut Vec<SchemaError>,
 ) {
     // A boolean schema: `true` accepts anything, `false` rejects everything.
@@ -181,7 +216,37 @@ fn validate_node_inner(
         return; // non-object schemas other than booleans are treated as permissive
     };
 
-    let resolved = resolve(node, yaml_11);
+    // `$ref`: resolve the `#/...` pointer against the root schema and validate
+    // against the target. Draft-07 semantics: a `$ref` ignores any sibling
+    // keywords, so this returns afterward. An unresolvable reference is an error
+    // (not silently permissive), and a `$ref` cycle is cut by the depth bound.
+    if let Some(Value::String(reference)) = get(schema, "$ref") {
+        if ctx.ref_depth >= MAX_REF_DEPTH {
+            errors.push(err(
+                node,
+                path,
+                "schema $ref nesting too deep (cyclic reference?)",
+            ));
+            return;
+        }
+        match resolve_ref(ctx.root, reference) {
+            Some(target) => {
+                let next = Ctx {
+                    ref_depth: ctx.ref_depth + 1,
+                    ..ctx
+                };
+                validate_node(node, target, path, next, errors);
+            }
+            None => errors.push(err(
+                node,
+                path,
+                &format!("unresolvable schema $ref '{reference}'"),
+            )),
+        }
+        return;
+    }
+
+    let resolved = resolve(node, ctx.yaml_11);
 
     if let Some(type_schema) = get(schema, "type") {
         check_type(node, &resolved, type_schema, path, errors);
@@ -194,7 +259,7 @@ fn validate_node_inner(
     // only by `MAX_DEPTH` over untrusted input, so a recursive teardown could
     // overflow a small thread stack and, under `panic = "abort"`, abort.
     if let Some(Value::Sequence(options)) = get(schema, "enum") {
-        let value = resolve_deep(node, yaml_11);
+        let value = resolve_deep(node, ctx.yaml_11);
         if !options.iter().any(|opt| value_eq(opt, &value)) {
             errors.push(err(
                 node,
@@ -205,7 +270,7 @@ fn validate_node_inner(
         crate::stack::drop_value_tree(value);
     }
     if let Some(const_schema) = get(schema, "const") {
-        let value = resolve_deep(node, yaml_11);
+        let value = resolve_deep(node, ctx.yaml_11);
         if !value_eq(const_schema, &value) {
             errors.push(err(node, path, "value does not equal the required const"));
         }
@@ -214,9 +279,9 @@ fn validate_node_inner(
 
     check_numeric(node, &resolved, schema, path, errors);
     check_string(node, &resolved, schema, path, errors);
-    check_object(node, schema, path, yaml_11, errors);
-    check_array(node, schema, path, yaml_11, errors);
-    check_combinators(node, schema, path, yaml_11, errors);
+    check_object(node, schema, path, ctx, errors);
+    check_array(node, schema, path, ctx, errors);
+    check_combinators(node, schema, path, ctx, errors);
 }
 
 fn check_type(
@@ -365,7 +430,7 @@ fn check_object(
     node: &YamlNode,
     schema: &Value,
     path: &str,
-    yaml_11: bool,
+    ctx: Ctx<'_, '_>,
     errors: &mut Vec<SchemaError>,
 ) {
     let YamlNodeKind::Mapping(pairs) = &node.kind else {
@@ -400,7 +465,7 @@ fn check_object(
         if let Some(props) = properties {
             if let Some(subschema) = get(props, &key_name) {
                 matched = true;
-                validate_node(val, subschema, &child_path, yaml_11, errors);
+                validate_node(val, subschema, &child_path, ctx.child(), errors);
             }
         }
         if !matched {
@@ -411,7 +476,7 @@ fn check_object(
                     &format!("additional property '{key_name}' is not allowed"),
                 )),
                 Some(sub @ Value::Mapping(_)) => {
-                    validate_node(val, sub, &child_path, yaml_11, errors)
+                    validate_node(val, sub, &child_path, ctx.child(), errors)
                 }
                 _ => {}
             }
@@ -423,7 +488,7 @@ fn check_array(
     node: &YamlNode,
     schema: &Value,
     path: &str,
-    yaml_11: bool,
+    ctx: Ctx<'_, '_>,
     errors: &mut Vec<SchemaError>,
 ) {
     let YamlNodeKind::Sequence(items) = &node.kind else {
@@ -452,7 +517,7 @@ fn check_array(
     if let Some(items_schema) = get(schema, "items") {
         for (i, item) in items.iter().enumerate() {
             let child_path = format!("{path}[{i}]");
-            validate_node(item, items_schema, &child_path, yaml_11, errors);
+            validate_node(item, items_schema, &child_path, ctx.child(), errors);
         }
     }
 }
@@ -461,18 +526,23 @@ fn check_combinators(
     node: &YamlNode,
     schema: &Value,
     path: &str,
-    yaml_11: bool,
+    ctx: Ctx<'_, '_>,
     errors: &mut Vec<SchemaError>,
 ) {
+    // Combinator sub-schemas apply to the *same* node, so `ctx` passes through
+    // unchanged: the `$ref` depth is not reset (a sub-schema that is itself a
+    // `$ref` still counts toward the cycle bound) and not incremented here (the
+    // increment happens in `validate_node_inner` when a `$ref` is actually
+    // followed).
     if let Some(Value::Sequence(subs)) = get(schema, "allOf") {
         for sub in subs {
-            validate_node(node, sub, path, yaml_11, errors);
+            validate_node(node, sub, path, ctx, errors);
         }
     }
     if let Some(Value::Sequence(subs)) = get(schema, "anyOf") {
         let any = subs.iter().any(|sub| {
             let mut tmp = Vec::new();
-            validate_node(node, sub, path, yaml_11, &mut tmp);
+            validate_node(node, sub, path, ctx, &mut tmp);
             tmp.is_empty()
         });
         if !any {
@@ -488,7 +558,7 @@ fn check_combinators(
             .iter()
             .filter(|sub| {
                 let mut tmp = Vec::new();
-                validate_node(node, sub, path, yaml_11, &mut tmp);
+                validate_node(node, sub, path, ctx, &mut tmp);
                 tmp.is_empty()
             })
             .count();
@@ -502,7 +572,7 @@ fn check_combinators(
     }
     if let Some(sub) = get(schema, "not") {
         let mut tmp = Vec::new();
-        validate_node(node, sub, path, yaml_11, &mut tmp);
+        validate_node(node, sub, path, ctx, &mut tmp);
         if tmp.is_empty() {
             errors.push(err(node, path, "value must not match the 'not' schema"));
         }
@@ -557,6 +627,33 @@ fn resolve_deep(node: &YamlNode, yaml_11: bool) -> Value<'static> {
         ),
         _ => resolve(node, yaml_11),
     })
+}
+
+/// Resolve a JSON Schema `$ref` against the root schema. Only local pointers are
+/// supported: a `#` fragment naming a path within the same document (the common
+/// `#/$defs/name` / `#/definitions/name` form, or any deeper path). Returns the
+/// referenced subschema, or `None` for a remote reference (one not starting with
+/// `#`, which would need a network or external resolver) or a pointer that does
+/// not exist. `None` is reported by the caller as an error, never silently
+/// treated as a permissive schema.
+fn resolve_ref<'a, 'v>(root: &'a Value<'v>, reference: &str) -> Option<&'a Value<'v>> {
+    let pointer = reference.strip_prefix('#')?;
+    if pointer.is_empty() {
+        return Some(root); // `#` is the whole schema
+    }
+    // A non-empty fragment must be a JSON Pointer (`#/...`).
+    let pointer = pointer.strip_prefix('/')?;
+    let mut current = root;
+    for raw in pointer.split('/') {
+        // JSON Pointer unescaping: `~1` -> `/`, then `~0` -> `~` (RFC 6901).
+        let token = raw.replace("~1", "/").replace("~0", "~");
+        current = match current {
+            Value::Mapping(_) => get(current, &token)?,
+            Value::Sequence(items) => items.get(token.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    Some(current)
 }
 
 /// Look up a key in an object schema.

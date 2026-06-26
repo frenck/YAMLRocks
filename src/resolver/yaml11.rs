@@ -82,6 +82,17 @@ fn classify_plain_11(value: &str, pyyaml_compat: bool) -> ScalarKind {
         return ScalarKind::Str;
     }
 
+    // PyYAML's resolver does not treat a leading underscore as numeric (`_5` and
+    // `_1.5` are strings); only an interior separator (`1_000`) is allowed. The
+    // lenient default 1.1 reading accepts the leading form, so this only narrows
+    // PyYAML-compat. A sign may precede the underscore (`-_5`).
+    if pyyaml_compat {
+        let after_sign = value.strip_prefix(['+', '-']).unwrap_or(value);
+        if after_sign.starts_with('_') {
+            return ScalarKind::Str;
+        }
+    }
+
     // Integer
     if let Some(int) = try_parse_int_11(value) {
         return ScalarKind::Int(int);
@@ -94,7 +105,7 @@ fn classify_plain_11(value: &str, pyyaml_compat: bool) -> ScalarKind {
     }
 
     // Float
-    if let Some(float) = try_parse_float_11(value) {
+    if let Some(float) = try_parse_float_11(value, pyyaml_compat) {
         return ScalarKind::Float(float);
     }
 
@@ -211,7 +222,7 @@ fn parse_sexagesimal_int(value: &str) -> Option<i64> {
     Some(result)
 }
 
-fn try_parse_float_11(value: &str) -> Option<f64> {
+fn try_parse_float_11(value: &str, pyyaml_compat: bool) -> Option<f64> {
     if let Some(f) = super::parse_special_float(value) {
         return Some(f);
     }
@@ -229,7 +240,27 @@ fn try_parse_float_11(value: &str) -> Option<f64> {
         return parse_sexagesimal_float(clean);
     }
 
+    // PyYAML's resolver is stricter than the lenient 1.1 reading: a base-10 float
+    // must carry a `.`, and an exponent must have an explicit sign. So `1e3` and
+    // `1.0e3` are plain strings under PyYAML, while `1.5e+3` is a float. The
+    // default (non-compat) 1.1 mode keeps the lenient reading.
+    if pyyaml_compat && !pyyaml_float_shape(clean) {
+        return None;
+    }
+
     clean.parse::<f64>().ok()
+}
+
+/// Whether `value` matches PyYAML's base-10 float shape: it contains a `.`, and
+/// any `e`/`E` exponent is immediately followed by an explicit `+`/`-` sign.
+fn pyyaml_float_shape(value: &str) -> bool {
+    if !value.contains('.') {
+        return false;
+    }
+    match value.bytes().position(|b| b == b'e' || b == b'E') {
+        Some(pos) => matches!(value.as_bytes().get(pos + 1), Some(b'+' | b'-')),
+        None => true,
+    }
 }
 
 fn parse_sexagesimal_float(value: &str) -> Option<f64> {
@@ -365,6 +396,24 @@ mod tests {
         assert_eq!(plain_pyyaml("on"), ResolvedValue::Bool(true));
         assert_eq!(plain_pyyaml("off"), ResolvedValue::Bool(false));
         assert_eq!(plain_pyyaml("no"), ResolvedValue::Bool(false));
+    }
+
+    #[test]
+    fn pyyaml_compat_narrows_floats_and_leading_underscore() {
+        // PyYAML keeps `1e3`/`1.0e3` (no dot, or unsigned exponent) and a
+        // leading-underscore value as strings; the lenient default 1.1 reading
+        // (`plain`) parses them as numbers.
+        for value in ["1e3", "1.0e3", "_5", "_1.5"] {
+            assert!(
+                matches!(plain_pyyaml(value), ResolvedValue::String(_)),
+                "{value:?}"
+            );
+        }
+        assert_eq!(plain_pyyaml("1.5e+3"), ResolvedValue::Float(1500.0));
+        assert_eq!(plain_pyyaml("5_"), ResolvedValue::Int(5));
+        // The default 1.1 mode stays lenient.
+        assert_eq!(plain("1e3"), ResolvedValue::Float(1000.0));
+        assert_eq!(plain("_5"), ResolvedValue::Int(5));
     }
 
     #[test]

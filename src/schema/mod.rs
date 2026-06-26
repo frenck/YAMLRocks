@@ -35,25 +35,35 @@ const MAX_ALIAS_DEPTH: usize = 100;
 const MAX_ALIAS_NODES: usize = 1_000_000;
 
 /// Maximum chain of `$ref` follows before validation gives up, fast-failing a
-/// cyclic reference (`#/$defs/a` whose schema is `{"$ref": "#/$defs/a"}`).
+/// straight cyclic reference (`#/$defs/a` whose schema is `{"$ref": "#/$defs/a"}`).
 /// Counts only consecutive `$ref` hops at one node; descending into a child node
 /// resets it, so a legitimately deep document with many refs is not truncated.
 const MAX_REF_DEPTH: usize = 128;
 
+/// Total `$ref` follows allowed across the whole validation, shared through the
+/// walk. The per-chain [`MAX_REF_DEPTH`] cannot catch a *branching* cycle (a
+/// `$ref` reached twice from one node through `allOf`, which doubles the work at
+/// every level for `2^depth` total calls); this budget does, mirroring the
+/// alias-expansion [`MAX_ALIAS_NODES`] bound. Set far above any real schema.
+const MAX_REF_FOLLOWS: usize = 100_000;
+
 /// Validation context threaded through the recursive walk: the root schema (for
 /// resolving `#/...` `$ref` pointers, which are document-relative), the scalar
-/// schema to resolve leaves with, and the current `$ref` follow depth. Cheap to
-/// copy (a reference plus two scalars).
+/// schema to resolve leaves with, the current `$ref` chain depth, and a shared
+/// total-follow budget. Cheap to copy (references plus two scalars); the budget
+/// is a shared cell so every branch of the walk draws from one pool.
 #[derive(Clone, Copy)]
 struct Ctx<'a, 'v> {
     root: &'a Value<'v>,
     yaml_11: bool,
     ref_depth: usize,
+    ref_budget: &'a std::cell::Cell<usize>,
 }
 
 impl<'a, 'v> Ctx<'a, 'v> {
-    /// Context for validating a child node: the `$ref` depth resets because
-    /// descending the document is finite progress, not a reference cycle.
+    /// Context for validating a child node: the `$ref` chain depth resets because
+    /// descending the document is finite progress, not a reference cycle. The
+    /// shared follow budget carries over (it bounds total work, not depth).
     fn child(self) -> Self {
         Self {
             ref_depth: 0,
@@ -84,10 +94,12 @@ pub fn validate(node: &YamlNode, schema: &Value, yaml_11: bool) -> Vec<SchemaErr
     let resolved = expand_aliases(node, &anchors, 0, &mut budget);
 
     let mut errors = Vec::new();
+    let ref_budget = std::cell::Cell::new(MAX_REF_FOLLOWS);
     let ctx = Ctx {
         root: schema,
         yaml_11,
         ref_depth: 0,
+        ref_budget: &ref_budget,
     };
     validate_node(&resolved, schema, "$", ctx, &mut errors);
     errors
@@ -219,9 +231,11 @@ fn validate_node_inner(
     // `$ref`: resolve the `#/...` pointer against the root schema and validate
     // against the target. Draft-07 semantics: a `$ref` ignores any sibling
     // keywords, so this returns afterward. An unresolvable reference is an error
-    // (not silently permissive), and a `$ref` cycle is cut by the depth bound.
+    // (not silently permissive). A straight `$ref` cycle is cut by the per-chain
+    // depth bound; a cycle that branches through a combinator is cut by the
+    // shared total-follow budget, which a depth cap alone cannot bound.
     if let Some(Value::String(reference)) = get(schema, "$ref") {
-        if ctx.ref_depth >= MAX_REF_DEPTH {
+        if ctx.ref_depth >= MAX_REF_DEPTH || ctx.ref_budget.get() == 0 {
             errors.push(err(
                 node,
                 path,
@@ -229,6 +243,7 @@ fn validate_node_inner(
             ));
             return;
         }
+        ctx.ref_budget.set(ctx.ref_budget.get() - 1);
         match resolve_ref(ctx.root, reference) {
             Some(target) => {
                 let next = Ctx {

@@ -157,6 +157,19 @@ def test_cyclic_ref_is_bounded():
         yamlrocks.loads(b"1", schema=schema)
 
 
+def test_branching_ref_cycle_is_bounded():
+    """A `$ref` cycle that branches through a combinator is bounded by a budget.
+
+    `allOf` reaches the same `$ref` twice, doubling the work at each level; a
+    per-chain depth cap alone would allow ~2^depth calls (an effective hang). A
+    shared total-follow budget cuts it.
+    """
+    inner = {"allOf": [{"$ref": "#/$defs/a"}, {"$ref": "#/$defs/a"}]}
+    schema = {"$ref": "#/$defs/a", "$defs": {"a": inner}}
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="nesting too deep"):
+        yamlrocks.loads(b"1", schema=schema)
+
+
 def test_deeply_nested_value_under_enum_does_not_overflow():
     """A deep document under a container enum/const tears down without crashing.
 

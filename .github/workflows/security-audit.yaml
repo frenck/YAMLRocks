@@ -10,7 +10,9 @@ on:
     - cron: "0 6 * * 1"
   pull_request:
     paths:
+      - "Cargo.toml"
       - "Cargo.lock"
+      - "pyproject.toml"
       - "uv.lock"
       - "docs/package-lock.json"
       - ".github/workflows/security-audit.yaml"

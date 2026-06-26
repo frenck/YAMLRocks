@@ -62,7 +62,7 @@ jobs:
       - name: 🏗 Install dependencies
         run: uv sync --locked --no-install-project --no-default-groups --group build --group test
       - name: 🏗 Build and install yamlrocks
-        run: uv run --no-sync maturin develop --release
+        run: uv run --no-sync maturin develop --release --locked
       - name: 🚀 Run the real-world config suite
         run: uv run --no-sync pytest tests/realworld -m realworld -q
 
@@ -79,4 +79,4 @@ jobs:
       - name: 🚀 Run cargo test
         # The pure engine (scanner, parser, resolver, decode, encode, ...) has
         # direct unit tests; the Python suite covers the PyO3 boundary on top.
-        run: cargo test --lib
+        run: cargo test --locked --lib

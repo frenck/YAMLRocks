@@ -34,7 +34,7 @@ jobs:
       - name: 🏗 Install dependencies
         run: uv sync --locked --no-install-project --no-default-groups --group build
       - name: 🏗 Build and install yamlrocks
-        run: uv run --no-sync maturin develop --release
+        run: uv run --no-sync maturin develop --release --locked
       - name: 🚀 Run and verify every documented example
         run: uv run --no-sync python docs/verify_examples.py
 

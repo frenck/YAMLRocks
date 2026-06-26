@@ -80,7 +80,7 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: x86_64
-          args: --release --out dist --interpreter ${{ matrix.python }}
+          args: --release --locked --out dist --interpreter ${{ matrix.python }}
           manylinux: auto
       - name: 🧪 Test the built wheel
         shell: bash
@@ -135,7 +135,7 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --interpreter ${{ matrix.python }}
+          args: --release --locked --out dist --interpreter ${{ matrix.python }}
       - name: 🧪 Test the built wheel
         shell: bash
         run: bash .github/scripts/test_wheel.sh
@@ -187,7 +187,7 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --interpreter ${{ matrix.python }}
+          args: --release --locked --out dist --interpreter ${{ matrix.python }}
       - name: 🧪 Test the built wheel
         shell: bash
         run: bash .github/scripts/test_wheel.sh
@@ -235,7 +235,7 @@ jobs:
           # build-only (shipped, not run): a free-threaded interpreter is not
           # readily available in the emulated container, and free-threaded runtime
           # behaviour is already exercised natively on x86_64.
-          args: "--release --out dist --interpreter '3.12 3.13 3.14${{ matrix.target == 'aarch64' && ' 3.14t' || '' }}'"
+          args: "--release --locked --out dist --interpreter '3.12 3.13 3.14${{ matrix.target == 'aarch64' && ' 3.14t' || '' }}'"
           manylinux: auto
       - name: 🧪 Test the built wheel under emulation
         # aarch64/armv7/ppc64le install the manylinux wheel and run the full
@@ -339,7 +339,7 @@ jobs:
           # musl wheels are build-only (shipped, not run): there is no
           # free-threaded musl interpreter image to test them in, and
           # free-threaded runtime behaviour is exercised natively on x86_64.
-          args: "--release --out dist --interpreter '3.12 3.13 3.14${{ (matrix.target == 'x86_64' || matrix.target == 'aarch64') && ' 3.14t' || '' }}'"
+          args: "--release --locked --out dist --interpreter '3.12 3.13 3.14${{ (matrix.target == 'x86_64' || matrix.target == 'aarch64') && ' 3.14t' || '' }}'"
           manylinux: musllinux_1_2
       - name: 🧪 Test the built wheel on Alpine (musl, native x86_64)
         # Native musl runtime, no emulation. Tests the image's CPython (one

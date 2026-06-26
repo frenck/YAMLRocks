@@ -267,6 +267,21 @@ def test_dumps_verbatim_tag_with_commas_is_allowed():
     assert out == b"!<tag:example.com,2024:foo> v\n"
 
 
+def test_dumps_null_value_before_tagged_key_stays_reloadable():
+    """An empty-null value before a tagged key emits an explicit null.
+
+    Otherwise the tagged key's `!tag` on the next line is read as the previous
+    (empty) value's node property (`a:\\n!t k: 1`), which fails to reload.
+    """
+    data = {"a": None, yamlrocks.YAMLRocksTag("!foo", "k"): 2}
+    out = yamlrocks.dumps(data)
+    assert out == b"a: null\n!foo k: 2\n"
+    # It reloads cleanly (the tagged key is dropped by default, leaving its value).
+    assert yamlrocks.loads(out) == {"a": None, "k": 2}
+    # A null value before an untagged key still uses the compact empty form.
+    assert yamlrocks.dumps({"a": None, "b": 2}) == b"a:\nb: 2\n"
+
+
 def test_dumps_shorthand_tag_with_flow_indicator_is_rejected():
     """A flow indicator terminates a shorthand tag scan, so it would corrupt.
 

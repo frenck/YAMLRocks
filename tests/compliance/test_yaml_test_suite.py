@@ -170,8 +170,14 @@ def test_valid_case_round_trips_byte_identical(case_id):
 
 @pytest.mark.parametrize("case_id", ERROR_IDS)
 def test_error_case_is_rejected(case_id):
-    """Every case the suite marks invalid is rejected on load."""
-    with pytest.raises((yamlrocks.YAMLRocksDecodeError, ValueError, TypeError)):
+    """Every case the suite marks invalid is rejected with a proper decode error.
+
+    The rejection must be a ``YAMLRocksDecodeError`` (the scanner/parser/resolver
+    refusing the input), not an incidental ``ValueError``/``TypeError`` from
+    conversion or option handling, so a regression that turns a malformed
+    document into the wrong kind of failure is caught rather than passing.
+    """
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError):
         yamlrocks.loads(case_bytes(case_id))
 
 

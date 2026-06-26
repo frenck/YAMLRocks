@@ -129,14 +129,17 @@ def test_nested_secret_in_secrets_file_is_rejected(tmp_path):
 
 
 def test_bad_logger_value_logs_but_does_not_fail(tmp_path, caplog):
-    """A non-debug logger value in secrets.yaml logs a warning and continues."""
-    (tmp_path / "secrets.yaml").write_text("logger: info\nfoo: bar\n")
+    """A non-debug logger value in secrets.yaml logs a warning and continues,
+    without echoing the offending value (secrets.yaml content) into the log."""
+    (tmp_path / "secrets.yaml").write_text("logger: s3cr3t-leak\nfoo: bar\n")
     with caplog.at_level("WARNING", logger="yamlrocks"):
         data = yamlrocks.loads(
             b"x: !secret foo", option=SECRETS, include_dir=str(tmp_path)
         )
     assert data == {"x": "bar"}
     assert any("logger: debug" in r.message for r in caplog.records)
+    # The bad value lives in secrets.yaml, so it must never reach the log.
+    assert not any("s3cr3t-leak" in r.message for r in caplog.records)
 
 
 def test_good_logger_value_is_silent(tmp_path, caplog):

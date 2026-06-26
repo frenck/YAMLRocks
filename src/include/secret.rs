@@ -136,13 +136,18 @@ impl IncludeResolver {
                                 // logger's level), so it is never a usable secret.
                                 // Its only valid value is `debug`; anything else
                                 // is a non-fatal misconfiguration worth surfacing.
+                                // The offending value is deliberately not echoed:
+                                // it is content from `secrets.yaml`, and the warning
+                                // goes to logs, which may be less protected than the
+                                // secrets file itself.
                                 if key_name == "logger" {
                                     let value = scalar_text(val).unwrap_or_default();
                                     if !value.eq_ignore_ascii_case("debug") {
-                                        self.warn(format!(
-                                            "secrets.yaml: 'logger: debug' expected, but \
-                                             'logger: {value}' found"
-                                        ));
+                                        self.warn(
+                                            "secrets.yaml: 'logger: debug' expected, but a \
+                                             different value was found"
+                                                .to_owned(),
+                                        );
                                     }
                                 } else {
                                     map.insert(key_name, val.clone());

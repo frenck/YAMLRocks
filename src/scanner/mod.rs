@@ -23,9 +23,10 @@ use std::collections::VecDeque;
 pub use comment::Comment;
 pub use token::{Span, Token, TokenKind};
 
-use char_traits::{
-    is_anchor_char, is_break, is_flow_indicator, is_whitespace_or_break, is_whitespace_or_flow,
-};
+use char_traits::{is_break, is_flow_indicator, is_whitespace_or_break, is_whitespace_or_flow};
+// Re-exported for the round-trip anchor setter, which validates an edited anchor
+// name against the same rule the scanner uses to read one.
+pub(crate) use char_traits::is_anchor_char;
 use reader::Reader;
 
 /// Maximum flow-collection nesting the scanner will open before rejecting the

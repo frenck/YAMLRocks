@@ -39,7 +39,7 @@ pub(super) fn is_whitespace_or_flow(ch: char) -> bool {
 /// A character that may appear in an anchor or alias name: anything that is not a
 /// blank, a line break, a flow indicator, or a NUL.
 #[inline]
-pub(super) fn is_anchor_char(ch: char) -> bool {
+pub(crate) fn is_anchor_char(ch: char) -> bool {
     !(is_whitespace_or_flow(ch) || ch == '\0')
 }
 

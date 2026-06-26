@@ -229,6 +229,44 @@ def test_dumps_tags_callback_bad_return_raises():
         yamlrocks.dumps({"x": Marker()}, tags={Marker: lambda o: 123})
 
 
+def test_dumps_tag_with_whitespace_is_rejected():
+    """A tag containing whitespace would split on reload, so it is rejected.
+
+    `YAMLRocksTag("!bad tag", "v")` would emit `!bad tag v`, reloading as the tag
+    `!bad` on the value `"tag v"`; the emitter refuses rather than corrupt.
+    """
+    import pytest
+
+    for bad in ["!bad tag", "!x\ny: 1", "!t\tx"]:
+        with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="invalid tag"):
+            yamlrocks.dumps(yamlrocks.YAMLRocksTag(bad, "v"))
+
+
+def test_dumps_tag_without_leading_bang_is_rejected():
+    """A tag must start with `!`; otherwise it is not a tag at all."""
+    import pytest
+
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="must start with"):
+        yamlrocks.dumps(yamlrocks.YAMLRocksTag("noexcl", "v"))
+
+
+def test_dumps_tuple_tag_with_whitespace_is_rejected():
+    """A `(tag, value)` callback return is validated the same as a YAMLRocksTag."""
+    import pytest
+
+    class Marker:
+        pass
+
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="invalid tag"):
+        yamlrocks.dumps({"x": Marker()}, tags={Marker: lambda o: ("!bad tag", "v")})
+
+
+def test_dumps_verbatim_tag_with_commas_is_allowed():
+    """A verbatim tag carrying URI commas has no whitespace and is allowed."""
+    out = yamlrocks.dumps(yamlrocks.YAMLRocksTag("!<tag:example.com,2024:foo>", "v"))
+    assert out == b"!<tag:example.com,2024:foo> v\n"
+
+
 def test_to_json_drops_tag():
     """to_json emits the inner value and drops the tag."""
     data = yamlrocks.loads(b"x: !input foo\n", option=yamlrocks.OPT_PASSTHROUGH_TAG)

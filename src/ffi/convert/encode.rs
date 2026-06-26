@@ -157,6 +157,25 @@ fn python_to_value_inner(
     )))
 }
 
+/// Reject a tag that cannot be emitted as a single tag token. A tag is written
+/// verbatim before its value (`!tag value`), so a tag containing whitespace or a
+/// control character (or one not starting with `!`) would split on re-parse and
+/// silently corrupt the document: `YAMLRocksTag("!bad tag", "v")` would emit
+/// `!bad tag v`, reloading as the tag `!bad` on the value `"tag v"`.
+fn validate_tag(tag: &str) -> PyResult<()> {
+    if tag.is_empty() || !tag.starts_with('!') {
+        return Err(errors::encode_error(format!(
+            "invalid tag {tag:?}: a tag must start with '!'"
+        )));
+    }
+    if let Some(bad) = tag.chars().find(|c| c.is_whitespace() || c.is_control()) {
+        return Err(errors::encode_error(format!(
+            "invalid tag {tag:?}: a tag cannot contain whitespace or control characters (found {bad:?})"
+        )));
+    }
+    Ok(())
+}
+
 /// Convert a [`YAMLRocksTag`] into a [`Value::Tagged`], serializing its inner
 /// value with the normal rules. The tag and value are read out first so the
 /// borrow is released before the (Python-running) recursive conversion.
@@ -169,6 +188,7 @@ fn tagged_to_value(
         let borrowed = tag_obj.borrow();
         (borrowed.tag.clone(), borrowed.value.clone_ref(py))
     };
+    validate_tag(&tag)?;
     let inner = python_to_value(py, value.bind(py), ctx)?;
     Ok(Value::Tagged(tag, Box::new(inner)))
 }
@@ -186,6 +206,7 @@ fn tag_callback_result(
     if let Ok(tuple) = result.cast::<PyTuple>() {
         if tuple.len() == 2 {
             let tag: String = tuple.get_item(0)?.extract()?;
+            validate_tag(&tag)?;
             let inner = python_to_value(py, &tuple.get_item(1)?, ctx)?;
             return Ok(Value::Tagged(tag, Box::new(inner)));
         }

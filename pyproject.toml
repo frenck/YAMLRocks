@@ -87,7 +87,7 @@ test = [
 numpy = ["numpy==2.5.0"]
 # Type checkers and linters (no build needed; they check the source and stub).
 typing = ["mypy==2.1.0", "ty==0.0.54"]
-lint = ["ruff==0.15.19", "codespell==2.4.2", "zizmor==1.26.1"]
+lint = ["ruff==0.15.20", "codespell==2.4.2", "zizmor==1.26.1"]
 # Continuous performance testing (bench/test_benchmarks.py, run by CodSpeed).
 codspeed = [{ include-group = "test" }, "pytest-codspeed==5.0.3"]
 # Comparison libraries used only by the one-off bench/bench.py report.

@@ -212,7 +212,11 @@ fn try_parse_float_11(value: &str) -> Option<f64> {
 }
 
 fn parse_sexagesimal_float(value: &str) -> Option<f64> {
-    let parts: Vec<&str> = value.split(':').collect();
+    // The sign applies to the whole magnitude, not just the high-order segment
+    // (`-1:30.5` is `-90.5`, not `-29.5`). Strip it first and reapply at the end,
+    // mirroring the integer path; the callers pass the signed string in as-is.
+    let (negative, rest) = super::split_sign(value)?;
+    let parts: Vec<&str> = rest.split(':').collect();
     // A sexagesimal value has at least one colon; the caller only routes here
     // when one is present, but guard anyway.
     if parts.len() < 2 {
@@ -241,7 +245,7 @@ fn parse_sexagesimal_float(value: &str) -> Option<f64> {
         let n: f64 = part.parse().ok()?;
         result = result * 60.0 + n;
     }
-    Some(result)
+    Some(if negative { -result } else { result })
 }
 
 fn classify_tagged_11(value: &str, tag: &str, pyyaml_compat: bool) -> ScalarKind {
@@ -430,6 +434,9 @@ mod tests {
         assert!(matches!(plain("1:3e2"), ResolvedValue::String(_)));
         // The high-order segment is unbounded; later segments are base-60 digits.
         assert_eq!(plain("90:00.0"), ResolvedValue::Float(5400.0));
+        // The sign applies to the whole magnitude, not just the first segment.
+        assert_eq!(plain("-1:30.5"), ResolvedValue::Float(-90.5));
+        assert_eq!(plain("+1:30.5"), ResolvedValue::Float(90.5));
         // A base-60 digit out of range, a fraction on a non-final segment, or a
         // fractional first segment are all invalid and stay strings.
         for value in ["1:70.5", "1:60.0", "1.5:30", "1:5.5:30"] {

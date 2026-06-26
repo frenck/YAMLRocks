@@ -139,6 +139,9 @@ def test_sexagesimal_float():
     # The high-order segment is unbounded; later segments are base-60 digits.
     assert load11("90:00.0") == 5400.0
     assert load11("2:3:4.5") == 7384.5
+    # The sign applies to the whole magnitude, not just the first segment.
+    assert load11("-1:30.5") == -90.5
+    assert load11("+1:30.5") == 90.5
 
 
 def test_invalid_sexagesimal_float_stays_string():

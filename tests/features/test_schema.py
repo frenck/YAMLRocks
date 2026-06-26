@@ -94,6 +94,22 @@ def test_enum_array_compares_full_structure():
         yamlrocks.loads(b"a: [1]\n", schema={"properties": {"a": {"enum": [[]]}}})
 
 
+def test_deeply_nested_value_under_enum_does_not_overflow():
+    """A deep document under a container enum/const tears down without crashing.
+
+    `enum`/`const` build a fully resolved copy of the value; that deep tree must
+    be dropped iteratively, or a near-MAX_DEPTH document could overflow the stack
+    on teardown (and abort under `panic = "abort"`).
+    """
+    depth = 900
+    doc = (b"[" * depth) + b"1" + (b"]" * depth)
+    # The exact verdict does not matter; the point is no crash on teardown.
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError):
+        yamlrocks.loads(doc, schema={"enum": [[]]})
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError):
+        yamlrocks.loads(doc, schema={"const": []})
+
+
 def test_additional_property_rejected():
     """An undeclared property is rejected when additionalProperties is false."""
     with pytest.raises(

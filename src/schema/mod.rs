@@ -189,7 +189,10 @@ fn validate_node_inner(
     // `enum`/`const` compare the *whole* value, nested containers included, so
     // they need the fully resolved structure. The shallow `resolved` above keeps
     // every sequence/mapping empty (enough for `type`/numeric/string checks but
-    // not for equality), so resolve deeply here, only when one is present.
+    // not for equality), so resolve deeply here, only when one is present. The
+    // deep tree is dropped iteratively (`drop_value_tree`): its depth is bounded
+    // only by `MAX_DEPTH` over untrusted input, so a recursive teardown could
+    // overflow a small thread stack and, under `panic = "abort"`, abort.
     if let Some(Value::Sequence(options)) = get(schema, "enum") {
         let value = resolve_deep(node, yaml_11);
         if !options.iter().any(|opt| value_eq(opt, &value)) {
@@ -199,12 +202,14 @@ fn validate_node_inner(
                 "value is not one of the allowed enum values",
             ));
         }
+        crate::stack::drop_value_tree(value);
     }
     if let Some(const_schema) = get(schema, "const") {
         let value = resolve_deep(node, yaml_11);
         if !value_eq(const_schema, &value) {
             errors.push(err(node, path, "value does not equal the required const"));
         }
+        crate::stack::drop_value_tree(value);
     }
 
     check_numeric(node, &resolved, schema, path, errors);

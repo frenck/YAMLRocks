@@ -188,9 +188,7 @@ impl<'a> Emitter<'a> {
         let ordered = self.order_pairs(pairs);
         for (i, (key, val)) in ordered.iter().enumerate() {
             self.write_indent(indent);
-            self.emit_key(key);
-            self.buf.push(b':');
-            self.emit_mapping_value(val, indent, ordered.get(i + 1).map(|p| &p.0));
+            self.emit_block_pair(key, val, indent, i > 0);
         }
     }
 
@@ -202,27 +200,27 @@ impl<'a> Emitter<'a> {
             if i > 0 {
                 self.write_indent(indent);
             }
-            self.emit_key(key);
-            self.buf.push(b':');
-            self.emit_mapping_value(val, indent, ordered.get(i + 1).map(|p| &p.0));
+            self.emit_block_pair(key, val, indent, i > 0);
         }
     }
 
-    /// Emit a mapping value after its colon, given the following key (if any).
-    /// An empty-style null (`key:` with nothing after) followed by a tagged key
-    /// would let that key's `!tag` be read as *this* value's node property
-    /// (`a:\n!t k: 1` reloads as a tag on `a`'s value, a parse error), so emit an
-    /// explicit null in that case to keep the next key on its own footing.
-    fn emit_mapping_value(&mut self, val: &Value, indent: usize, next_key: Option<&Value>) {
-        if matches!(val, Value::Null)
-            && self.options.null_style == NullStyle::Empty
-            && matches!(next_key, Some(Value::Tagged(..)))
-        {
-            self.buf.push(b' ');
-            self.buf
-                .extend_from_slice(self.options.null_style.inline_token().as_bytes());
+    /// Emit one block-mapping pair (the caller has written the key's indent). A
+    /// *non-first* tagged key is written in the explicit `? key` / `: value`
+    /// form: an inline tagged key (`!t k:`) after a previous entry would have its
+    /// `!t` read as that entry's value's node property, since a tag at the
+    /// mapping's indent binds to the preceding value (a reparse error). The `?`
+    /// indicator starts a fresh key that no preceding value can absorb. A first
+    /// pair has no preceding sibling, so it stays in the compact inline form.
+    fn emit_block_pair(&mut self, key: &Value, val: &Value, indent: usize, not_first: bool) {
+        if not_first && matches!(key, Value::Tagged(..)) {
+            self.buf.extend_from_slice(b"? ");
+            self.emit_key(key);
             self.buf.push(b'\n');
-            return;
+            self.write_indent(indent);
+            self.buf.push(b':');
+        } else {
+            self.emit_key(key);
+            self.buf.push(b':');
         }
         self.emit_value_after_colon(val, indent);
     }

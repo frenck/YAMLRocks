@@ -267,17 +267,27 @@ def test_dumps_verbatim_tag_with_commas_is_allowed():
     assert out == b"!<tag:example.com,2024:foo> v\n"
 
 
-def test_dumps_null_value_before_tagged_key_stays_reloadable():
-    """An empty-null value before a tagged key emits an explicit null.
+def test_dumps_non_first_tagged_key_uses_explicit_key_form():
+    """A tagged key after another entry is emitted in explicit `? key` form.
 
-    Otherwise the tagged key's `!tag` on the next line is read as the previous
-    (empty) value's node property (`a:\\n!t k: 1`), which fails to reload.
+    An inline tagged key (`!t k:`) after a previous entry would have its `!t`
+    read as that entry's value's node property (a reparse error); the `?`
+    indicator starts a fresh key that the preceding value cannot absorb.
     """
     data = {"a": None, yamlrocks.YAMLRocksTag("!foo", "k"): 2}
     out = yamlrocks.dumps(data)
-    assert out == b"a: null\n!foo k: 2\n"
+    assert out == b"a:\n? !foo k\n: 2\n"
     # It reloads cleanly (the tagged key is dropped by default, leaving its value).
     assert yamlrocks.loads(out) == {"a": None, "k": 2}
+    # The same after a non-null value (which inline form would also corrupt).
+    assert yamlrocks.dumps({"a": 1, yamlrocks.YAMLRocksTag("!foo", "k"): 2}) == (
+        b"a: 1\n? !foo k\n: 2\n"
+    )
+
+
+def test_dumps_first_tagged_key_stays_inline():
+    """A first/only tagged key has no preceding entry, so it stays inline."""
+    assert yamlrocks.dumps({yamlrocks.YAMLRocksTag("!foo", "k"): 1}) == b"!foo k: 1\n"
     # A null value before an untagged key still uses the compact empty form.
     assert yamlrocks.dumps({"a": None, "b": 2}) == b"a:\nb: 2\n"
 

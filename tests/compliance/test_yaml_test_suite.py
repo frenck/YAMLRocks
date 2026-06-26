@@ -15,11 +15,13 @@ filesystem markers, with no recorded baseline of known failures:
   round-trip mode, and, when the suite ships a canonical ``in.json``, resolve to
   that value.
 
-A multi-document input loads the same way as a single-document one: ``loads``
-resolves the first document, which is what the canonical-JSON match compares
-against. A regression simply fails the relevant assertion, which is the point; a
-spec-valid construct yamlrocks ever chooses not to support would be marked with
-an explicit ``pytest.mark.xfail`` here, not hidden in a baseline file.
+A multi-document input is checked both ways: ``loads`` resolves the first
+document (matched against the first canonical value), and ``loads_all`` resolves
+the whole stream (matched value-for-value against every canonical value), so a
+regression in document 2 or later cannot hide. A regression simply fails the
+relevant assertion, which is the point; a spec-valid construct yamlrocks ever
+chooses not to support would be marked with an explicit ``pytest.mark.xfail``
+here, not hidden in a baseline file.
 """
 
 from __future__ import annotations
@@ -102,6 +104,26 @@ def canonical_json(case_id: str):
     return value
 
 
+def canonical_json_all(case_id: str) -> list:
+    """Every canonical JSON value for a case, one per document in the stream.
+
+    A multi-document case ships several JSON values in ``in.json``, concatenated
+    and whitespace-separated (one per ``---`` document). Decode them in sequence;
+    an empty file yields an empty list (no documents).
+    """
+    text = (CASES_DIR / case_id / "in.json").read_text(encoding="utf-8")
+    decoder = json.JSONDecoder()
+    values: list = []
+    index = 0
+    while True:
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if index >= len(text):
+            return values
+        value, index = decoder.raw_decode(text, index)
+        values.append(value)
+
+
 @pytest.mark.parametrize("case_id", VALID_IDS)
 def test_valid_case_loads(case_id):
     """Every valid suite case loads without raising."""
@@ -110,9 +132,31 @@ def test_valid_case_loads(case_id):
 
 @pytest.mark.parametrize("case_id", JSON_IDS)
 def test_valid_case_matches_canonical_json(case_id):
-    """A valid case with a canonical JSON resolves to that value."""
+    """A valid case with a canonical JSON resolves to that value.
+
+    ``loads`` resolves the first document, compared against the first canonical
+    value; the all-documents semantics are checked separately below.
+    """
     assert yaml_equal(yamlrocks.loads(case_bytes(case_id)), canonical_json(case_id)), (
         f"{case_id} no longer matches its canonical JSON"
+    )
+
+
+@pytest.mark.parametrize("case_id", JSON_IDS)
+def test_valid_case_matches_canonical_json_all_documents(case_id):
+    """Every document of a case resolves to its canonical JSON value.
+
+    ``loads`` only checks document 1, so a multi-document case (the suite ships
+    18 with multi-value ``in.json``) could regress in document 2+ undetected.
+    ``loads_all`` compares the whole stream, value-for-value.
+    """
+    got = yamlrocks.loads_all(case_bytes(case_id))
+    want = canonical_json_all(case_id)
+    assert len(got) == len(want), (
+        f"{case_id}: loaded {len(got)} documents, canonical JSON has {len(want)}"
+    )
+    assert all(yaml_equal(g, w) for g, w in zip(got, want, strict=True)), (
+        f"{case_id} no longer matches its canonical JSON across all documents"
     )
 
 

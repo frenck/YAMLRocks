@@ -377,7 +377,19 @@ impl<'a> Emitter<'a> {
                 Value::Tagged(tag, inner) => {
                     self.buf.push(b' ');
                     self.buf.extend_from_slice(tag.as_bytes());
-                    self.emit_value_after_colon(inner, indent);
+                    match inner.as_ref() {
+                        // A tagged block sequence must indent under the dash, even
+                        // in indentless mode: the tag sits on the dash line, so an
+                        // indentless inner sequence (dashes at the outer column)
+                        // would not bind to the tag. Its dashes would read as more
+                        // items of the outer sequence, dropping the tag and merging
+                        // the nesting on reload. Indenting keeps it the tag's child.
+                        Value::Sequence(s) if self.is_block(inner) => {
+                            self.buf.push(b'\n');
+                            self.emit_block_sequence(s, child_indent);
+                        }
+                        _ => self.emit_value_after_colon(inner, indent),
+                    }
                 }
                 _ => {
                     self.buf.push(b' ');
@@ -1045,6 +1057,30 @@ mod tests {
         };
         let out = emit(&v, &opts);
         assert_eq!(out, "k: !t\n  - a\n  - b\n");
+        assert_eq!(reparse(&out), v, "tag survives the round-trip: {out:?}");
+    }
+
+    #[test]
+    fn tagged_sequence_item_keeps_its_tag_in_indentless_mode() {
+        // A tagged block sequence that is itself an *item* of a sequence must
+        // indent under the dash even in indentless mode: the tag sits on the dash
+        // line, so an indentless inner sequence (dashes at the outer column) would
+        // read as more items of the outer sequence, dropping the tag and merging
+        // the nesting on reload.
+        let v = Value::Sequence(vec![
+            Value::Null,
+            Value::Tagged(
+                "!t".to_owned(),
+                Box::new(Value::Sequence(vec![Value::Null])),
+            ),
+            Value::Null,
+        ]);
+        let opts = EmitOptions {
+            indentless_sequences: true,
+            ..EmitOptions::default()
+        };
+        let out = emit(&v, &opts);
+        assert_eq!(out, "-\n- !t\n  -\n-\n");
         assert_eq!(reparse(&out), v, "tag survives the round-trip: {out:?}");
     }
 

@@ -72,6 +72,17 @@ pub(crate) fn walk_anchor(
     prefix: &mut Vec<PathSeg>,
     found: &mut Option<Vec<PathSeg>>,
 ) {
+    // Grow the native stack on demand: this recurses once per nesting level over
+    // attacker-controlled AST depth. See [`crate::stack`].
+    crate::stack::guard(|| walk_anchor_inner(node, name, prefix, found))
+}
+
+fn walk_anchor_inner(
+    node: &YamlNode,
+    name: &str,
+    prefix: &mut Vec<PathSeg>,
+    found: &mut Option<Vec<PathSeg>>,
+) {
     if found.is_some() {
         return;
     }

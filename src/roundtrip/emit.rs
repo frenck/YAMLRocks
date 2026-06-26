@@ -647,6 +647,12 @@ pub fn collect_changed_include_changes(nodes: &[YamlNode]) -> Vec<(u32, Vec<u8>)
 /// `file_id`. Shared by the two write-back collectors above, which differ only
 /// in what they do at each boundary.
 fn walk_boundaries(node: &YamlNode, visit: &mut impl FnMut(&YamlNode, u32)) {
+    // Grow the native stack on demand: this recurses once per nesting level over
+    // attacker-controlled AST depth. See [`crate::stack`].
+    crate::stack::guard(|| walk_boundaries_inner(node, visit))
+}
+
+fn walk_boundaries_inner(node: &YamlNode, visit: &mut impl FnMut(&YamlNode, u32)) {
     if let Some(ref source) = node.source {
         if let Some(file_id) = source.target_file_id {
             visit(node, file_id);

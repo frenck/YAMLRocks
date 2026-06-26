@@ -539,6 +539,11 @@ impl<'input> Composer<'input> {
                         node.explicit_start = true;
                         node.directives = std::mem::take(&mut pending_directives);
                         documents.push(node);
+                    } else {
+                        // An empty document dropped here still consumed its own
+                        // directives; clear them so a `%TAG` scoped to it cannot
+                        // leak onto the next document.
+                        pending_directives.clear();
                     }
                     if self.pos < events.len()
                         && matches!(events[self.pos].kind, EventKind::DocumentEnd)
@@ -553,7 +558,14 @@ impl<'input> Composer<'input> {
                 _ => {
                     let start_pos = self.pos;
                     if let Some(mut node) = self.compose_node(events)? {
+                        // The parser requires a `---` after any directive, so a
+                        // document reaching this arm normally has none pending.
+                        // Attach and mark explicit defensively: emitting the
+                        // directives without their `---` would be invalid YAML.
                         node.directives = std::mem::take(&mut pending_directives);
+                        if !node.directives.is_empty() {
+                            node.explicit_start = true;
+                        }
                         documents.push(node);
                     }
                     // Force progress past a bare terminator (e.g. a leading

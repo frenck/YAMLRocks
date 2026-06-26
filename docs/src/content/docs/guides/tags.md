@@ -156,7 +156,11 @@ name and still pass a `tag_handler` to cover everything else, or fall back to
 ## Emitting custom tags
 
 `dumps` is the write-side mirror of the read side: a `YAMLRocksTag` serializes
-straight back to `!tag value`, so a passthrough round-trip is byte-for-byte.
+straight back to `!tag value`, preserving the tag and its value. It re-emits
+through the normal emitter, though, so it does not reproduce the original
+source byte-for-byte: quoting, comments, and spacing follow the emitter's rules
+(`x: !custom "foo"` comes back as `x: !custom foo`). When you need byte-for-byte
+fidelity, load with `OPT_ROUND_TRIP` instead.
 
 ```python
 import yamlrocks

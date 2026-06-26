@@ -443,28 +443,47 @@ impl YAMLRocksDocument {
 /// Prepend a `%YAML 1.2` version directive to `buf` so an upgraded document
 /// declares its version (and is read back as 1.2, not re-upgraded). A leading
 /// byte order mark stays first; an existing `---` document-start marker is
-/// reused, otherwise one is added. The upgrade pass already strips any prior
-/// `%YAML` directive, so there is none to replace.
+/// reused, otherwise one is added. Any `%YAML` directive among the leading
+/// directives is dropped (the canonical 1.2 declaration replaces it); a `%TAG`
+/// directive is kept in place, with `%YAML 1.2` inserted ahead of it.
 fn stamp_yaml_1_2(buf: &mut Vec<u8>) {
     const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
     let at = if buf.starts_with(&BOM) { BOM.len() } else { 0 };
-    // Drop an existing leading `%YAML ...` directive line; the canonical 1.2
-    // declaration below replaces it. This keeps re-stamping idempotent (a file
-    // declared `%YAML 1.2` stays single) and normalizes any other version to
-    // 1.2. The upgrade pass already strips a `%YAML 1.1`, so this fires only for
-    // a document that read as 1.2 because it already declared a version.
-    if buf[at..].starts_with(b"%YAML") {
-        if let Some(newline) = buf[at..].iter().position(|&b| b == b'\n') {
-            buf.drain(at..at + newline + 1);
+    // Walk the leading directive lines. A `%YAML` line is dropped (the canonical
+    // 1.2 declaration below replaces it; this also keeps re-stamping idempotent);
+    // any other directive (a `%TAG` handle) is kept and skipped over so the
+    // marker is found past it, not before it. Inserting `%YAML 1.2\n---\n` ahead
+    // of a `%TAG` would strand the handle after a document start and fail to
+    // reload.
+    let mut cursor = at;
+    loop {
+        let rest = &buf[cursor..];
+        let line_len = rest.iter().position(|&b| b == b'\n').map(|n| n + 1);
+        if rest.starts_with(b"%YAML") {
+            match line_len {
+                Some(len) => {
+                    buf.drain(cursor..cursor + len);
+                }
+                None => buf.truncate(cursor),
+            }
+        } else if rest.starts_with(b"%") {
+            match line_len {
+                Some(len) => cursor += len,
+                None => break,
+            }
+        } else {
+            break;
         }
     }
-    let body = &buf[at..];
+    let body = &buf[cursor..];
     let has_marker = body.starts_with(b"---")
         && body
             .get(3)
             .map_or(true, |&b| matches!(b, b'\n' | b'\r' | b' '));
     let mut stamp: Vec<u8> = b"%YAML 1.2\n".to_vec();
     if !has_marker {
+        // No directives precede us here (a directive always carries its own
+        // `---`), so the marker can sit right after the version line.
         stamp.extend_from_slice(b"---\n");
     }
     buf.splice(at..at, stamp);
@@ -1505,4 +1524,58 @@ fn leaves_to_list(py: Python<'_>, leaves: Vec<(Vec<Py<PyAny>>, Py<PyAny>)>) -> P
         list.append((tuple, value))?;
     }
     Ok(list.into_any().unbind())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stamp_yaml_1_2;
+
+    fn stamp(input: &[u8]) -> Vec<u8> {
+        let mut buf = input.to_vec();
+        stamp_yaml_1_2(&mut buf);
+        buf
+    }
+
+    #[test]
+    fn prepends_version_to_a_bare_document() {
+        assert_eq!(stamp(b"a: 1\n"), b"%YAML 1.2\n---\na: 1\n");
+    }
+
+    #[test]
+    fn reuses_an_existing_document_marker() {
+        assert_eq!(stamp(b"---\na: 1\n"), b"%YAML 1.2\n---\na: 1\n");
+    }
+
+    #[test]
+    fn replaces_a_declared_version() {
+        assert_eq!(stamp(b"%YAML 1.1\n---\na: 1\n"), b"%YAML 1.2\n---\na: 1\n");
+    }
+
+    #[test]
+    fn keeps_a_tag_directive_after_the_version() {
+        // The `%YAML 1.2` must sit *before* the `%TAG`, never displace it past
+        // the `---` (which would leave the handle undefined).
+        assert_eq!(
+            stamp(b"%TAG !e! tag:x:\n---\nv: !e!foo 1\n"),
+            b"%YAML 1.2\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n",
+        );
+    }
+
+    #[test]
+    fn replaces_version_but_keeps_tag_directive() {
+        assert_eq!(
+            stamp(b"%YAML 1.1\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n"),
+            b"%YAML 1.2\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n",
+        );
+    }
+
+    #[test]
+    fn preserves_a_leading_byte_order_mark() {
+        let bom = [0xEF, 0xBB, 0xBF];
+        let mut input = bom.to_vec();
+        input.extend_from_slice(b"a: 1\n");
+        let mut expected = bom.to_vec();
+        expected.extend_from_slice(b"%YAML 1.2\n---\na: 1\n");
+        assert_eq!(stamp(&input), expected);
+    }
 }

@@ -526,6 +526,10 @@ impl<'input> Composer<'input> {
         keep_empty: bool,
     ) -> Result<Vec<YamlNode>, ScanError> {
         let mut documents = Vec::new();
+        // Directives (`%YAML`/`%TAG`) appear before the `---` of the document
+        // they introduce; collect them until that document's node exists, then
+        // hand them over so re-emission can replay them.
+        let mut pending_directives: Vec<String> = Vec::new();
 
         while self.pos < events.len() {
             match &events[self.pos].kind {
@@ -539,13 +543,20 @@ impl<'input> Composer<'input> {
                         // An explicit `---` produces this event; record it so the
                         // marker is preserved on re-emission.
                         node.explicit_start = true;
+                        node.directives = std::mem::take(&mut pending_directives);
                         documents.push(node);
                     } else if keep_empty {
                         // A lone/trailing `---` with no body is still a document
                         // (a null one) when the caller counts documents.
                         let mut node = YamlNode::new(YamlNodeKind::Null, marker_span);
                         node.explicit_start = true;
+                        node.directives = std::mem::take(&mut pending_directives);
                         documents.push(node);
+                    } else {
+                        // An empty document dropped here still consumed its own
+                        // directives; clear them so a `%TAG` scoped to it cannot
+                        // leak onto the next document.
+                        pending_directives.clear();
                     }
                     if self.pos < events.len()
                         && matches!(events[self.pos].kind, EventKind::DocumentEnd)
@@ -553,12 +564,21 @@ impl<'input> Composer<'input> {
                         self.pos += 1;
                     }
                 }
-                EventKind::Directive(_) => {
+                EventKind::Directive(text) => {
+                    pending_directives.push(text.clone());
                     self.pos += 1;
                 }
                 _ => {
                     let start_pos = self.pos;
-                    if let Some(node) = self.compose_node(events)? {
+                    if let Some(mut node) = self.compose_node(events)? {
+                        // The parser requires a `---` after any directive, so a
+                        // document reaching this arm normally has none pending.
+                        // Attach and mark explicit defensively: emitting the
+                        // directives without their `---` would be invalid YAML.
+                        node.directives = std::mem::take(&mut pending_directives);
+                        if !node.directives.is_empty() {
+                            node.explicit_start = true;
+                        }
                         documents.push(node);
                     }
                     // Force progress past a bare terminator (e.g. a leading

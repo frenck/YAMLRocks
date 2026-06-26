@@ -226,6 +226,47 @@ def test_tag_directive_resolves_named_handle():
     assert yamlrocks.loads(src) == {"x": "bar"}
 
 
+def test_roundtrip_edit_keeps_tag_directive():
+    """Editing a round-trip document re-emits its `%TAG` directive.
+
+    Dropping the directive would strand the `!e!foo` node on an undefined handle
+    that no longer reloads; the edited document must stay self-contained.
+    """
+    src = b"%TAG !e! tag:example.com,2020:\n---\nv: !e!foo old\nw: keep\n"
+    doc = yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP)
+    doc["w"] = "changed"
+    out = yamlrocks.dumps(doc)
+    assert out == (b"%TAG !e! tag:example.com,2020:\n---\nv: !e!foo old\nw: changed\n")
+    assert yamlrocks.loads(out) == {"v": "old", "w": "changed"}
+
+
+def test_roundtrip_unmodified_tag_directive_is_byte_identical():
+    """An unmodified round-trip document with a `%TAG` re-emits verbatim."""
+    src = b"%TAG !e! tag:example.com,2020:\n---\nv: !e!foo old\n"
+    doc = yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP)
+    assert yamlrocks.dumps(doc) == src
+
+
+def test_roundtrip_dropped_empty_document_does_not_leak_its_directive():
+    """A directive scoped to a skipped empty document does not reach the next."""
+    # The `%TAG` belongs to the empty first document; once that document is
+    # dropped, re-emitting the second (modified) one must not carry the handle.
+    src = b"%TAG !e! tag:x:\n---\n---\nb: 2\n"
+    doc = yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP)
+    doc["b"] = 9
+    out = yamlrocks.dumps(doc)
+    assert b"%TAG" not in out
+    assert out == b"---\nb: 9\n"
+
+
+def test_roundtrip_edit_keeps_yaml_version_directive():
+    """Editing a round-trip document re-emits its `%YAML` version directive."""
+    src = b"%YAML 1.2\n---\nv: 1\nw: 2\n"
+    doc = yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP)
+    doc["w"] = 9
+    assert yamlrocks.dumps(doc) == b"%YAML 1.2\n---\nv: 1\nw: 9\n"
+
+
 def test_duplicate_tag_directive_is_rejected():
     """A `%TAG` handle declared twice in one document is an error.
 

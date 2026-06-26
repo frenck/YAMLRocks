@@ -283,6 +283,29 @@ def test_anchors_is_empty_without_anchors():
     assert load(b"a: 1\n").anchors == {}
 
 
+def test_anchors_includes_one_on_a_mapping_key():
+    """An anchor on a mapping key is discoverable, like one on a value."""
+    doc = load(b"&kanchor key: value\nother: &vanchor 1\n")
+    assert set(doc.anchors) == {"kanchor", "vanchor"}
+    # The key anchor's node is the key scalar itself.
+    assert doc.anchors["kanchor"].value == "key"
+    assert doc.anchors["kanchor"].anchor == "kanchor"
+
+
+def test_aliases_of_a_key_anchor_are_found():
+    """A key anchor's ``aliases`` list the ``*name`` nodes referencing it."""
+    doc = load(b"&kanchor key: value\nuse: *kanchor\nalso: *kanchor\n")
+    assert len(doc.anchors["kanchor"].aliases) == 2
+
+
+def test_alias_to_a_key_anchor_resolves():
+    """An alias pointing at a key anchor resolves to that key's value."""
+    assert yamlrocks.loads(b"&kanchor key: value\nuse: *kanchor\n") == {
+        "key": "value",
+        "use": "key",
+    }
+
+
 def test_is_alias_detects_aliases():
     """``is_alias`` is True only for ``*name`` nodes."""
     doc = load(ANCHORED)

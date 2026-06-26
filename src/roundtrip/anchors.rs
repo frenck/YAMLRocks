@@ -49,7 +49,11 @@ pub(crate) fn path_precedes(roots: &[YamlNode], a: &[PathSeg], b: &[PathSeg]) ->
 /// element index for a sequence). Missing entries sort last.
 pub(crate) fn seg_order(node: Option<&YamlNode>, seg: &PathSeg) -> usize {
     match (node.map(|n| &n.kind), seg) {
-        (Some(YamlNodeKind::Mapping(pairs)), PathSeg::Key(k)) => pairs
+        // A key node and its value share the entry's position. Comparing the two
+        // (only reachable for a same-entry self-reference like `&a k: *a`) yields
+        // "neither precedes", which is acceptable: the order matters only when
+        // creating a new alias via the edit API, never on load.
+        (Some(YamlNodeKind::Mapping(pairs)), PathSeg::Key(k) | PathSeg::KeyNode(k)) => pairs
             .iter()
             .position(|(key, _)| scalar_eq(key, k))
             .unwrap_or(usize::MAX),
@@ -127,9 +131,12 @@ pub(crate) fn collect_alias_paths(
     });
 }
 
-/// Visit each addressable child of `node` (mapping values by key, sequence items
-/// by index), pushing the corresponding `PathSeg` onto `prefix` for the call.
-/// Mapping keys are not addressable, so anchors on keys are not visited.
+/// Visit each child of `node` that anchor/alias traversal can address: a mapping
+/// key node (`PathSeg::KeyNode`), its value (`PathSeg::Key`), and a sequence
+/// element (`PathSeg::Index`), pushing the segment onto `prefix` for the call.
+/// The key is visited before its value, matching document order. Only scalar
+/// keys are addressable; a complex (mapping/sequence) key and its value are
+/// skipped, as the path model has no segment for them.
 pub(crate) fn for_each_child(
     node: &YamlNode,
     prefix: &mut Vec<PathSeg>,
@@ -139,6 +146,10 @@ pub(crate) fn for_each_child(
         YamlNodeKind::Mapping(pairs) => {
             for (key, val) in pairs {
                 if let YamlNodeKind::Scalar(name, _) = &key.kind {
+                    // The key node first: an anchor may sit on it (`&a foo: bar`).
+                    prefix.push(PathSeg::KeyNode(name.clone()));
+                    visit(key, prefix);
+                    prefix.pop();
                     prefix.push(PathSeg::Key(name.clone()));
                     visit(val, prefix);
                     prefix.pop();
@@ -367,6 +378,20 @@ mod tests {
         let mut aliases = Vec::new();
         collect_alias_paths(&r[0], "x", &mut Vec::new(), &mut aliases);
         assert_eq!(aliases.len(), 2); // `use` and `also`
+    }
+
+    #[test]
+    fn collects_an_anchor_on_a_mapping_key() {
+        // An anchor on a key (`&k key: value`) is discovered and addressable,
+        // mirroring `collect_anchor_refs`, which already sees key anchors.
+        let r = roots("&kanchor key: value\nother: &vanchor 1\n");
+        let mut anchors = Vec::new();
+        collect_anchor_paths(&r[0], &mut Vec::new(), &mut anchors);
+        let names: Vec<&str> = anchors.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"kanchor"));
+        assert!(names.contains(&"vanchor"));
+        // The key anchor's path resolves to the key node (the `key` scalar).
+        assert!(find_anchor_path(&r, "kanchor").is_some());
     }
 
     #[test]

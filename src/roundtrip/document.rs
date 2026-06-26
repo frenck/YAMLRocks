@@ -26,11 +26,19 @@ use super::value::{node_to_python_with, python_to_node};
 use crate::encode::NullStyle;
 use crate::resolver::Schema;
 
-/// A single step along a path into the AST: a mapping key or sequence index.
+/// A single step along a path into the AST: a mapping value (by key), a sequence
+/// element (by index), or a mapping *key node* itself.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PathSeg {
+    /// The value of the mapping entry whose key resolves to this string.
     Key(String),
+    /// The element at this index of a sequence.
     Index(usize),
+    /// The key node of the mapping entry whose key resolves to this string.
+    /// Only the anchor/alias traversal produces this (an anchor may sit on a
+    /// key, `&a foo: bar`); indexed access from Python never does, so a key
+    /// node is reachable for discovery but not addressed by `doc["foo"]`.
+    KeyNode(String),
 }
 
 fn seg_from_key(key: &Bound<'_, PyAny>) -> PyResult<PathSeg> {
@@ -1102,7 +1110,8 @@ fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<&'a YamlN
                 _ => None,
             }
         }
-        Some((PathSeg::Index(_), _)) => resolve_path(roots, path),
+        // A sequence element or a key node holds its own head comment.
+        Some((PathSeg::Index(_) | PathSeg::KeyNode(_), _)) => resolve_path(roots, path),
     }
 }
 
@@ -1125,7 +1134,7 @@ fn resolve_head_mut<'a>(roots: &'a mut [YamlNode], path: &[PathSeg]) -> Option<&
                 None
             }
         }
-        Some((PathSeg::Index(_), _)) => resolve_path_mut(roots, path),
+        Some((PathSeg::Index(_) | PathSeg::KeyNode(_), _)) => resolve_path_mut(roots, path),
     }
 }
 
@@ -1156,6 +1165,10 @@ pub(crate) fn child_ref<'a>(node: &'a YamlNode, seg: &PathSeg) -> Option<&'a Yam
             .iter()
             .find(|(key, _)| scalar_eq(key, k))
             .map(|(_, v)| v),
+        (YamlNodeKind::Mapping(pairs), PathSeg::KeyNode(k)) => pairs
+            .iter()
+            .find(|(key, _)| scalar_eq(key, k))
+            .map(|(key, _)| key),
         (YamlNodeKind::Sequence(items), PathSeg::Index(i)) => items.get(*i),
         _ => None,
     }
@@ -1167,6 +1180,10 @@ fn child_ref_mut<'a>(node: &'a mut YamlNode, seg: &PathSeg) -> Option<&'a mut Ya
             .iter_mut()
             .find(|(key, _)| scalar_eq(key, k))
             .map(|(_, v)| v),
+        (YamlNodeKind::Mapping(pairs), PathSeg::KeyNode(k)) => pairs
+            .iter_mut()
+            .find(|(key, _)| scalar_eq(key, k))
+            .map(|(key, _)| key),
         (YamlNodeKind::Sequence(items), PathSeg::Index(i)) => items.get_mut(*i),
         _ => None,
     }

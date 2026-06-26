@@ -1087,18 +1087,32 @@ impl<'input> Scanner<'input> {
             self.simple_key_allowed = false;
             self.tokens.push_back(Token::new(TokenKind::Tag(tag), span));
         } else if self.reader.peek() == '<' {
-            // Verbatim tag: !<tag>
+            // Verbatim tag: !<tag>. The body is URI text with no whitespace or
+            // line breaks, terminated by `>`. Stopping only at `>`/EOF would let
+            // an unterminated `!<foo` swallow the rest of the document, so a
+            // break or whitespace inside the body ends the scan and (with a
+            // missing `>`) is reported instead of silently consumed.
             self.reader.advance(); // skip '<'
             let inner_start = self.reader.offset();
-            while !self.reader.is_eof() && self.reader.peek() != '>' {
+            while !self.reader.is_eof()
+                && self.reader.peek() != '>'
+                && !is_whitespace_or_break(self.reader.peek())
+            {
                 self.reader.advance();
+            }
+            if self.reader.peek() != '>' {
+                return Err(ScanError::new(
+                    "unterminated verbatim tag: expected '>'",
+                    span,
+                ));
             }
             let tag = self
                 .reader
                 .slice(inner_start, self.reader.offset())
                 .to_owned();
-            if self.reader.peek() == '>' {
-                self.reader.advance();
+            self.reader.advance(); // skip '>'
+            if tag.is_empty() {
+                return Err(ScanError::new("a verbatim tag must not be empty", span));
             }
             self.simple_key_allowed = false;
             self.tokens

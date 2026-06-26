@@ -120,3 +120,66 @@ def test_directive_after_document_end_is_allowed():
         "foo",
         "bar",
     ]
+
+
+def test_unterminated_verbatim_tag_is_rejected():
+    """An unterminated `!<...` is rejected, not swallowed through the rest.
+
+    Stopping only at `>`/EOF let `!<foo` consume the following lines, silently
+    dropping them; the missing `>` must be reported instead.
+    """
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="verbatim tag"):
+        yamlrocks.loads(b"x: !<foo\nbar: 1\n")
+
+
+def test_empty_verbatim_tag_is_rejected():
+    """A `!<>` verbatim tag has no tag text and is invalid."""
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="verbatim tag"):
+        yamlrocks.loads(b"x: !<> v\n")
+
+
+def test_verbatim_tag_with_whitespace_is_rejected():
+    """A verbatim tag body holds URI text only; whitespace ends it unterminated."""
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="verbatim tag"):
+        yamlrocks.loads(b"x: !<a b> v\n")
+
+
+def test_valid_verbatim_tag_still_parses():
+    """A well-formed `!<...>` is unaffected by the stricter scan."""
+    assert yamlrocks.loads(b"x: !<tag:example.com,2024:foo> v\n") == {"x": "v"}
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        b"x: |+-\n  a\n",  # two chomping indicators
+        b"x: |-+\n  a\n",  # two chomping indicators, other order
+        b"x: |12\n  a\n",  # two indentation digits
+        b"x: | 2\n  a\n",  # whitespace before the indentation indicator
+        b"x: |2 3\n  a\n",  # a second indicator after whitespace
+    ],
+)
+def test_invalid_block_scalar_header_is_rejected(src):
+    """A block scalar header allows at most one chomping and one indent indicator.
+
+    No whitespace may precede or separate them; the lenient scan accepted these
+    malformed headers and silently kept whichever indicator came last.
+    """
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError):
+        yamlrocks.loads(src)
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        (b"x: |-\n  a\n", "a"),
+        (b"x: |+\n  a\n", "a\n"),
+        (b"x: |2\n   a\n", " a\n"),
+        (b"x: |2-\n   a\n", " a"),
+        (b"x: |-2\n   a\n", " a"),
+        (b"x: | # c\n  a\n", "a\n"),
+    ],
+)
+def test_valid_block_scalar_header_still_parses(src, expected):
+    """Every well-formed chomping/indent header combination still loads."""
+    assert yamlrocks.loads(src) == {"x": expected}

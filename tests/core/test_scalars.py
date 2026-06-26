@@ -356,6 +356,28 @@ def test_big_integer_literals_load_as_int(text):
     assert value == int(text)
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("0x8000000000000000", 0x8000000000000000),  # hex, i64::MAX + 1
+        ("0xFFFFFFFFFFFFFFFFFF", 0xFFFFFFFFFFFFFFFFFF),
+        ("0o7777777777777777777777", 0o7777777777777777777777),  # octal
+        ("-0x8000000000000001", -0x8000000000000001),
+    ],
+)
+def test_non_decimal_big_integer_literals_load_as_int(text, expected):
+    """A hex/octal integer over i64 loads as a Python int (1.2 core schema).
+
+    The big-integer fallback used to recognize only decimal, so these overflowing
+    radix forms wrongly became strings.
+    """
+    value = yamlrocks.loads(f"x: {text}".encode())["x"]
+    assert isinstance(value, int)
+    assert value == expected
+    # The int is normalized to decimal, so to_json stays valid JSON.
+    assert yamlrocks.to_json({"x": value}) == f'{{"x":{expected}}}'.encode()
+
+
 def test_big_integer_round_trip_assignment():
     """Assigning a big int to a round-trip document keeps it an int."""
     doc = yamlrocks.loads(b"x: 1\n", option=yamlrocks.OPT_ROUND_TRIP)

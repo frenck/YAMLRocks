@@ -86,12 +86,10 @@ fn classify_plain_11(value: &str, pyyaml_compat: bool) -> ScalarKind {
     if let Some(int) = try_parse_int_11(value) {
         return ScalarKind::Int(int);
     }
-    // A decimal integer too large for i64 is still an integer, not a string.
-    // The 1.1 form may carry underscore separators (`10_000_000_000_000_000_000`),
-    // which the shared `is_big_decimal_int` rejects; recognize them here so an
-    // underscored big integer does not silently degrade to a string while its
-    // separator-free twin stays an integer.
-    if is_big_decimal_int_11(value) {
+    // An integer too large for i64 is still an integer, not a string, whether it
+    // is decimal, hex (`0x`), binary (`0b`), or C-style octal (`0777`). The 1.1
+    // forms may carry underscore separators, which the parsers strip.
+    if is_big_int_11(value) {
         return ScalarKind::BigInt;
     }
 
@@ -130,6 +128,29 @@ fn is_big_decimal_int_11(value: &str) -> bool {
         && digits.bytes().all(|b| b.is_ascii_digit())
         // A leading zero is a C-style octal (`0777`), not a decimal big integer.
         && (digits == "0" || !digits.starts_with('0'))
+}
+
+/// Whether `value` is a valid YAML 1.1 integer literal of any magnitude:
+/// decimal, hexadecimal (`0x`), binary (`0b`), or C-style octal (`0777`), with
+/// underscore separators allowed. Only reached once [`try_parse_int_11`] has
+/// failed, so a `true` result means a big integer rather than a string.
+/// Sexagesimal (`1:30`) is intentionally not treated as a big integer.
+fn is_big_int_11(value: &str) -> bool {
+    let Some((_, rest)) = super::split_sign(value) else {
+        return false;
+    };
+    let cleaned = strip_underscores(rest);
+    let rest: &str = &cleaned;
+    if let Some(body) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+        !body.is_empty() && body.bytes().all(|b| b.is_ascii_hexdigit())
+    } else if let Some(body) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
+        !body.is_empty() && body.bytes().all(|b| b == b'0' || b == b'1')
+    } else if rest.len() > 1 && rest.starts_with('0') {
+        // C-style octal (`0777`): a leading zero then octal digits.
+        rest[1..].bytes().all(|b| (b'0'..=b'7').contains(&b))
+    } else {
+        is_big_decimal_int_11(value)
+    }
 }
 
 fn try_parse_int_11(value: &str) -> Option<i64> {
@@ -268,7 +289,7 @@ fn classify_tagged_11(value: &str, tag: &str, pyyaml_compat: bool) -> ScalarKind
         "!!int" | "tag:yaml.org,2002:int" => {
             if let Some(int) = try_parse_int_11(value) {
                 ScalarKind::Int(int)
-            } else if is_big_decimal_int_11(value) {
+            } else if is_big_int_11(value) {
                 ScalarKind::BigInt
             } else {
                 ScalarKind::Str

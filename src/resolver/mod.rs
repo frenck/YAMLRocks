@@ -115,7 +115,9 @@ pub trait Resolver {
             ScalarKind::Null => ResolvedValue::Null,
             ScalarKind::Bool(b) => ResolvedValue::Bool(b),
             ScalarKind::Int(i) => ResolvedValue::Int(i),
-            ScalarKind::BigInt => ResolvedValue::BigInt(value.to_owned()),
+            ScalarKind::BigInt => {
+                ResolvedValue::BigInt(big_int_to_decimal(value).unwrap_or_else(|| value.to_owned()))
+            }
             ScalarKind::Float(f) => ResolvedValue::Float(f),
             ScalarKind::Str => ResolvedValue::String(value.to_owned()),
             ScalarKind::Merge => ResolvedValue::String("<<".to_owned()),
@@ -211,4 +213,96 @@ pub(crate) fn is_big_decimal_int(value: &str) -> bool {
         return false;
     };
     rest.bytes().all(|b| b.is_ascii_digit()) && (rest == "0" || !rest.starts_with('0'))
+}
+
+/// The decimal-string form of a non-decimal integer literal (`0xFF`, `0o17`,
+/// `0b101`, or a C-style `0777`), or `None` if `value` is already decimal (the
+/// caller keeps the original text for that case). Called only for a scalar the
+/// resolver already classified as a [`ScalarKind::BigInt`], so the body is a
+/// valid literal; this normalizes it to decimal so the `BigInt` payload stays
+/// decimal everywhere it is consumed (Python conversion, JSON, emit).
+///
+/// A leading `0`-without-a-radix-letter is C-style octal, which only the YAML 1.1
+/// classifier ever marks as a big integer, so reading it as base 8 here is
+/// unambiguous.
+pub(crate) fn big_int_to_decimal(value: &str) -> Option<String> {
+    let (negative, rest) = split_sign(value)?;
+    let cleaned: String;
+    let rest = if rest.as_bytes().contains(&b'_') {
+        cleaned = rest.chars().filter(|&c| c != '_').collect();
+        cleaned.as_str()
+    } else {
+        rest
+    };
+
+    let (radix, body) = if let Some(b) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X"))
+    {
+        (16, b)
+    } else if let Some(b) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
+        (8, b)
+    } else if let Some(b) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
+        (2, b)
+    } else if rest.len() > 1 && rest.starts_with('0') && rest.bytes().all(|b| b.is_ascii_digit()) {
+        (8, &rest[1..]) // C-style octal (`0777`); YAML 1.1 only
+    } else {
+        return None; // already decimal: keep the original text
+    };
+
+    let mut decimal = radix_to_decimal(body, radix);
+    if negative {
+        decimal.insert(0, '-');
+    }
+    Some(decimal)
+}
+
+/// Convert a string of base-`radix` digits to its decimal-string form, at
+/// arbitrary precision and without a big-integer dependency. Schoolbook
+/// multiply-accumulate over decimal digits held little-endian: for each input
+/// digit `d`, the accumulator becomes `acc * radix + d`. Only ever runs for an
+/// integer too large for `i64`, which is rare, so the `O(digits^2)` cost is fine.
+fn radix_to_decimal(body: &str, radix: u32) -> String {
+    let mut digits: Vec<u8> = vec![0]; // decimal digits of the accumulator, little-endian
+    for ch in body.chars() {
+        let mut carry = ch.to_digit(radix).unwrap_or(0);
+        for slot in digits.iter_mut() {
+            let v = u32::from(*slot) * radix + carry;
+            *slot = (v % 10) as u8;
+            carry = v / 10;
+        }
+        while carry > 0 {
+            digits.push((carry % 10) as u8);
+            carry /= 10;
+        }
+    }
+    digits.iter().rev().map(|d| (b'0' + d) as char).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::big_int_to_decimal;
+
+    #[test]
+    fn big_int_to_decimal_converts_radix_forms() {
+        // Hexadecimal, octal, binary, and C-style octal all normalize to decimal.
+        assert_eq!(
+            big_int_to_decimal("0x8000000000000000").as_deref(),
+            Some("9223372036854775808")
+        );
+        assert_eq!(big_int_to_decimal("0xff").as_deref(), Some("255"));
+        assert_eq!(big_int_to_decimal("0o17").as_deref(), Some("15"));
+        assert_eq!(big_int_to_decimal("0b1010").as_deref(), Some("10"));
+        assert_eq!(big_int_to_decimal("0777").as_deref(), Some("511"));
+        // The sign is carried onto the converted magnitude.
+        assert_eq!(big_int_to_decimal("-0x10").as_deref(), Some("-16"));
+        // Underscore separators are stripped before conversion.
+        assert_eq!(big_int_to_decimal("0xff_ff").as_deref(), Some("65535"));
+    }
+
+    #[test]
+    fn big_int_to_decimal_leaves_decimal_untouched() {
+        // A decimal literal returns `None`: the caller keeps the original text.
+        assert_eq!(big_int_to_decimal("99999999999999999999"), None);
+        assert_eq!(big_int_to_decimal("-12345"), None);
+        assert_eq!(big_int_to_decimal("0"), None);
+    }
 }

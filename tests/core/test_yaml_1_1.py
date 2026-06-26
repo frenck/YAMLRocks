@@ -74,6 +74,18 @@ def test_binary_integer():
     assert load11("0b1010") == 10
 
 
+def test_non_decimal_big_integer():
+    """A hex/binary/C-octal integer over i64 resolves to a Python int, not a string.
+
+    These overflowing radix forms previously fell through to a string because the
+    big-integer fallback only recognized decimal.
+    """
+    assert load11("0x8000000000000000") == 9223372036854775808
+    assert load11("0b" + "1" * 70) == (1 << 70) - 1
+    assert load11("0" + "7" * 30) == int("7" * 30, 8)  # C-style octal
+    assert isinstance(load11("0x8000000000000000"), int)
+
+
 def test_underscores_in_integer():
     """Strip underscores from integers under OPT_YAML_1_1."""
     assert load11("1_000_000") == 1000000

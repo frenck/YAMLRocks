@@ -78,9 +78,7 @@ pub mod fuzz {
     /// Restricted to the YAML 1.2 schema on purpose: the fast emitter targets
     /// 1.2 quoting rules, so re-decoding its output under 1.1 (where bare `yes`
     /// is a bool, not the string it emitted) would diverge by design, not by
-    /// bug. Re-decode failures and multi-document output are skipped rather than
-    /// asserted, for the reasons [`roundtrip`] documents; only a successful,
-    /// single-document re-decode that *disagrees on data* is a finding.
+    /// bug. Every other step is a hard assertion: see [`check_emit_roundtrip`].
     pub fn differential(input: &str) {
         let Ok(documents) = decode_with(input, Schema::Yaml12, false, false) else {
             return;
@@ -165,23 +163,33 @@ pub mod fuzz {
     /// Emit `document` with `options`, re-decode the output, and assert the data
     /// survived unchanged. Shared by both differential targets so a divergence is
     /// reported identically (the panic message names the options that triggered
-    /// it). Re-decode failures and multi-document output are skipped, not
-    /// asserted, for the reasons [`roundtrip`] documents.
+    /// it).
+    ///
+    /// Every step is a hard assertion, unlike the round-trip target's lenient
+    /// re-compose. The fast emitter takes a freshly decoded `Value` tree (no user
+    /// edits) and must always produce valid YAML that `loads` reads back as the
+    /// *same single document*. So invalid UTF-8, output that fails to re-decode, or
+    /// output that splits into several documents is itself a `dumps` bug, not a
+    /// case to skip. Three such bugs were found and fixed this way: an unquoted
+    /// `...`-marker string, a folded scalar breaking onto a marker line, and an
+    /// indentless tagged sequence item merging into its parent.
     fn check_emit_roundtrip(
         input: &str,
         document: &crate::decode::Value<'_>,
         options: &EmitOptions,
     ) {
         let emitted = encode(document, options);
-        let Ok(text) = std::str::from_utf8(&emitted) else {
-            return;
-        };
-        let Ok(reparsed) = decode_with(text, Schema::Yaml12, false, false) else {
-            return;
-        };
-        if reparsed.len() != 1 {
-            return;
-        }
+        let text = std::str::from_utf8(&emitted).unwrap_or_else(|e| {
+            panic!("dumps emitted invalid UTF-8\n  options:  {options:?}\n  input:    {input:?}\n  error:    {e}")
+        });
+        let reparsed = decode_with(text, Schema::Yaml12, false, false).unwrap_or_else(|e| {
+            panic!("dumps emitted YAML that loads rejects\n  options:  {options:?}\n  input:    {input:?}\n  emitted:  {text:?}\n  error:    {e:?}")
+        });
+        assert_eq!(
+            reparsed.len(),
+            1,
+            "dumps emitted multi-document YAML\n  options:  {options:?}\n  input:    {input:?}\n  emitted:  {text:?}"
+        );
         assert!(
             values_equiv(document, &reparsed[0]),
             "dumps/loads diverged on data\n  options:  {options:?}\n  input:    {input:?}\n  emitted:  {text:?}\n  original: {document:?}\n  reparsed: {:?}",

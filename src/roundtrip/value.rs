@@ -265,11 +265,15 @@ fn python_to_node_depth_inner(
         return Ok(YamlNode::new(YamlNodeKind::Scalar(s, style), span));
     }
     if let Ok(list) = obj.cast::<PyList>() {
-        let mut items = Vec::new();
-        for item in list.iter() {
+        // Snapshot the elements before converting any: conversion runs arbitrary
+        // Python code (a value's `__float__`, `__str__`, ...), and if that mutates
+        // the list, iterating it live could misbehave. Mirrors the fast path.
+        let snapshot: Vec<Bound<'_, PyAny>> = list.iter().collect();
+        let mut items = Vec::with_capacity(snapshot.len());
+        for item in &snapshot {
             items.push(python_to_node_depth(
                 py,
-                &item,
+                item,
                 double_quotes,
                 schema,
                 depth + 1,
@@ -278,11 +282,16 @@ fn python_to_node_depth_inner(
         return Ok(YamlNode::new(YamlNodeKind::Sequence(items), span));
     }
     if let Ok(dict) = obj.cast::<PyDict>() {
-        let mut pairs = Vec::new();
-        for (k, v) in dict.iter() {
+        // Snapshot the entries before converting any: conversion runs arbitrary
+        // Python code (a key/value's `__float__`, `__index__`, `__str__`, ...),
+        // and if that mutates the dict, iterating it live panics ("dictionary
+        // changed size during iteration"). Mirrors the fast path's `dict_to_pairs`.
+        let snapshot: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+        let mut pairs = Vec::with_capacity(snapshot.len());
+        for (k, v) in &snapshot {
             pairs.push((
-                python_to_node_depth(py, &k, double_quotes, schema, depth + 1)?,
-                python_to_node_depth(py, &v, double_quotes, schema, depth + 1)?,
+                python_to_node_depth(py, k, double_quotes, schema, depth + 1)?,
+                python_to_node_depth(py, v, double_quotes, schema, depth + 1)?,
             ));
         }
         return Ok(YamlNode::new(YamlNodeKind::Mapping(pairs), span));

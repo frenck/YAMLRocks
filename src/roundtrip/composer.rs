@@ -513,6 +513,10 @@ impl<'input> Composer<'input> {
         keep_empty: bool,
     ) -> Result<Vec<YamlNode>, ScanError> {
         let mut documents = Vec::new();
+        // Directives (`%YAML`/`%TAG`) appear before the `---` of the document
+        // they introduce; collect them until that document's node exists, then
+        // hand them over so re-emission can replay them.
+        let mut pending_directives: Vec<String> = Vec::new();
 
         while self.pos < events.len() {
             match &events[self.pos].kind {
@@ -526,12 +530,14 @@ impl<'input> Composer<'input> {
                         // An explicit `---` produces this event; record it so the
                         // marker is preserved on re-emission.
                         node.explicit_start = true;
+                        node.directives = std::mem::take(&mut pending_directives);
                         documents.push(node);
                     } else if keep_empty {
                         // A lone/trailing `---` with no body is still a document
                         // (a null one) when the caller counts documents.
                         let mut node = YamlNode::new(YamlNodeKind::Null, marker_span);
                         node.explicit_start = true;
+                        node.directives = std::mem::take(&mut pending_directives);
                         documents.push(node);
                     }
                     if self.pos < events.len()
@@ -540,12 +546,14 @@ impl<'input> Composer<'input> {
                         self.pos += 1;
                     }
                 }
-                EventKind::Directive(_) => {
+                EventKind::Directive(text) => {
+                    pending_directives.push(text.clone());
                     self.pos += 1;
                 }
                 _ => {
                     let start_pos = self.pos;
-                    if let Some(node) = self.compose_node(events)? {
+                    if let Some(mut node) = self.compose_node(events)? {
+                        node.directives = std::mem::take(&mut pending_directives);
                         documents.push(node);
                     }
                     // Force progress past a bare terminator (e.g. a leading

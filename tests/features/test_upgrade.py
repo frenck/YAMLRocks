@@ -181,3 +181,24 @@ def test_roundtrip_upgrade_save_stamps(tmp_path):
     assert written.startswith(b"%YAML 1.2\n---\n")
     # The inline comment keeps its original two-space alignment padding.
     assert b"enabled: true  # was on" in written
+
+
+def test_upgrade_keeps_tag_directive_in_scope():
+    """upgrade() stamps `%YAML 1.2` ahead of a `%TAG`, keeping the handle valid.
+
+    The version directive must precede the `%TAG`, not displace it after a
+    document start, or the named handle would no longer resolve on reload.
+    """
+    src = b"%TAG !e! tag:example.com,2020:\n---\nv: !e!foo old\n"
+    out = yamlrocks.upgrade(src)
+    assert out == (b"%YAML 1.2\n%TAG !e! tag:example.com,2020:\n---\nv: !e!foo old\n")
+    # The result reloads: the handle is still defined for the document.
+    assert yamlrocks.loads(out) == {"v": "old"}
+
+
+def test_upgrade_replaces_declared_version_before_tag_directive():
+    """A declared `%YAML 1.1` is replaced by 1.2 while `%TAG` stays in place."""
+    src = b"%YAML 1.1\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n"
+    out = yamlrocks.upgrade(src)
+    assert out == b"%YAML 1.2\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n"
+    assert yamlrocks.loads(out) == {"v": "1"}

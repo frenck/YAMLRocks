@@ -34,6 +34,13 @@ pub struct YamlNode {
     /// re-emission (after an edit, or when writing an included file) keeps the
     /// marker instead of silently dropping it.
     pub explicit_start: bool,
+    /// The `%YAML`/`%TAG` directives that introduced this document, in source
+    /// order and without their leading `%` (`TAG !e! tag:example.com,2020:`).
+    /// Only meaningful on a document root node; empty for nested nodes. Preserved
+    /// so re-emission after an edit keeps a `%TAG` handle in scope (dropping it
+    /// would leave a `!e!foo` node with an undefined handle that no longer
+    /// reloads).
+    pub directives: Vec<String>,
     /// Whether the stream began with a UTF-8 byte order mark. Only meaningful on
     /// the first document root; `false` otherwise. Preserved so re-emission keeps
     /// the mark and a round-trip stays byte-for-byte.
@@ -61,6 +68,7 @@ impl YamlNode {
             style: NodeStyle::Block,
             source: None,
             explicit_start: false,
+            directives: Vec::new(),
             leading_bom: false,
             synthetic: false,
         }

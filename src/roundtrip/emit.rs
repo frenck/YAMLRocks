@@ -36,10 +36,16 @@ pub fn emit_roundtrip_all_with(nodes: &[YamlNode], null_style: NullStyle) -> Vec
         emitter.buf.extend_from_slice(BOM);
     }
     for (i, node) in nodes.iter().enumerate() {
-        // Documents need a `---` separator. A document that carries its own
-        // explicit start marker emits it in `emit_document`, so only add the
-        // separator for one that does not (avoiding a double `---`).
-        if i > 0 && !node.explicit_start {
+        // A directive (`%TAG`/`%YAML`) is only valid at the stream start or right
+        // after a `...` end marker, so a later document carrying directives needs
+        // the previous one closed first. `emit_document` then emits the directives
+        // and the `---`.
+        if i > 0 && !node.directives.is_empty() {
+            emitter.buf.extend_from_slice(b"...\n");
+        } else if i > 0 && !node.explicit_start {
+            // Documents need a `---` separator. A document that carries its own
+            // explicit start marker emits it in `emit_document`, so only add the
+            // separator for one that does not (avoiding a double `---`).
             emitter.buf.extend_from_slice(b"---\n");
         }
         emitter.emit_document(node);
@@ -81,6 +87,14 @@ impl RoundTripEmitter {
     // -- Document entry --
 
     fn emit_document(&mut self, node: &YamlNode) {
+        // Directives precede the `---` that opens their document. A `%TAG` handle
+        // is in scope only for this document, so replaying it keeps a tagged node
+        // (`!e!foo`) resolvable when the edited document reloads.
+        for directive in &node.directives {
+            self.buf.push(b'%');
+            self.buf.extend_from_slice(directive.as_bytes());
+            self.buf.push(b'\n');
+        }
         if node.explicit_start {
             self.buf.extend_from_slice(b"---\n");
         }

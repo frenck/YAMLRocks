@@ -94,6 +94,82 @@ def test_enum_array_compares_full_structure():
         yamlrocks.loads(b"a: [1]\n", schema={"properties": {"a": {"enum": [[]]}}})
 
 
+def test_ref_resolves_against_defs():
+    """A `$ref` to `#/$defs/...` validates against the referenced subschema."""
+    schema = {"$ref": "#/$defs/port", "$defs": {"port": {"type": "integer"}}}
+    assert yamlrocks.loads(b"42", schema=schema) == 42
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="integer"):
+        yamlrocks.loads(b"not_int", schema=schema)
+
+
+def test_ref_resolves_against_definitions():
+    """A `$ref` to the draft-7 `#/definitions/...` location works too."""
+    schema = {
+        "properties": {"p": {"$ref": "#/definitions/p"}},
+        "definitions": {"p": {"type": "string"}},
+    }
+    assert yamlrocks.loads(b"p: hello\n", schema=schema) == {"p": "hello"}
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="string"):
+        yamlrocks.loads(b"p: 5\n", schema=schema)
+
+
+def test_ref_resolves_a_deep_json_pointer():
+    """A `$ref` may point at any path within the schema, not just $defs."""
+    schema = {
+        "$ref": "#/$defs/a/properties/b",
+        "$defs": {"a": {"properties": {"b": {"type": "boolean"}}}},
+    }
+    assert yamlrocks.loads(b"true", schema=schema) is True
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="boolean"):
+        yamlrocks.loads(b"5", schema=schema)
+
+
+def test_ref_recurses_over_a_finite_document():
+    """A recursive schema validates a finite nested document (no false cycle)."""
+    schema = {
+        "$ref": "#/$defs/node",
+        "$defs": {
+            "node": {
+                "type": "object",
+                "properties": {"child": {"$ref": "#/$defs/node"}},
+            }
+        },
+    }
+    assert yamlrocks.loads(b"child:\n  child:\n    x: 1\n", schema=schema) == {
+        "child": {"child": {"x": 1}}
+    }
+
+
+def test_unresolvable_ref_is_an_error():
+    """An unresolvable `$ref` is reported, never silently treated as permissive."""
+    # A missing local pointer.
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="unresolvable schema"):
+        yamlrocks.loads(b"1", schema={"$ref": "#/$defs/nope", "$defs": {}})
+    # A remote reference, which would need an external resolver.
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="unresolvable schema"):
+        yamlrocks.loads(b"1", schema={"$ref": "https://example.com/s.json"})
+
+
+def test_cyclic_ref_is_bounded():
+    """A `$ref` cycle is cut by the depth bound rather than looping forever."""
+    schema = {"$ref": "#/$defs/a", "$defs": {"a": {"$ref": "#/$defs/a"}}}
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="nesting too deep"):
+        yamlrocks.loads(b"1", schema=schema)
+
+
+def test_branching_ref_cycle_is_bounded():
+    """A `$ref` cycle that branches through a combinator is bounded by a budget.
+
+    `allOf` reaches the same `$ref` twice, doubling the work at each level; a
+    per-chain depth cap alone would allow ~2^depth calls (an effective hang). A
+    shared total-follow budget cuts it.
+    """
+    inner = {"allOf": [{"$ref": "#/$defs/a"}, {"$ref": "#/$defs/a"}]}
+    schema = {"$ref": "#/$defs/a", "$defs": {"a": inner}}
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="nesting too deep"):
+        yamlrocks.loads(b"1", schema=schema)
+
+
 def test_deeply_nested_value_under_enum_does_not_overflow():
     """A deep document under a container enum/const tears down without crashing.
 

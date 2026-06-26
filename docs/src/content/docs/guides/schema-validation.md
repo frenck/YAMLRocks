@@ -265,12 +265,13 @@ full validator. The supported keywords are:
 | Numbers     | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`                 |
 | Strings     | `minLength`, `maxLength`                                                     |
 | Combinators | `allOf`, `anyOf`, `oneOf`, `not`                                             |
+| References  | `$ref` (local `#/...` pointers, including `#/$defs/...`)                     |
 
 :::note[Unknown keywords are ignored]
 This is a deliberately small subset. Keywords YAMLRocks does not implement (such as
-`pattern`, `format`, or `$ref`) are skipped rather than rejected, so a richer
-schema written for another validator still works here; it just validates against
-the keywords listed above. If you need a feature that is missing, validate with a
+`pattern` or `format`) are skipped rather than rejected, so a richer schema
+written for another validator still works here; it just validates against the
+keywords listed above. If you need a feature that is missing, validate with a
 dedicated JSON Schema library after `loads` returns.
 :::
 
@@ -280,10 +281,10 @@ The validator is tuned for the scalar-and-shape constraints configuration files
 actually use. Three boundaries are worth knowing, and all three are reasons to
 reach for a dedicated JSON Schema library when you need them:
 
-- **`enum` and `const` compare scalars.** They are reliable for strings, numbers,
-  booleans, and null. Using them to pin an _array_ or _object_ value is not
-  supported and may reject an otherwise-matching value, so do not rely on
-  structural `const`/`enum`.
+- **`$ref` resolves local pointers only.** A `$ref` into the same schema
+  (`#/$defs/...`, `#/definitions/...`, or any `#/`-path) is resolved and
+  validated. A remote reference (an external URL) is not fetched; it is reported
+  as an unresolvable `$ref` rather than silently passing.
 - **Object rules apply to scalar keys.** `properties`, `required`, and
   `additionalProperties` match string keys. A YAML _collection key_
   (`[a, b]: ...`) is not a JSON object key and is not subject to these rules, so

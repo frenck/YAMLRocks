@@ -74,7 +74,7 @@ subclasses let you react to a specific cause:
 | `YAMLRocksSchemaError`             | [schema validation](/guides/schema-validation/) fails; `.schema_path` is the JSON path of the offending node                                                   |
 | `YAMLRocksIncludeNotFoundError`    | an `!include` target does not exist                                                                                                                            |
 | `YAMLRocksCircularIncludeError`    | an `!include` chain forms a cycle                                                                                                                              |
-| `YAMLRocksIncludeDepthError`       | an `!include` chain is too deep                                                                                                                                |
+| `YAMLRocksIncludeDepthError`       | an `!include` chain is too deep, or expands too many files in total (a fan-out)                                                                                |
 | `YAMLRocksIncludeConfinementError` | an `!include` resolves outside `include_dir`                                                                                                                   |
 | `YAMLRocksSecretNotFoundError`     | a `!secret` name is not in any `secrets.yaml`                                                                                                                  |
 | `YAMLRocksEnvVarError`             | an `!env_var` is undefined and has no default                                                                                                                  |

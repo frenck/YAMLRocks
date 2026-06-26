@@ -561,6 +561,50 @@ def test_alias_bomb_terminates_within_time_budget():
     assert proc.stdout.strip() == b"OK"
 
 
+# A doubling lattice of includes (each file includes the next twice) re-expands a
+# shared subtree once per route, so without a total-expansion budget it reads the
+# leaf 2**depth times: a few tiny files, billions of reads. The depth cap does not
+# catch it (the lattice is wide, not deep). Runs in a subprocess so a regression
+# that removes the budget is caught by the wall-clock timeout, not left to hang.
+_INCLUDE_FANOUT_SCRIPT = """
+import os, tempfile, yamlrocks
+d = tempfile.mkdtemp()
+depth = 40  # 2**40 leaf reads without the expansion budget
+for i in range(depth):
+    with open(os.path.join(d, f"c{i}.yaml"), "w") as f:
+        f.write(f"a: !include c{i + 1}.yaml\\nb: !include c{i + 1}.yaml\\n")
+with open(os.path.join(d, f"c{depth}.yaml"), "w") as f:
+    f.write("leaf: 1\\n")
+try:
+    yamlrocks.loads(
+        b"root: !include c0.yaml\\n", option=yamlrocks.OPT_INCLUDES, include_dir=d
+    )
+    raise SystemExit("include fan-out was not rejected")
+except yamlrocks.YAMLRocksDecodeError:
+    pass
+print("OK")
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="subprocess timeout semantics")
+def test_include_fanout_terminates_within_time_budget():
+    """A diamond lattice of includes must terminate within a wall-clock budget,
+    not just "eventually". The total-expansion budget bounds the work; a
+    regression that drops it would re-expand a shared subtree 2**depth times and
+    hang, which the subprocess timeout turns into a clean failure.
+    """
+    import subprocess
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _INCLUDE_FANOUT_SCRIPT], capture_output=True, timeout=30
+    )
+    assert proc.returncode == 0, (
+        f"include fan-out did not terminate cleanly: rc={proc.returncode} "
+        f"stderr={proc.stderr.decode()[:300]}"
+    )
+    assert proc.stdout.strip() == b"OK"
+
+
 def test_schema_validation_resolves_aliases():
     """The schema validator still sees an alias as its referent, not null."""
     src = b"defaults: &d {port: 80}\nserver: *d\n"

@@ -16,6 +16,19 @@ mod secret;
 /// linear chain of distinct files so it cannot exhaust the stack or memory.
 const MAX_INCLUDE_DEPTH: usize = 50;
 
+/// Maximum number of file expansions a single load may perform across all
+/// `!include`/`!include_dir_*` directives. Depth and cycle detection only bound a
+/// single path through the include graph; neither stops a *diamond* lattice from
+/// re-expanding a shared subtree once per route to it. A handful of tiny files
+/// that each include the *next one twice* (`a.yaml`: `x: !include b.yaml` and
+/// `y: !include b.yaml`; `b.yaml` likewise includes `c.yaml` twice; and so on)
+/// then expand the deepest file `2^depth` times, a billion-laughs amplification
+/// that depth alone cannot catch. This total-work budget caps the whole expansion
+/// regardless of shape; 10,000 is far above any real configuration (the real-world
+/// corpus expands a few hundred) yet trips the doubling attack in well under a
+/// second.
+const MAX_INCLUDE_EXPANSIONS: usize = 10_000;
+
 /// Which application tag families the resolver should expand. Each tag crosses
 /// a different trust boundary (`!include` reads files, `!secret` reads a secrets
 /// file, `!env_var` reads the process environment), so each is opt-in on its
@@ -57,6 +70,10 @@ pub struct IncludeResolver {
     /// Whether `!include_dir_*` descends into subdirectories (`os.walk`-style).
     /// Off by default (top level only); enabled via `OPT_INCLUDE_DIR_RECURSIVE`.
     dir_recursive: bool,
+    /// Running count of file expansions this load has performed, bounded by
+    /// [`MAX_INCLUDE_EXPANSIONS`] to stop a diamond-lattice fan-out (see that
+    /// constant). Incremented once per included-file read in `read_and_compose`.
+    expansions: usize,
     /// Non-fatal diagnostics gathered during resolution (e.g. a non-`debug`
     /// `logger:` value in a `secrets.yaml`), surfaced to the caller to emit
     /// through Python logging.
@@ -108,6 +125,7 @@ impl IncludeResolver {
             secrets_cache: HashMap::new(),
             tags,
             dir_recursive: false,
+            expansions: 0,
             warnings: Vec::new(),
             collect_missing_secrets: false,
             missing_secrets: Vec::new(),
@@ -685,6 +703,25 @@ impl IncludeResolver {
         display: &str,
         stack: &[(PathBuf, u32)],
     ) -> Result<(u32, Vec<YamlNode>), IncludeError> {
+        // Bound the total number of file expansions, not just the chain depth: a
+        // diamond lattice re-expands a shared subtree once per route and would
+        // otherwise blow up as `2^depth` from a few tiny files (see
+        // [`MAX_INCLUDE_EXPANSIONS`]). Every include/dir file read funnels through
+        // here, so this single check covers all directive families.
+        self.expansions += 1;
+        if self.expansions > MAX_INCLUDE_EXPANSIONS {
+            return Err(IncludeError {
+                kind: IncludeErrorKind::Depth,
+                message: format!(
+                    "include expansion exceeded the maximum of {MAX_INCLUDE_EXPANSIONS} files \
+                     (a fan-out of nested includes)"
+                ),
+                path: path.to_path_buf(),
+                include_stack: stack.to_vec(),
+                span: None,
+            });
+        }
+
         let content = std::fs::read_to_string(path).map_err(|e| IncludeError {
             kind: IncludeErrorKind::NotFound,
             message: format!("cannot read included file '{display}': {e}"),

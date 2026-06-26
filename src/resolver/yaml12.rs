@@ -149,12 +149,25 @@ fn classify_tagged(value: &str, tag: &str) -> ScalarKind {
                 ScalarKind::Str
             }
         }
-        "!!float" | "tag:yaml.org,2002:float" => match try_parse_float_12(value) {
+        "!!float" | "tag:yaml.org,2002:float" => match try_parse_float_12_tagged(value) {
             Some(float) => ScalarKind::Float(float),
             None => ScalarKind::Str,
         },
         _ => ScalarKind::Str,
     }
+}
+
+/// Parse a value carrying an explicit `!!float` tag. Unlike the plain-scalar
+/// [`try_parse_float_12`] (which requires a `.`/`e`/`E` so a bare integer stays
+/// an int), an integer-form decimal like `42` is a *conforming* float under the
+/// core schema and resolves to `42.0`. Hexadecimal and octal forms are not part
+/// of the float production, so they fall through to a string (Rust's `f64` parse
+/// rejects them), matching the schema rather than coercing `0x10` to `16.0`.
+fn try_parse_float_12_tagged(value: &str) -> Option<f64> {
+    if let Some(f) = super::parse_special_float(value) {
+        return Some(f);
+    }
+    value.parse::<f64>().ok()
 }
 
 #[cfg(test)]
@@ -290,6 +303,18 @@ mod tests {
         assert_eq!(
             r.resolve("1.5", ScalarStyle::Plain, Some("!!float")),
             ResolvedValue::Float(1.5)
+        );
+        // An integer-form value is a conforming float under an explicit tag
+        // (`42` -> `42.0`), unlike in plain resolution where it stays an int.
+        assert_eq!(
+            r.resolve("42", ScalarStyle::Plain, Some("!!float")),
+            ResolvedValue::Float(42.0)
+        );
+        // Hex/octal forms are not part of the float production, so they stay a
+        // string rather than being coerced to their integer value.
+        assert_eq!(
+            r.resolve("0x10", ScalarStyle::Plain, Some("!!float")),
+            ResolvedValue::String("0x10".to_owned())
         );
         // A non-conforming value under an explicit core tag is kept as a string,
         // not coerced to a wrong-but-valid 0/0.0/false/null.

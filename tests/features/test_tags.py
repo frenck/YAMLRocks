@@ -57,8 +57,8 @@ def test_standard_tags_not_treated_as_custom():
 
 
 def test_explicit_core_tag_with_nonconforming_content_stays_a_string():
-    """A core tag whose content does not match the type is kept as a string, not
-    coerced to a wrong-but-valid value (`!!int nope` used to become 0)."""
+    """A core tag whose content does not match its type is kept as a string."""
+    # Not coerced to a wrong-but-valid value (`!!int nope` used to become 0).
     assert yamlrocks.loads(b"x: !!int nope") == {"x": "nope"}
     assert yamlrocks.loads(b"x: !!float nope") == {"x": "nope"}
     assert yamlrocks.loads(b"x: !!bool maybe") == {"x": "maybe"}
@@ -69,6 +69,8 @@ def test_explicit_core_tag_with_nonconforming_content_stays_a_string():
     assert yamlrocks.loads(b"x: !!int 99999999999999999999") == {
         "x": 99999999999999999999
     }
+    # An integer-form value under `!!float` is a conforming float, not a string.
+    assert yamlrocks.loads(b"x: !!float 42") == {"x": 42.0}
 
 
 def test_nested_custom_tags():

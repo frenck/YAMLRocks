@@ -255,13 +255,33 @@ fn classify_tagged_11(value: &str, tag: &str, pyyaml_compat: bool) -> ScalarKind
                 ScalarKind::Str
             }
         }
-        "!!float" | "tag:yaml.org,2002:float" => match try_parse_float_11(value) {
+        "!!float" | "tag:yaml.org,2002:float" => match try_parse_float_11_tagged(value) {
             Some(float) => ScalarKind::Float(float),
             None => ScalarKind::Str,
         },
         "!!merge" | "tag:yaml.org,2002:merge" => ScalarKind::Merge,
         _ => ScalarKind::Str,
     }
+}
+
+/// Parse a value carrying an explicit `!!float` tag under YAML 1.1. Unlike the
+/// plain-scalar [`try_parse_float_11`] (which requires a `.`/`e`/`E` so a bare
+/// integer stays an int), an integer-form value is a conforming float here:
+/// `42` resolves to `42.0` and the sexagesimal `1:30` to `90.0`, matching
+/// PyYAML. Hexadecimal and octal forms are not part of the float production, so
+/// they fall through to a string rather than being coerced.
+fn try_parse_float_11_tagged(value: &str) -> Option<f64> {
+    if let Some(f) = super::parse_special_float(value) {
+        return Some(f);
+    }
+    // Strip underscores (allocation-free unless any are present).
+    let cleaned = strip_underscores(value);
+    let clean: &str = &cleaned;
+    if clean.contains(':') {
+        // Sexagesimal, integer (`1:30`) or fractional (`1:30.5`).
+        return parse_sexagesimal_float(clean);
+    }
+    clean.parse::<f64>().ok()
 }
 
 #[cfg(test)]
@@ -414,6 +434,16 @@ mod tests {
         assert_eq!(
             r.resolve("1.5", ScalarStyle::Plain, Some("!!float")),
             ResolvedValue::Float(1.5)
+        );
+        // Integer-form and sexagesimal values are conforming floats under an
+        // explicit tag (`42` -> `42.0`, `1:30` -> `90.0`), matching PyYAML.
+        assert_eq!(
+            r.resolve("42", ScalarStyle::Plain, Some("!!float")),
+            ResolvedValue::Float(42.0)
+        );
+        assert_eq!(
+            r.resolve("1:30", ScalarStyle::Plain, Some("!!float")),
+            ResolvedValue::Float(90.0)
         );
     }
 

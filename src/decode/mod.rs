@@ -685,7 +685,13 @@ impl<'input> Decoder<'input> {
                     ScalarKind::Null => Value::Null,
                     ScalarKind::Bool(b) => Value::Bool(b),
                     ScalarKind::Int(i) => Value::Int(i),
-                    ScalarKind::BigInt => Value::BigInt(text),
+                    // A non-decimal big integer (`0xFF...`) is normalized to its
+                    // decimal text so the `BigInt` payload stays decimal for
+                    // Python/JSON/emit; a decimal one keeps its original text.
+                    ScalarKind::BigInt => match crate::resolver::big_int_to_decimal(&text) {
+                        Some(decimal) => Value::BigInt(Cow::Owned(decimal)),
+                        None => Value::BigInt(text),
+                    },
                     ScalarKind::Float(f) => Value::Float(f),
                     ScalarKind::Str => Value::String(text),
                     ScalarKind::Merge => {

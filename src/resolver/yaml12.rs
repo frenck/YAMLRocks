@@ -66,8 +66,9 @@ fn classify_plain_12(value: &str) -> ScalarKind {
     if let Some(int) = try_parse_int_12(value) {
         return ScalarKind::Int(int);
     }
-    // A decimal integer too large for i64 is still an integer, not a string.
-    if super::is_big_decimal_int(value) {
+    // An integer too large for i64 is still an integer, not a string, whether it
+    // is decimal or a hex/octal literal (`0x8000000000000000`).
+    if is_big_int_12(value) {
         return ScalarKind::BigInt;
     }
 
@@ -77,6 +78,23 @@ fn classify_plain_12(value: &str) -> ScalarKind {
     }
 
     ScalarKind::Str
+}
+
+/// Whether `value` is a valid YAML 1.2 integer literal of any magnitude: a
+/// decimal, hexadecimal (`0x`), or octal (`0o`) form. Only reached once
+/// [`try_parse_int_12`] has failed (an overflowing or otherwise too-large
+/// literal), so a `true` result means a big integer rather than a string.
+fn is_big_int_12(value: &str) -> bool {
+    let Some((_, rest)) = super::split_sign(value) else {
+        return false;
+    };
+    if let Some(body) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+        !body.is_empty() && body.bytes().all(|b| b.is_ascii_hexdigit())
+    } else if let Some(body) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
+        !body.is_empty() && body.bytes().all(|b| (b'0'..=b'7').contains(&b))
+    } else {
+        super::is_big_decimal_int(value)
+    }
 }
 
 fn try_parse_int_12(value: &str) -> Option<i64> {
@@ -143,7 +161,7 @@ fn classify_tagged(value: &str, tag: &str) -> ScalarKind {
         "!!int" | "tag:yaml.org,2002:int" => {
             if let Some(int) = try_parse_int_12(value) {
                 ScalarKind::Int(int)
-            } else if super::is_big_decimal_int(value) {
+            } else if is_big_int_12(value) {
                 ScalarKind::BigInt
             } else {
                 ScalarKind::Str

@@ -186,11 +186,11 @@ impl<'a> Emitter<'a> {
 
     fn emit_block_mapping(&mut self, pairs: &[(Value, Value)], indent: usize) {
         let ordered = self.order_pairs(pairs);
-        for (key, val) in ordered.iter() {
+        for (i, (key, val)) in ordered.iter().enumerate() {
             self.write_indent(indent);
             self.emit_key(key);
             self.buf.push(b':');
-            self.emit_value_after_colon(val, indent);
+            self.emit_mapping_value(val, indent, ordered.get(i + 1).map(|p| &p.0));
         }
     }
 
@@ -204,8 +204,27 @@ impl<'a> Emitter<'a> {
             }
             self.emit_key(key);
             self.buf.push(b':');
-            self.emit_value_after_colon(val, indent);
+            self.emit_mapping_value(val, indent, ordered.get(i + 1).map(|p| &p.0));
         }
+    }
+
+    /// Emit a mapping value after its colon, given the following key (if any).
+    /// An empty-style null (`key:` with nothing after) followed by a tagged key
+    /// would let that key's `!tag` be read as *this* value's node property
+    /// (`a:\n!t k: 1` reloads as a tag on `a`'s value, a parse error), so emit an
+    /// explicit null in that case to keep the next key on its own footing.
+    fn emit_mapping_value(&mut self, val: &Value, indent: usize, next_key: Option<&Value>) {
+        if matches!(val, Value::Null)
+            && self.options.null_style == NullStyle::Empty
+            && matches!(next_key, Some(Value::Tagged(..)))
+        {
+            self.buf.push(b' ');
+            self.buf
+                .extend_from_slice(self.options.null_style.inline_token().as_bytes());
+            self.buf.push(b'\n');
+            return;
+        }
+        self.emit_value_after_colon(val, indent);
     }
 
     /// Emit the portion after a mapping key's colon, choosing inline or block.

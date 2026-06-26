@@ -47,7 +47,7 @@ jobs:
         # numpy keeps the OPT_SERIALIZE_NUMPY path inside the coverage numbers.
         run: uv sync --locked --no-install-project --no-default-groups --group build --group test --group numpy
       - name: 🏗 Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
       - name: 🏗 Set up coverage environment
         # show-env emits shell `export KEY='VALUE'` lines. Drop the `export `
         # prefix and the surrounding single quotes so the raw values persist
@@ -59,9 +59,9 @@ jobs:
       - name: 🧹 Clean coverage data
         run: cargo llvm-cov clean --workspace
       - name: 🚀 Run the Rust unit tests (instrumented)
-        run: cargo test --lib
+        run: cargo test --locked --lib
       - name: 🏗 Build and install yamlrocks (instrumented)
-        run: uv run --no-sync maturin develop
+        run: uv run --no-sync maturin develop --locked
       - name: 🚀 Run pytest to exercise the Rust core
         # The llvm-cov-instrumented build carries far more baseline memory than
         # the normal extension (per-region counters, larger code, profile

@@ -522,6 +522,45 @@ def test_schema_validation_alias_bomb_is_bounded():
         pass
 
 
+# A doubling alias bomb (2^N nodes at N hops) run through the round-trip and
+# schema-validation paths. The in-process tests above catch a crash or OOM
+# quickly; this script runs in a subprocess so a *time* regression (the bomb
+# expanding for a long time before terminating, or hanging outright) is caught
+# by the parent's wall-clock timeout instead of silently passing after the work.
+_ALIAS_BOMB_SCRIPT = """
+import yamlrocks
+src = b"a0: &a0 [x]\\n"
+for i in range(1, 40):
+    src += f"a{i}: &a{i} [*a{i - 1}, *a{i - 1}]\\n".encode()
+src += b"top: *a39\\n"
+try:
+    yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP, schema={"type": "object"})
+except Exception:
+    pass
+yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_yaml()
+print("OK")
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="subprocess timeout semantics")
+def test_alias_bomb_terminates_within_time_budget():
+    """An alias bomb must terminate well within a wall-clock budget, not just
+    "eventually". The shared alias-node budget bounds the work, so a regression
+    that lets it expand unbounded would hang; the subprocess timeout turns that
+    into a clean failure instead of a multi-minute (or infinite) test.
+    """
+    import subprocess
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _ALIAS_BOMB_SCRIPT], capture_output=True, timeout=30
+    )
+    assert proc.returncode == 0, (
+        f"alias bomb did not terminate cleanly: rc={proc.returncode} "
+        f"stderr={proc.stderr.decode()[:300]}"
+    )
+    assert proc.stdout.strip() == b"OK"
+
+
 def test_schema_validation_resolves_aliases():
     """The schema validator still sees an alias as its referent, not null."""
     src = b"defaults: &d {port: 80}\nserver: *d\n"

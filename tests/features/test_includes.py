@@ -159,6 +159,31 @@ def test_dump_includes_requires_include_document():
         yamlrocks.dump_includes_map(doc)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="symlink semantics differ on Windows")
+def test_dump_includes_does_not_write_through_a_swapped_symlink(config_dir):
+    """A source file swapped for a symlink between load and write-back must be
+    replaced, not followed: the write stays in the tree and the link target
+    outside it is left untouched (an atomic, symlink-safe write)."""
+    tmp_path, root = config_dir
+    doc = yamlrocks.loads(root.encode(), option=RT_INC, include_dir=str(tmp_path))
+    doc["automation"][1]["trigger"] = "civil_dusk"
+
+    # Stage the attack: replace the tracked source file with a symlink that points
+    # at a file outside the configuration tree.
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("do-not-clobber\n")
+    target = tmp_path / "automations.yaml"
+    target.unlink()
+    target.symlink_to(outside)
+
+    yamlrocks.dump_includes(doc, include_dir=str(tmp_path))
+
+    # The outside file is untouched, and the include path is now a real file.
+    assert outside.read_text() == "do-not-clobber\n"
+    assert not target.is_symlink()
+    assert "civil_dusk" in target.read_text()
+
+
 def test_include_dir_list(tmp_path):
     """!include_dir_list yields one entry per file in sorted order."""
     # !include_dir_list yields one entry per file (in sorted filename order).

@@ -698,7 +698,9 @@ pub fn dump_includes(
     let _ = include_dir;
     let changes = get_include_changes(py, doc)?;
     for (path, content) in changes {
-        std::fs::write(&path, &content)
+        // Atomic, symlink-safe write: a tracked source file swapped for a symlink
+        // between load and write-back must not redirect the write out of the tree.
+        crate::safe_io::atomic_write(&path, &content)
             .map_err(|e| PyValueError::new_err(format!("cannot write {}: {e}", path.display())))?;
     }
     Ok(())

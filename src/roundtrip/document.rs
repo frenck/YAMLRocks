@@ -1446,8 +1446,11 @@ fn key_error(node: &YamlNode, key: &Bound<'_, PyAny>) -> PyErr {
 }
 
 /// Write `bytes` to `path`, surfacing IO errors as Python `OSError`.
+///
+/// Uses an atomic, symlink-safe write so a source file swapped for a symlink
+/// between load and `save` cannot redirect the write outside the config tree.
 fn write_file(path: &std::path::Path, bytes: &[u8]) -> PyResult<()> {
-    std::fs::write(path, bytes).map_err(|e| {
+    crate::safe_io::atomic_write(path, bytes).map_err(|e| {
         pyo3::exceptions::PyOSError::new_err(format!("cannot write {}: {e}", path.display()))
     })
 }

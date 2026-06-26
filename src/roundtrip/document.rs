@@ -819,6 +819,16 @@ impl YAMLRocksNode {
                     "anchor name cannot be empty",
                 ));
             }
+            // The name must be a single anchor token: an emitted `&name` is read
+            // back by the same rule, so whitespace, a line break, or a flow
+            // indicator (`,[]{}`) would split it and corrupt the document
+            // (`anchor = "a b"` -> `&a b value`, reloading as the value `b value`).
+            if let Some(bad) = name.chars().find(|&c| !crate::scanner::is_anchor_char(c)) {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "invalid anchor name {name:?}: cannot contain whitespace, line breaks, \
+                     or flow indicators (found {bad:?})"
+                )));
+            }
             if let Some(existing) = find_anchor_path(&doc.nodes, name) {
                 if existing != self.path {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(

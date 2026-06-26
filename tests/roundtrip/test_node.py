@@ -442,6 +442,18 @@ def test_empty_anchor_name_rejected():
         doc.node["a"].anchor = ""
 
 
+@pytest.mark.parametrize("name", ["a b", "a\nb", "[x]", "tag,s", "{m}"])
+def test_invalid_anchor_name_rejected(name):
+    """An anchor name with whitespace, a break, or a flow indicator is rejected.
+
+    Such a name would split when the `&name` is emitted and read back, corrupting
+    the document (`anchor = "a b"` -> `&a b value`, reloading as `b value`).
+    """
+    doc = load(b"a: 1\n")
+    with pytest.raises(ValueError, match="invalid anchor name"):
+        doc.node["a"].anchor = name
+
+
 def test_alias_to_undefined_anchor_rejected():
     """An alias needs an existing anchor to point at."""
     doc = load(b"a: 1\nb: 2\n")

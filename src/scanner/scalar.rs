@@ -358,27 +358,44 @@ pub fn scan_block<'input>(
     let start_span = reader.span();
     reader.advance(); // skip '|' or '>'
 
-    // Parse optional chomping and indentation indicators
+    // Parse the optional chomping (`+`/`-`) and indentation (`1`-`9`) indicators.
+    // They follow the `|`/`>` immediately, in either order, each at most once,
+    // with no whitespace before or between them (YAML 8.1.1). Anything else ends
+    // this phase; a repeated or stray indicator is then caught as unexpected
+    // header content below.
     let mut chomping = Chomping::Clip; // default
+    let mut seen_chomping = false;
     let mut explicit_indent: Option<u32> = None;
 
+    while !reader.is_eof() {
+        match reader.peek() {
+            '-' if !seen_chomping => {
+                chomping = Chomping::Strip;
+                seen_chomping = true;
+                reader.advance();
+            }
+            '+' if !seen_chomping => {
+                chomping = Chomping::Keep;
+                seen_chomping = true;
+                reader.advance();
+            }
+            '1'..='9' if explicit_indent.is_none() => {
+                explicit_indent = Some(reader.peek() as u32 - '0' as u32);
+                reader.advance();
+            }
+            _ => break,
+        }
+    }
+
+    // After the indicators, only whitespace, an optional comment, and the line
+    // break may remain on the header line. A repeated indicator, a second
+    // indentation digit (`|12`), a space-separated indicator (`| 2`), or any
+    // other text lands here and is rejected.
     loop {
         if reader.is_eof() {
             break;
         }
         match reader.peek() {
-            '-' => {
-                chomping = Chomping::Strip;
-                reader.advance();
-            }
-            '+' => {
-                chomping = Chomping::Keep;
-                reader.advance();
-            }
-            '1'..='9' => {
-                explicit_indent = Some(reader.peek() as u32 - '0' as u32);
-                reader.advance();
-            }
             ' ' | '\t' => {
                 reader.advance();
             }
@@ -390,9 +407,6 @@ pub fn scan_block<'input>(
                 break;
             }
             '\n' | '\r' => break,
-            // Only chomping/indent indicators, a space-preceded comment, or a
-            // line break may follow the `|`/`>` header. Anything else (a stray
-            // `#` or arbitrary text on the header line) is invalid.
             other => {
                 let what = if other == '#' {
                     "a comment must be preceded by whitespace"
@@ -931,5 +945,22 @@ mod tests {
     #[test]
     fn invalid_escape_is_an_error() {
         assert!(errors("\"bad \\q escape\"\n"));
+    }
+
+    #[test]
+    fn malformed_block_scalar_header_is_an_error() {
+        // At most one chomping and one indentation indicator, no whitespace
+        // before or between them. The lenient scan accepted all of these.
+        assert!(errors("|+-\n  a\n")); // two chomping indicators
+        assert!(errors("|12\n  a\n")); // two indentation digits
+        assert!(errors("| 2\n  a\n")); // whitespace before the indicator
+    }
+
+    #[test]
+    fn valid_block_scalar_headers_scan() {
+        // Either indicator order, with or without a trailing comment, is fine.
+        assert_eq!(first("|2-\n   a\n").0, " a");
+        assert_eq!(first("|-2\n   a\n").0, " a");
+        assert_eq!(first("| # c\n  a\n").0, "a\n");
     }
 }

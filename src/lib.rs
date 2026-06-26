@@ -6,6 +6,7 @@ mod include;
 mod parser;
 mod resolver;
 mod roundtrip;
+mod safe_io;
 mod scanner;
 mod schema;
 mod stack;

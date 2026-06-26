@@ -136,6 +136,19 @@ def test_not_a_number(text):
 def test_sexagesimal_float():
     """Resolve a base-60 float (1:30.5) under OPT_YAML_1_1."""
     assert load11("1:30.5") == 90.5
+    # The high-order segment is unbounded; later segments are base-60 digits.
+    assert load11("90:00.0") == 5400.0
+    assert load11("2:3:4.5") == 7384.5
+
+
+def test_invalid_sexagesimal_float_stays_string():
+    """A sexagesimal float with a bad segment stays a string, matching PyYAML.
+
+    The float path skipped the base-60 check the integer path already applied,
+    so `1:70.5` wrongly resolved to 130.5.
+    """
+    for value in ["1:70.5", "1:60.0", "1.5:30", "1:5.5:30"]:
+        assert load11(value) == value
 
 
 def test_scientific_float():

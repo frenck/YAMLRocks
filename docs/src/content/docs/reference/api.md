@@ -425,12 +425,16 @@ def dump_includes(
     doc: YAMLRocksDocument,
     /,
     *,
-    include_dir: str | os.PathLike[str],
+    include_dir: str | os.PathLike[str] | None = None,
 ) -> None: ...
 ```
 
-Write modified included files back to disk under `include_dir`. Only files whose
-content actually changed are written; the root document is left untouched.
+Write modified included files back to disk, each to the source path it was
+loaded from (tracked on the document when it was read), not to a new location.
+Only files whose content actually changed are written; the root document is left
+untouched. `include_dir` is optional and ignored; it is accepted only for
+call-site symmetry with `load`, and passing a different directory does **not**
+rebase the writes.
 
 ### `dump_includes_map`
 

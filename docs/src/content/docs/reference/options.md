@@ -13,8 +13,14 @@ yamlrocks.dumps({"b": 1, "a": 2}, option=yamlrocks.OPT_SORT_KEYS | yamlrocks.OPT
 # b'a: 2\nb: 1\n'
 ```
 
-A flag that does not apply to a given call is ignored, so it is safe to keep a
-single `option` constant and reuse it across `loads` and `dumps`.
+Most flags that do not apply to a given call are ignored, so a single `option`
+constant can often be reused across `loads` and `dumps`. A few combinations are
+rejected with a `ValueError` rather than silently ignored, though: `loads_all`
+does not accept `OPT_ROUND_TRIP`, `OPT_INCLUDES`, `OPT_SECRETS`, or
+`OPT_ENV_VAR` (those need the single-document `load`/`loads`), and the two
+null-style dump flags (`OPT_NULL_AS_KEYWORD`, `OPT_NULL_AS_TILDE`) cannot be set
+at once. Build the mask for the call you are making rather than assuming every
+flag is harmless everywhere.
 
 ## Parsing
 

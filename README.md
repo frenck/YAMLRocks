@@ -164,7 +164,6 @@ Options compose with `|`, the integer bit-flag pattern:
 | `OPT_INDENT_2` / `OPT_INDENT_4`           | Indentation width for `dumps`                                   |
 | `OPT_SORT_KEYS`                           | Sort mapping keys when dumping                                  |
 | `OPT_FLOW_STYLE`                          | Emit flow style (`{}`/`[]`)                                     |
-| `OPT_LITERAL_STRINGS`                     | Emit multi-line strings as literal blocks (`\|`)                |
 | `OPT_EXPLICIT_START` / `OPT_EXPLICIT_END` | Emit `---` / `...` markers                                      |
 
 See the [documentation][docs] for the full option set, including the standard-library

@@ -107,8 +107,8 @@ yamlrocks.dumps(
 # b'a: 1\nb: 2\n'
 ```
 
-There are flags for flow style, literal block strings, explicit document
-markers, datetime handling, and more. The
+There are flags for flow style, sorted keys, explicit document markers,
+datetime handling, and more. The
 [options reference](/reference/options/) lists the complete set.
 
 ## A round-trip teaser

@@ -63,6 +63,53 @@ def test_enum_violation():
         yamlrocks.loads(b"name: app\nport: 80\nmode: staging\n", schema=SCHEMA)
 
 
+def test_const_object_compares_full_structure():
+    """`const` on an object matches by full contents, not as an empty mapping.
+
+    The resolver previously collapsed every mapping to empty, so `const {}`
+    accepted any mapping and a non-empty `const` accepted none.
+    """
+    schema = {"properties": {"a": {"const": {"k": 1}}}}
+    # An equal object passes; order does not matter.
+    assert yamlrocks.loads(b"a:\n  k: 1\n", schema=schema) == {"a": {"k": 1}}
+    assert yamlrocks.loads(
+        b"a:\n  k: 1\n  j: 2\n",
+        schema={"properties": {"a": {"const": {"j": 2, "k": 1}}}},
+    ) == {"a": {"k": 1, "j": 2}}
+    # A different value, and a non-empty object against `const {}`, both fail.
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="const"):
+        yamlrocks.loads(b"a:\n  k: 2\n", schema=schema)
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="const"):
+        yamlrocks.loads(b"a:\n  k: 1\n", schema={"properties": {"a": {"const": {}}}})
+
+
+def test_enum_array_compares_full_structure():
+    """`enum` options that are arrays match by full contents."""
+    schema = {"properties": {"a": {"enum": [[1, 2], [3, 4]]}}}
+    assert yamlrocks.loads(b"a: [3, 4]\n", schema=schema) == {"a": [3, 4]}
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="enum"):
+        yamlrocks.loads(b"a: [1, 3]\n", schema=schema)
+    # An empty-array enum option must not match a non-empty array.
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="enum"):
+        yamlrocks.loads(b"a: [1]\n", schema={"properties": {"a": {"enum": [[]]}}})
+
+
+def test_deeply_nested_value_under_enum_does_not_overflow():
+    """A deep document under a container enum/const tears down without crashing.
+
+    `enum`/`const` build a fully resolved copy of the value; that deep tree must
+    be dropped iteratively, or a near-MAX_DEPTH document could overflow the stack
+    on teardown (and abort under `panic = "abort"`).
+    """
+    depth = 900
+    doc = (b"[" * depth) + b"1" + (b"]" * depth)
+    # The exact verdict does not matter; the point is no crash on teardown.
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError):
+        yamlrocks.loads(doc, schema={"enum": [[]]})
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError):
+        yamlrocks.loads(doc, schema={"const": []})
+
+
 def test_additional_property_rejected():
     """An undeclared property is rejected when additionalProperties is false."""
     with pytest.raises(

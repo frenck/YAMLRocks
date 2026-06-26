@@ -186,19 +186,30 @@ fn validate_node_inner(
     if let Some(type_schema) = get(schema, "type") {
         check_type(node, &resolved, type_schema, path, errors);
     }
+    // `enum`/`const` compare the *whole* value, nested containers included, so
+    // they need the fully resolved structure. The shallow `resolved` above keeps
+    // every sequence/mapping empty (enough for `type`/numeric/string checks but
+    // not for equality), so resolve deeply here, only when one is present. The
+    // deep tree is dropped iteratively (`drop_value_tree`): its depth is bounded
+    // only by `MAX_DEPTH` over untrusted input, so a recursive teardown could
+    // overflow a small thread stack and, under `panic = "abort"`, abort.
     if let Some(Value::Sequence(options)) = get(schema, "enum") {
-        if !options.iter().any(|opt| value_eq(opt, &resolved)) {
+        let value = resolve_deep(node, yaml_11);
+        if !options.iter().any(|opt| value_eq(opt, &value)) {
             errors.push(err(
                 node,
                 path,
                 "value is not one of the allowed enum values",
             ));
         }
+        crate::stack::drop_value_tree(value);
     }
     if let Some(const_schema) = get(schema, "const") {
-        if !value_eq(const_schema, &resolved) {
+        let value = resolve_deep(node, yaml_11);
+        if !value_eq(const_schema, &value) {
             errors.push(err(node, path, "value does not equal the required const"));
         }
+        crate::stack::drop_value_tree(value);
     }
 
     check_numeric(node, &resolved, schema, path, errors);
@@ -527,6 +538,27 @@ fn resolve(node: &YamlNode, yaml_11: bool) -> Value<'static> {
     }
 }
 
+/// Like [`resolve`], but recurses into sequences and mappings so the full nested
+/// structure is materialized. Used only by `enum`/`const`, which compare the
+/// whole value; the shallow [`resolve`] leaves containers empty, which would make
+/// `const {}` match any mapping and a non-empty `const`/`enum` match nothing.
+fn resolve_deep(node: &YamlNode, yaml_11: bool) -> Value<'static> {
+    // Grow the native stack on demand: this recurses once per nesting level over
+    // the (depth-bounded) AST, matching `validate_node`. See [`crate::stack`].
+    crate::stack::guard(|| match &node.kind {
+        YamlNodeKind::Sequence(items) => {
+            Value::Sequence(items.iter().map(|it| resolve_deep(it, yaml_11)).collect())
+        }
+        YamlNodeKind::Mapping(pairs) => Value::Mapping(
+            pairs
+                .iter()
+                .map(|(k, v)| (resolve_deep(k, yaml_11), resolve_deep(v, yaml_11)))
+                .collect(),
+        ),
+        _ => resolve(node, yaml_11),
+    })
+}
+
 /// Look up a key in an object schema.
 fn get<'a, 'v>(schema: &'a Value<'v>, key: &str) -> Option<&'a Value<'v>> {
     match schema {
@@ -562,6 +594,20 @@ fn as_count_bound(value: &Value) -> Option<i64> {
 fn value_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Int(i), Value::Float(f)) | (Value::Float(f), Value::Int(i)) => *i as f64 == *f,
+        // Arrays are equal element-wise, in order.
+        (Value::Sequence(xs), Value::Sequence(ys)) => {
+            xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| value_eq(x, y))
+        }
+        // Objects are equal as sets of pairs: order does not matter, but every
+        // pair on one side must have an equal pair on the other (sizes match, and
+        // a loaded mapping has no duplicate keys, so this is true set equality).
+        (Value::Mapping(xs), Value::Mapping(ys)) => {
+            xs.len() == ys.len()
+                && xs.iter().all(|(xk, xv)| {
+                    ys.iter()
+                        .any(|(yk, yv)| value_eq(xk, yk) && value_eq(xv, yv))
+                })
+        }
         _ => a == b,
     }
 }

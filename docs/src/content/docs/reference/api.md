@@ -471,6 +471,7 @@ to serialize.
 | `to_yaml()`               | Re-emit the document as `bytes`.                                                                        |
 | `to_dict()`               | A plain `dict`/`list` snapshot, without annotations.                                                    |
 | `walk()`                  | List of `(path_tuple, value)` pairs for every leaf.                                                     |
+| `locate(path)`            | The [`YAMLRocksNode`](#yamlrocksnode) at a data path (scalar leaves included), or `None` if unresolved. |
 | `node`                    | The root [`YAMLRocksNode`](#yamlrocksnode) cursor for metadata access (comments, location, style).      |
 | `anchors`                 | `dict[str, YAMLRocksNode]` mapping each anchor name to its defining [`YAMLRocksNode`](#yamlrocksnode).  |
 
@@ -488,6 +489,22 @@ doc.keys()      # ['name', 'port']
 doc.to_dict()   # {'name': 'app', 'port': 9090}
 doc.walk()      # [(('name',), 'app'), (('port',), 9090)]
 doc.range()     # (2, 1, 3, 11)  the body spans line 2, col 1, to the end of 'port: 8080'
+```
+
+`locate(path)` maps a data path, the kind a validator emits to say where a failure
+is (`["servers", 1, "port"]`), onto the source. Unlike item access, it returns a
+positioned [`YAMLRocksNode`](#yamlrocksnode) even for a scalar leaf, so a validation
+error can point at the exact `file:line:column`. It returns `None` when the path
+does not resolve, so a caller can retry with shorter prefixes to fall back to the
+nearest enclosing container. In a multi-document stream it resolves against the
+first document (a leading `int` is a key/index, not a document selector).
+
+```python
+doc = yamlrocks.loads(b"port: not-a-number\n", option=yamlrocks.OPT_ROUND_TRIP)
+node = doc.locate(["port"])
+node.line, node.column   # (1, 7), the value, 1-indexed
+node.range()             # (1, 7, 1, 19)
+doc.locate(["missing"])  # None
 ```
 
 :::note[Round-trip fidelity]
@@ -532,6 +549,7 @@ the tree. See the [round-trip guide](/guides/round-trip/#the-node-cursor-comment
 | `comment`          | Inline comment trailing the value, bare of `#`; assignable, `None` to clear.                                                |
 | `comment_before`   | Standalone comment line(s) above the node; assignable, `None` to clear.                                                     |
 | `line` / `column`  | 1-based source position.                                                                                                    |
+| `range()`          | `(start_line, start_col, end_line, end_col)`, all 1-based, for underlining the span.                                        |
 | `file`             | Source file path, or `None` without includes.                                                                               |
 | `style`            | `plain`, `single`, `double`, `literal`, `folded`, `block`, `flow`, `alias`, or `null`.                                      |
 | `anchor`           | Anchor name (`&name`), or `None`; assignable. Names must be unique; `None` clears.                                          |

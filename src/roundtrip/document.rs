@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 
 use super::anchors::{
     alias_target_path, build_anchor_map, collect_alias_paths, collect_anchor_paths,
@@ -22,7 +22,7 @@ use super::anchors::{
 use super::ast::{NodeStyle, YamlNode, YamlNodeKind};
 use super::emit;
 use super::emit::{emit_roundtrip_all_with, emit_roundtrip_with};
-use super::value::{node_to_python_with, python_to_node};
+use super::value::{node_to_python_key, node_to_python_with, python_to_node, ObjectCache};
 use crate::encode::NullStyle;
 use crate::resolver::Schema;
 
@@ -106,11 +106,12 @@ impl YAMLRocksDocument {
         format!("YAMLRocksDocument(documents={})", self.nodes.len())
     }
 
-    fn __len__(&self) -> usize {
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
         if self.nodes.len() == 1 {
-            container_len(&self.nodes[0])
+            let anchors = build_anchor_map(&self.nodes);
+            container_len(py, &self.nodes[0], self.schema, &anchors)
         } else {
-            self.nodes.len()
+            Ok(self.nodes.len())
         }
     }
 
@@ -166,9 +167,11 @@ impl YAMLRocksDocument {
         }
     }
 
-    fn __delitem__(&mut self, key: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn __delitem__(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
         if self.nodes.len() == 1 {
-            del_child(&mut self.nodes[0], key)
+            let anchors = build_anchor_map(&self.nodes);
+            let schema = self.schema;
+            del_child(py, &mut self.nodes[0], key, schema, &anchors)
         } else {
             let idx: usize = key.extract()?;
             if idx >= self.nodes.len() {
@@ -357,6 +360,54 @@ impl YAMLRocksDocument {
         }
         leaves_to_list(py, out)
     }
+
+    /// Resolve a data path to the [`YAMLRocksNode`] at that location, scalar leaves
+    /// included, or ``None`` when the path does not resolve.
+    ///
+    /// ``path`` is a sequence of mapping keys (``str``) and sequence indices
+    /// (``int``), the shape a validator emits when it reports where in the data a
+    /// failure occurred (``["servers", 1, "port"]``). Unlike item access, which
+    /// unwraps a scalar to its plain value, this always returns a positioned node,
+    /// so ``.line`` / ``.column`` / ``.file`` / ``.range()`` are available right
+    /// down to a leaf. The position is the value's own (not its key's).
+    ///
+    /// Returns ``None`` if any segment is absent (a missing key or an out-of-range
+    /// index), so a caller can retry with shorter prefixes to fall back to the
+    /// nearest enclosing container. Addresses the first document of a stream.
+    ///
+    /// ```python
+    /// doc = yamlrocks.loads(b"port: 8080\n", option=yamlrocks.OPT_ROUND_TRIP)
+    /// node = doc.locate(["port"])
+    /// node.line, node.column  # (1, 7), the value 8080, 1-indexed
+    /// ```
+    fn locate(
+        slf: &Bound<'_, Self>,
+        path: &Bound<'_, PyAny>,
+    ) -> PyResult<Option<Py<YAMLRocksNode>>> {
+        // A bare string is iterable, so accepting one would silently walk its
+        // characters; reject it so the `str | int` segments are explicit.
+        if path.is_instance_of::<PyString>() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "locate() takes a sequence of str/int path segments, not a str",
+            ));
+        }
+        let mut segments: Vec<PathSeg> = Vec::new();
+        for item in path.try_iter()? {
+            segments.push(seg_from_key(&item?)?);
+        }
+        let resolved = resolve_path(&slf.borrow().nodes, &segments).is_some();
+        if !resolved {
+            return Ok(None);
+        }
+        let node = Py::new(
+            slf.py(),
+            YAMLRocksNode {
+                root: slf.clone().unbind(),
+                path: segments,
+            },
+        )?;
+        Ok(Some(node))
+    }
 }
 
 impl YAMLRocksDocument {
@@ -510,7 +561,8 @@ impl YAMLRocksDocumentView {
         let doc = self.root.borrow(py);
         let node = resolve_path(&doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        Ok(container_len(node))
+        let anchors = build_anchor_map(&doc.nodes);
+        container_len(py, node, doc.schema, &anchors)
     }
 
     fn __getitem__(slf: &Bound<'_, Self>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -542,9 +594,11 @@ impl YAMLRocksDocumentView {
 
     fn __delitem__(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);
+        let schema = doc.schema;
+        let anchors = build_anchor_map(&doc.nodes);
         let node = resolve_path_mut(&mut doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        del_child(node, key)
+        del_child(py, node, key, schema, &anchors)
     }
 
     fn __contains__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -708,6 +762,16 @@ impl YAMLRocksNode {
         let doc = self.root.borrow(py);
         let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_node)?;
         Ok(node.span.column + 1)
+    }
+
+    /// The node's 1-based ``(start_line, start_col, end_line, end_col)`` source
+    /// range, for underlining the exact span in an editor. The start matches
+    /// [`line`](Self::line)/[`column`](Self::column); the end is the node's source
+    /// end (a collection spans to the furthest end of any child).
+    fn range(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let doc = self.root.borrow(py);
+        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+        Ok(node_range(py, node))
     }
 
     /// The 0-based byte offset of the node's first source character.
@@ -1111,13 +1175,17 @@ fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<&'a YamlN
         None => roots.first(),
         Some((PathSeg::Key(k), parent)) => {
             let parent_node = resolve_path(roots, parent)?;
-            match &parent_node.kind {
-                YamlNodeKind::Mapping(pairs) if is_first_key(pairs, k) => Some(parent_node),
-                YamlNodeKind::Mapping(pairs) => pairs
-                    .iter()
-                    .find(|(key, _)| scalar_eq(key, k))
-                    .map(|(key, _)| key),
-                _ => None,
+            let YamlNodeKind::Mapping(pairs) = &parent_node.kind else {
+                return None;
+            };
+            // The effective key is its last occurrence (see [`child_ref`]). The
+            // first pair's head comment lives on the mapping node (nothing sits
+            // above the first key); any later pair carries its own.
+            let idx = pairs.iter().rposition(|(key, _)| scalar_eq(key, k))?;
+            if idx == 0 {
+                Some(parent_node)
+            } else {
+                Some(&pairs[idx].0)
             }
         }
         // A sequence element or a key node holds its own head comment.
@@ -1131,26 +1199,24 @@ fn resolve_head_mut<'a>(roots: &'a mut [YamlNode], path: &[PathSeg]) -> Option<&
         None => roots.first_mut(),
         Some((PathSeg::Key(k), parent)) => {
             let parent_node = resolve_path_mut(roots, parent)?;
-            let first =
-                matches!(&parent_node.kind, YamlNodeKind::Mapping(pairs) if is_first_key(pairs, k));
-            if first {
+            // Mirror [`resolve_head`]: the last occurrence is the effective key,
+            // and the first pair's head comment lives on the mapping node.
+            let idx = match &parent_node.kind {
+                YamlNodeKind::Mapping(pairs) => {
+                    pairs.iter().rposition(|(key, _)| scalar_eq(key, k))
+                }
+                _ => return None,
+            }?;
+            if idx == 0 {
                 Some(parent_node)
             } else if let YamlNodeKind::Mapping(pairs) = &mut parent_node.kind {
-                pairs
-                    .iter_mut()
-                    .find(|(key, _)| scalar_eq(key, k))
-                    .map(|(key, _)| key)
+                Some(&mut pairs[idx].0)
             } else {
                 None
             }
         }
         Some((PathSeg::Index(_) | PathSeg::KeyNode(_), _)) => resolve_path_mut(roots, path),
     }
-}
-
-/// Whether `k` names the first pair of `pairs`.
-fn is_first_key(pairs: &[(YamlNode, YamlNode)], k: &str) -> bool {
-    pairs.first().is_some_and(|(key, _)| scalar_eq(key, k))
 }
 
 pub(crate) fn resolve_path<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<&'a YamlNode> {
@@ -1169,14 +1235,25 @@ fn resolve_path_mut<'a>(roots: &'a mut [YamlNode], path: &[PathSeg]) -> Option<&
     Some(node)
 }
 
+/// Resolve a single path segment to the child node it addresses: a mapping value
+/// by key, a mapping key node by key (for anchor/comment access), or a sequence
+/// element by index. Returns `None` when the segment does not apply to `node`
+/// (an absent key, an out-of-range index, or a scalar that has no children).
 pub(crate) fn child_ref<'a>(node: &'a YamlNode, seg: &PathSeg) -> Option<&'a YamlNode> {
     match (&node.kind, seg) {
+        // Resolve a key to its *last* occurrence. The decoder collapses a
+        // duplicate key to its last value (last-wins), so the round-trip cursor
+        // points at that same entry, keeping reads, `locate`, and edits aligned
+        // with what `loads()` produced. A normal (unique-key) mapping has exactly
+        // one match, so this is identical there; it only differs on duplicates.
         (YamlNodeKind::Mapping(pairs), PathSeg::Key(k)) => pairs
             .iter()
+            .rev()
             .find(|(key, _)| scalar_eq(key, k))
             .map(|(_, v)| v),
         (YamlNodeKind::Mapping(pairs), PathSeg::KeyNode(k)) => pairs
             .iter()
+            .rev()
             .find(|(key, _)| scalar_eq(key, k))
             .map(|(key, _)| key),
         (YamlNodeKind::Sequence(items), PathSeg::Index(i)) => items.get(*i),
@@ -1186,12 +1263,15 @@ pub(crate) fn child_ref<'a>(node: &'a YamlNode, seg: &PathSeg) -> Option<&'a Yam
 
 fn child_ref_mut<'a>(node: &'a mut YamlNode, seg: &PathSeg) -> Option<&'a mut YamlNode> {
     match (&mut node.kind, seg) {
+        // Last occurrence wins, as in [`child_ref`].
         (YamlNodeKind::Mapping(pairs), PathSeg::Key(k)) => pairs
             .iter_mut()
+            .rev()
             .find(|(key, _)| scalar_eq(key, k))
             .map(|(_, v)| v),
         (YamlNodeKind::Mapping(pairs), PathSeg::KeyNode(k)) => pairs
             .iter_mut()
+            .rev()
             .find(|(key, _)| scalar_eq(key, k))
             .map(|(key, _)| key),
         (YamlNodeKind::Sequence(items), PathSeg::Index(i)) => items.get_mut(*i),
@@ -1242,8 +1322,11 @@ fn access_child(
     // lexeme for the path. Sequences index by position as before.
     let seg = match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
+            // Last occurrence wins (see [`child_ref`]), so a duplicate key reads
+            // the same value `loads()` keeps.
             let (k, _) = pairs
                 .iter()
+                .rev()
                 .find(|(k, _)| key_node_matches(py, k, key, schema, anchors))
                 .ok_or_else(|| key_error(node, key))?;
             let YamlNodeKind::Scalar(lexeme, _) = &k.kind else {
@@ -1302,22 +1385,26 @@ fn set_child(
             let mut new_val = python_to_node(py, value, double_quotes, schema)?;
             new_val.mark_modified();
             // Match an existing key by its resolved value (so `doc[True] = x`
-            // updates a `yes:` entry under 1.1), mirroring read access.
-            for (k, v) in pairs.iter_mut() {
-                if key_node_matches(py, k, key, schema, anchors) {
-                    // Replacing a value keeps the metadata attached to it (its
-                    // comments, anchor, and tag), matching `YAMLRocksNode.set_value`, so
-                    // an edit does not silently drop nearby comments or markup.
-                    new_val.comments.head = std::mem::take(&mut v.comments.head);
-                    new_val.comments.inline = v.comments.inline.take();
-                    new_val.comments.value_pad = v.comments.value_pad;
-                    new_val.comments.inline_spaces = v.comments.inline_spaces;
-                    new_val.comments.foot = std::mem::take(&mut v.comments.foot);
-                    new_val.anchor = v.anchor.take();
-                    new_val.tag = v.tag.take();
-                    *v = new_val;
-                    return Ok(());
-                }
+            // updates a `yes:` entry under 1.1), mirroring read access. On a
+            // duplicate key, update its last occurrence: that is the effective
+            // entry the cursor reads and `loads()` keeps (see [`child_ref`]).
+            let existing = pairs
+                .iter()
+                .rposition(|(k, _)| key_node_matches(py, k, key, schema, anchors));
+            if let Some(i) = existing {
+                let v = &mut pairs[i].1;
+                // Replacing a value keeps the metadata attached to it (its
+                // comments, anchor, and tag), matching `YAMLRocksNode.set_value`, so
+                // an edit does not silently drop nearby comments or markup.
+                new_val.comments.head = std::mem::take(&mut v.comments.head);
+                new_val.comments.inline = v.comments.inline.take();
+                new_val.comments.value_pad = v.comments.value_pad;
+                new_val.comments.inline_spaces = v.comments.inline_spaces;
+                new_val.comments.foot = std::mem::take(&mut v.comments.foot);
+                new_val.anchor = v.anchor.take();
+                new_val.tag = v.tag.take();
+                *v = new_val;
+                return Ok(());
             }
             // No key matched: add one, building the key node from the Python key
             // so a non-string key (`doc[True] = ...`) and a string that needs
@@ -1353,19 +1440,25 @@ fn set_child(
     }
 }
 
-fn del_child(node: &mut YamlNode, key: &Bound<'_, PyAny>) -> PyResult<()> {
+fn del_child(
+    py: Python<'_>,
+    node: &mut YamlNode,
+    key: &Bound<'_, PyAny>,
+    schema: Schema,
+    anchors: &HashMap<String, YamlNode>,
+) -> PyResult<()> {
     match &mut node.kind {
         YamlNodeKind::Mapping(pairs) => {
-            let key_str: String = key
-                .extract()
-                .map_err(|_| pyo3::exceptions::PyTypeError::new_err("mapping keys must be str"))?;
-            // The removed pair carries its own attached comments away with it; the
-            // surrounding pairs keep their nodes (and comments).
-            let idx = pairs
-                .iter()
-                .position(|(k, _)| scalar_eq(k, &key_str))
-                .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key_str.clone()))?;
-            pairs.remove(idx);
+            // Match by the key's resolved value, as read and set do (so `doc[True]`
+            // can delete a `yes:` entry under 1.1). Removing a key removes it from
+            // the logical mapping, so every duplicate occurrence goes (otherwise a
+            // shadowed one would re-surface as the new effective value). The removed
+            // pairs carry their own comments away; the surrounding pairs keep theirs.
+            let before = pairs.len();
+            pairs.retain(|(k, _)| !key_node_matches(py, k, key, schema, anchors));
+            if pairs.len() == before {
+                return Err(pyo3::exceptions::PyKeyError::new_err(key.clone().unbind()));
+            }
         }
         YamlNodeKind::Sequence(items) => {
             let idx: usize = key.extract()?;
@@ -1407,25 +1500,57 @@ fn node_keys(
     schema: Schema,
 ) -> PyResult<Py<PyAny>> {
     match &node.kind {
-        YamlNodeKind::Mapping(pairs) => {
-            let list = PyList::empty(py);
-            for (k, _) in pairs {
-                list.append(node_to_python_with(py, k, schema, anchors))?;
-            }
-            Ok(list.into_any().unbind())
-        }
+        YamlNodeKind::Mapping(pairs) => Ok(distinct_keys(py, pairs, schema, anchors)?
+            .into_any()
+            .unbind()),
         _ => Err(pyo3::exceptions::PyTypeError::new_err(
             "node is not a mapping",
         )),
     }
 }
 
-fn container_len(node: &YamlNode) -> usize {
-    match &node.kind {
-        YamlNodeKind::Mapping(pairs) => pairs.len(),
+/// The distinct keys of a mapping's `pairs`, in first-appearance order, collapsed
+/// by their *resolved* value exactly as `to_dict` and `loads` collapse a
+/// duplicate key (last-wins). Deduping on the resolved value, not the raw lexeme,
+/// keeps `keys()`/`len()` consistent with `to_dict()` even when two keys are
+/// spelled differently but resolve equal (`yes`/`true` under 1.1, `1`/`0x1`). The
+/// kept key is returned in its ordinary (annotated) Python form.
+fn distinct_keys<'py>(
+    py: Python<'py>,
+    pairs: &[(YamlNode, YamlNode)],
+    schema: Schema,
+    anchors: &HashMap<String, YamlNode>,
+) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+    // The hashable resolved keys already emitted (`node_to_python_key` is the same
+    // conversion `to_dict` keys its dict by, so a collection key is a tuple here).
+    let seen = PyDict::new(py);
+    let mut cache: ObjectCache = HashMap::new();
+    for (k, _) in pairs {
+        let resolved = node_to_python_key(py, k, schema, anchors, &mut cache);
+        let resolved = resolved.bind(py);
+        if !seen.contains(resolved)? {
+            seen.set_item(resolved, py.None())?;
+            list.append(node_to_python_with(py, k, schema, anchors))?;
+        }
+    }
+    Ok(list)
+}
+
+fn container_len(
+    py: Python<'_>,
+    node: &YamlNode,
+    schema: Schema,
+    anchors: &HashMap<String, YamlNode>,
+) -> PyResult<usize> {
+    Ok(match &node.kind {
+        // Count distinct keys, matching the last-wins logical mapping (so
+        // `len(doc) == len(doc.keys())` even with a duplicate key), by the same
+        // resolved-key rule as `distinct_keys`/`to_dict`.
+        YamlNodeKind::Mapping(pairs) => distinct_keys(py, pairs, schema, anchors)?.len(),
         YamlNodeKind::Sequence(items) => items.len(),
         _ => 1,
-    }
+    })
 }
 
 fn node_kind_name(node: &YamlNode) -> &'static str {

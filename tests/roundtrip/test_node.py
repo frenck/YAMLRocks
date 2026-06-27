@@ -483,3 +483,62 @@ def test_make_alias_replaces_value():
     doc.node["other"].make_alias("b")
     assert doc.node["other"].is_alias is True
     assert doc.node["other"].value == {"x": 1}
+
+
+# -- locate(): resolve a data path to a positioned node, scalar leaves included --
+# A validator reports a failure's data path (["servers", 1, "port"]); locate()
+# maps that onto the source so the error can point at file:line:column, including
+# for a scalar leaf, which item access unwraps to a bare value.
+
+_LOCATE_DOC = b"name: web\nport: not-a-number\nservers:\n  - host: a\n    port: 1\n"
+
+
+def test_locate_top_level_scalar_points_at_the_value():
+    """A top-level scalar leaf resolves to its own value position, 1-indexed."""
+    node = load(_LOCATE_DOC).locate(["port"])
+    assert (node.line, node.column) == (2, 7)
+
+
+def test_locate_nested_scalar_through_a_list_index():
+    """A path mixing keys and a sequence index reaches a nested scalar leaf."""
+    node = load(_LOCATE_DOC).locate(["servers", 0, "host"])
+    assert (node.line, node.column) == (4, 11)
+
+
+def test_locate_unresolved_path_returns_none():
+    """An absent path segment yields None (a caller can retry shorter prefixes)."""
+    doc = load(_LOCATE_DOC)
+    assert doc.locate(["servers", 0, "missing"]) is None
+    assert doc.locate(["servers", 9]) is None  # index out of range
+    assert doc.locate(["port", "x"]) is None  # cannot descend into a scalar
+
+
+def test_locate_empty_path_returns_the_root():
+    """An empty path resolves to the document root node."""
+    assert load(_LOCATE_DOC).locate([]).line == 1
+
+
+def test_locate_returns_a_range_for_underlining():
+    """The located scalar carries a (start, end) range for underlining the span."""
+    node = load(_LOCATE_DOC).locate(["port"])
+    assert node.range() == (2, 7, 2, 19)  # "not-a-number" spans columns 7..19
+
+
+def test_locate_rejects_a_bare_string_path():
+    """A bare str path is rejected, so it is not silently walked character by character."""
+    with pytest.raises(TypeError, match="sequence"):
+        load(_LOCATE_DOC).locate("port")
+
+
+def test_locate_scalar_in_an_included_file_carries_that_file(tmp_path):
+    """A scalar resolved through an !include reports that file and its position in it."""
+    (tmp_path / "sub.yaml").write_bytes(b"host: example\nport: 9000\n")
+    (tmp_path / "root.yaml").write_bytes(b"name: app\nserver: !include sub.yaml\n")
+    doc = yamlrocks.load(
+        str(tmp_path / "root.yaml"),
+        option=RT | yamlrocks.OPT_INCLUDES,
+    )
+    node = doc.locate(["server", "port"])
+    assert node.file is not None
+    assert node.file.endswith("sub.yaml")
+    assert (node.line, node.column) == (2, 7)

@@ -36,7 +36,7 @@ jobs:
         with:
           persist-credentials: false
       - name: 🏗 Set up Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # zizmor: ignore[superfluous-actions,stale-action-refs] stable; canonical pinned Rust toolchain installer
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # zizmor: ignore[superfluous-actions,stale-action-refs,impostor-commit] stable; canonical pinned Rust toolchain installer
       - name: 🏗 Install cargo-audit
         # Pin the tool version (not just its locked deps) so a release cannot
         # change the audit build under us. Bump this deliberately.
@@ -72,7 +72,7 @@ jobs:
         with:
           persist-credentials: false
       - name: 🏗 Set up Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # zizmor: ignore[superfluous-actions,stale-action-refs] stable; canonical pinned Rust toolchain installer
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # zizmor: ignore[superfluous-actions,stale-action-refs,impostor-commit] stable; canonical pinned Rust toolchain installer
       - name: 🏗 Install cargo-about
         # Pin the tool version so the generated license file is reproducible.
         # Bump this deliberately.

@@ -298,12 +298,6 @@ KNOWN_INVALID: dict[str, str] = {
         "a Jinja2-templated Lovelace config (`{% if %}`) that dedents a sequence "
         "into mapping-key position, not standalone YAML (PyYAML rejects it too)"
     ),
-    "dbt/dbt-core/.github/ISSUE_TEMPLATE/bug-report-vsce.yml": (
-        "an unquoted `description:` value contains `: ` (in `Developer: Reload "
-        "Window`), read as a nested mapping that puts a block collection in "
-        "mapping-key position; PyYAML rejects it too (`mapping values are not "
-        "allowed in this context`)"
-    ),
 }
 
 # opentelemetry-collector-contrib ships Go-templated e2e test fixtures: K8s
@@ -313,8 +307,10 @@ KNOWN_INVALID: dict[str, str] = {
 # rather than auto-skipped. Each stays an individual strict xfail.
 _OTEL_TEMPLATE_FIXTURES: tuple[str, ...] = (
     "opentelemetry/collector-contrib/cmd/opampsupervisor/supervisor/templates/extratelemetryconfig.yaml",
+    "opentelemetry/collector-contrib/cmd/opampsupervisor/supervisor/templates/opampextension.yaml",
     "opentelemetry/collector-contrib/cmd/opampsupervisor/supervisor/templates/owntelemetry.yaml",
     "opentelemetry/collector-contrib/cmd/opampsupervisor/testdata/collector/healthcheck_config.tmpl.yaml",
+    "opentelemetry/collector-contrib/cmd/opampsupervisor/testdata/supervisor/supervisor_agent_description.yaml",
     "opentelemetry/collector-contrib/cmd/opampsupervisor/testdata/supervisor/supervisor_basic.yaml",
     "opentelemetry/collector-contrib/cmd/opampsupervisor/testdata/supervisor/supervisor_fallback.yaml",
     "opentelemetry/collector-contrib/cmd/opampsupervisor/testdata/supervisor/supervisor_healthcheck_port.yaml",

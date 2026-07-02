@@ -173,6 +173,19 @@ def test_decimal_is_number():
     assert _dump_load({"v": decimal.Decimal("3.14")}) == {"v": 3.14}
 
 
+def test_decimal_preserves_precision_not_via_f64():
+    """A Decimal carrying more precision than an f64 holds keeps its exact digits
+    in the output rather than rounding through a double. A large integral Decimal
+    stays an exact integer; a high-precision fraction keeps its full text."""
+    import yamlrocks
+
+    big = decimal.Decimal("100000000000000000000000000001")
+    assert yamlrocks.dumps(big).strip() == b"100000000000000000000000000001"
+    assert yamlrocks.loads(yamlrocks.dumps(big)) == 100000000000000000000000000001
+    frac = "3.141592653589793238462643383279"
+    assert frac.encode() in yamlrocks.dumps(decimal.Decimal(frac))
+
+
 def test_pathlib_path():
     """pathlib.Path serializes to its string representation."""
     # str(Path) is OS-native (forward slashes on POSIX, backslashes on Windows),

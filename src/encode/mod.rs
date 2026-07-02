@@ -866,8 +866,113 @@ pub(crate) fn needs_quoting(value: &str, schema: Schema) -> bool {
     }
     match schema {
         Schema::Yaml12 => !value.contains(':') && resolves_to_number(value, Schema::Yaml11),
-        Schema::Yaml11 | Schema::Yaml11PyYaml => resolves_to_number(value, schema),
+        // A 1.1 reader (PyYAML, ruamel) also reads a timestamp/date (`2020-01-02`,
+        // `2020-01-02T10:00:00Z`) as a `datetime`, not a string. yamlrocks does
+        // not resolve timestamps itself, so `resolves_to_number` misses them;
+        // quote them here so a dumped string re-reads as a string under 1.1
+        // rather than flipping to a date. The 1.2 default leaves them bare (1.2
+        // core does not read timestamps), as before.
+        Schema::Yaml11 | Schema::Yaml11PyYaml => {
+            resolves_to_number(value, schema) || is_yaml_11_timestamp(value)
+        }
     }
+}
+
+/// Whether `value` matches the YAML 1.1 timestamp shape a 1.1 reader (PyYAML,
+/// ruamel) resolves to a date/datetime. Mirrors PyYAML's timestamp regex: a
+/// `YYYY-MM-DD` date, or a full `YYYY-M-D(T| )H:MM:SS(.frac)?( ?TZ)?` datetime.
+fn is_yaml_11_timestamp(value: &str) -> bool {
+    let b = value.as_bytes();
+    let n = b.len();
+    let is_digit = |i: usize| i < n && b[i].is_ascii_digit();
+    // Year: exactly four digits then `-`.
+    if !(is_digit(0) && is_digit(1) && is_digit(2) && is_digit(3)) || n < 5 || b[4] != b'-' {
+        return false;
+    }
+    // The date-only form is exactly `YYYY-MM-DD` (two-digit month and day).
+    if n == 10 && is_digit(5) && is_digit(6) && b[7] == b'-' && is_digit(8) && is_digit(9) {
+        return true;
+    }
+    // Full datetime: month and day may be one or two digits.
+    let mut i = 5;
+    let take_1_2_digits = |start: usize| -> Option<usize> {
+        let mut j = start;
+        while j < n && b[j].is_ascii_digit() && j - start < 2 {
+            j += 1;
+        }
+        (j > start).then_some(j)
+    };
+    let Some(j) = take_1_2_digits(i) else {
+        return false;
+    };
+    i = j;
+    if i >= n || b[i] != b'-' {
+        return false;
+    }
+    i += 1;
+    let Some(j) = take_1_2_digits(i) else {
+        return false;
+    };
+    i = j;
+    // Separator: `T`/`t`, or one or more spaces/tabs.
+    if i < n && (b[i] == b'T' || b[i] == b't') {
+        i += 1;
+    } else if i < n && (b[i] == b' ' || b[i] == b'\t') {
+        while i < n && (b[i] == b' ' || b[i] == b'\t') {
+            i += 1;
+        }
+    } else {
+        return false;
+    }
+    // Hour: one or two digits, then `:MM:SS`.
+    let Some(j) = take_1_2_digits(i) else {
+        return false;
+    };
+    i = j;
+    let two_digits = |start: usize| -> bool {
+        start + 1 < n && b[start].is_ascii_digit() && b[start + 1].is_ascii_digit()
+    };
+    if i >= n || b[i] != b':' || !two_digits(i + 1) {
+        return false;
+    }
+    i += 3;
+    if i >= n || b[i] != b':' || !two_digits(i + 1) {
+        return false;
+    }
+    i += 3;
+    // Optional fractional seconds `.` then zero or more digits.
+    if i < n && b[i] == b'.' {
+        i += 1;
+        while i < n && b[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    // Optional time zone: spaces/tabs then `Z`, or `+`/`-`H(H)(:MM)?.
+    while i < n && (b[i] == b' ' || b[i] == b'\t') {
+        i += 1;
+    }
+    if i == n {
+        return true;
+    }
+    if b[i] == b'Z' {
+        return i + 1 == n;
+    }
+    if b[i] == b'+' || b[i] == b'-' {
+        i += 1;
+        let Some(j) = take_1_2_digits(i) else {
+            return false;
+        };
+        i = j;
+        if i < n {
+            // Optional `:MM`.
+            if b[i] != b':' || !two_digits(i + 1) {
+                return false;
+            }
+            i += 3;
+        }
+        return i == n;
+    }
+    false
 }
 
 /// Whether `value` resolves to an integer or float (not a string, bool, or null)
@@ -1212,6 +1317,53 @@ mod tests {
             },
         );
         assert_eq!(pyyaml, "a: y\nb: N\nc: \"10:20:30\"\n");
+    }
+
+    #[test]
+    fn yaml_11_dump_quotes_timestamp_strings() {
+        // A 1.1 reader resolves these to a date/datetime, so a dumped *string*
+        // must be quoted under a 1.1 target to survive as a string.
+        for schema in [Schema::Yaml11, Schema::Yaml11PyYaml] {
+            let v = Value::Mapping(vec![(s("d"), s("2020-01-02"))]);
+            let out = emit(
+                &v,
+                &EmitOptions {
+                    schema,
+                    ..EmitOptions::default()
+                },
+            );
+            assert_eq!(out, "d: \"2020-01-02\"\n", "{schema:?}");
+        }
+        // The 1.2 default leaves a timestamp bare (1.2 core does not read it).
+        let v = Value::Mapping(vec![(s("d"), s("2020-01-02"))]);
+        assert_eq!(emit(&v, &EmitOptions::default()), "d: 2020-01-02\n");
+    }
+
+    #[test]
+    fn timestamp_shape_matcher_matches_pyyaml_forms() {
+        use super::is_yaml_11_timestamp;
+        // Matched: date, and datetime with `T`/space, fractional seconds, zones.
+        for t in [
+            "2020-01-02",
+            "2020-1-2T10:00:00",
+            "2001-12-15 2:59:43.10",
+            "2020-01-02t10:00:00.5Z",
+            "2020-01-02 10:00:00 +05:00",
+            "2020-01-02T10:00:00-5",
+        ] {
+            assert!(is_yaml_11_timestamp(t), "should match {t:?}");
+        }
+        // Not matched: single-digit date-only, trailing junk, wrong shape.
+        for t in [
+            "2020-1-2",
+            "2020-01-02x",
+            "2020-01-02T10:00",
+            "hello",
+            "1:30",
+            "2020-01-02T10:00:00Zx",
+        ] {
+            assert!(!is_yaml_11_timestamp(t), "should not match {t:?}");
+        }
     }
 
     #[test]

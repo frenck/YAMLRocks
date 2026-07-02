@@ -274,7 +274,7 @@ def test_round_trip_keeps_valid_complex_and_flow_keys(src):
 # original text; only the edited value is re-quoted.)
 
 
-@pytest.mark.parametrize("value", ["y", "01:02:03", "_5"])
+@pytest.mark.parametrize("value", ["y", "10:20:30", "_5"])
 def test_edit_in_a_1_1_document_is_quoted_1_1_safely(value):
     """An edit into a 1.1-loaded document is quoted so it re-reads as a string under 1.1."""
     doc = yamlrocks.loads(b"k: hello\n", option=RT | yamlrocks.OPT_YAML_1_1)

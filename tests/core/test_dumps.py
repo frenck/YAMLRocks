@@ -503,7 +503,7 @@ Y11 = yamlrocks.OPT_YAML_1_1
 PYC = yamlrocks.OPT_PYYAML_COMPAT
 
 
-@pytest.mark.parametrize("value", ["y", "Y", "n", "N", "1:30", "01:02:03", "_5"])
+@pytest.mark.parametrize("value", ["y", "Y", "n", "N", "1:30", "10:20:30", "_5"])
 def test_dumps_yaml_1_1_quotes_its_ambiguities_but_default_does_not(value):
     """Strict 1.1 quotes a string it reads as a non-string; the 1.2 default does not."""
     assert b'"' not in yamlrocks.dumps({"k": value})
@@ -511,7 +511,7 @@ def test_dumps_yaml_1_1_quotes_its_ambiguities_but_default_does_not(value):
 
 
 @pytest.mark.parametrize("schema", [Y11, PYC])
-@pytest.mark.parametrize("value", ["1:30", "01:02:03", "_5", "yes", "0777", "on"])
+@pytest.mark.parametrize("value", ["1:30", "10:20:30", "_5", "yes", "0777", "on"])
 def test_dumps_1_1_output_round_trips_under_its_schema(schema, value):
     """1.1 and PyYAML-compat dump output re-reads identically under the same schema."""
     obj = {"k": value}

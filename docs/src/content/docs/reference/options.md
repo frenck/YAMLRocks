@@ -58,14 +58,14 @@ yamlrocks.loads(b"a: yes", option=yamlrocks.OPT_YAML_1_1)  # {'a': True}
 ```
 
 The same flag makes `dumps` produce 1.1-safe output: a string only YAML 1.1 reads
-as a non-string (a bare `y`/`n`, or sexagesimal like `01:02:03`) is quoted, so it
+as a non-string (a bare `y`/`n`, or sexagesimal like `10:20:30`) is quoted, so it
 survives a round-trip through a 1.1 reader:
 
 ```python
 import yamlrocks
 
-yamlrocks.dumps({"mac": "01:02:03"})                              # b'mac: 01:02:03\n'
-yamlrocks.dumps({"mac": "01:02:03"}, option=yamlrocks.OPT_YAML_1_1)  # b'mac: "01:02:03"\n'
+yamlrocks.dumps({"elapsed": "10:20:30"})                              # b'elapsed: 10:20:30\n'
+yamlrocks.dumps({"elapsed": "10:20:30"}, option=yamlrocks.OPT_YAML_1_1)  # b'elapsed: "10:20:30"\n'
 ```
 
 `OPT_DUPLICATE_KEYS_ERROR` rejects a repeated key with the offending location in

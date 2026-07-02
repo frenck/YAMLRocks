@@ -845,7 +845,7 @@ pub(crate) fn needs_quoting(value: &str, schema: Schema) -> bool {
     //
     // When the output targets a YAML 1.1 schema, quote exactly what *that* schema
     // re-reads as a number, so the value survives a round-trip through it. Both
-    // 1.1 variants read sexagesimal (`1:30`, MAC-like `01:02:03`) and leading-
+    // 1.1 variants read sexagesimal (`1:30`, `10:20:30`) and leading-
     // underscore numerics (`_5`); PyYAML-compat differs from strict 1.1 only in
     // its boolean set (the bare `y`/`n` case handled above), not in numbers. The
     // 1.2 default keeps its conservative cross-schema quoting: it quotes 1.1
@@ -1182,17 +1182,17 @@ mod tests {
 
     #[test]
     fn yaml_1_1_quotes_what_its_schema_reads_as_non_strings() {
-        // `y`/`N` are booleans only under strict 1.1; sexagesimal (`01:02:03`) is
+        // `y`/`N` are booleans only under strict 1.1; sexagesimal (`10:20:30`) is
         // a number under both 1.1 variants. Each schema quotes exactly what it
         // would re-read as a non-string, so the output round-trips under it.
         let v = Value::Mapping(vec![
             (s("a"), s("y")),
             (s("b"), s("N")),
-            (s("c"), s("01:02:03")),
+            (s("c"), s("10:20:30")),
         ]);
         // Default (1.2): none of these are non-strings, so all bare.
         let dflt = emit(&v, &EmitOptions::default());
-        assert_eq!(dflt, "a: y\nb: N\nc: 01:02:03\n");
+        assert_eq!(dflt, "a: y\nb: N\nc: 10:20:30\n");
         // Strict 1.1: bare `y`/`N` bools and sexagesimal all quoted.
         let y11 = emit(
             &v,
@@ -1201,9 +1201,9 @@ mod tests {
                 ..EmitOptions::default()
             },
         );
-        assert_eq!(y11, "a: \"y\"\nb: \"N\"\nc: \"01:02:03\"\n");
+        assert_eq!(y11, "a: \"y\"\nb: \"N\"\nc: \"10:20:30\"\n");
         // PyYAML-compat 1.1: bare `y`/`N` are NOT booleans (left bare), but it
-        // still reads sexagesimal, so `01:02:03` is quoted.
+        // still reads sexagesimal, so `10:20:30` is quoted.
         let pyyaml = emit(
             &v,
             &EmitOptions {
@@ -1211,7 +1211,7 @@ mod tests {
                 ..EmitOptions::default()
             },
         );
-        assert_eq!(pyyaml, "a: y\nb: N\nc: \"01:02:03\"\n");
+        assert_eq!(pyyaml, "a: y\nb: N\nc: \"10:20:30\"\n");
     }
 
     #[test]

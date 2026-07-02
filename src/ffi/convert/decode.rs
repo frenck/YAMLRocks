@@ -184,6 +184,16 @@ fn value_to_hashable_key(
     value: &Value<'_>,
     tags: TagPolicy<'_, '_>,
 ) -> PyResult<Py<PyAny>> {
+    // Complex keys are rare, so unlike the value conversion above this guards
+    // every level; the depth is still bounded by the decoder's `MAX_DEPTH`.
+    crate::stack::guard(|| value_to_hashable_key_inner(py, value, tags))
+}
+
+fn value_to_hashable_key_inner(
+    py: Python<'_>,
+    value: &Value<'_>,
+    tags: TagPolicy<'_, '_>,
+) -> PyResult<Py<PyAny>> {
     let obj = match value {
         Value::Sequence(items) => {
             let elems = items

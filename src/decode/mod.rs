@@ -558,7 +558,9 @@ impl<'input> Decoder<'input> {
         // before the cap fires. See [`crate::stack`]. Checking the remaining
         // stack costs a TLS lookup, so guard every eighth level rather than
         // every one: eight decode frames stay far below the guard's `RED_ZONE`
-        // headroom, keeping the overflow invariant intact.
+        // headroom, keeping the overflow invariant intact. `depth` was already
+        // incremented above, so the root sits at 1 and the `== 1` arm guards
+        // it immediately, then every eighth level after (9, 17, ...).
         let result = if self.depth & 7 == 1 {
             crate::stack::guard(|| self.decode_node_inner(events))
         } else {

@@ -12,6 +12,23 @@ use crate::typeref;
 
 use super::EncodeCtx;
 
+/// Extract a Python `str` as an owned UTF-8 `String`, rejecting unpaired
+/// surrogates rather than silently replacing them with U+FFFD. PyO3's `Display`
+/// (`to_string`) is lossy; `to_str` is strict. This keeps any data loss visible,
+/// matching the strict `bytes` branch and the decode side, so a `str` carrying a
+/// lone surrogate (from `surrogateescape`/`surrogatepass`) errors instead of
+/// emitting mojibake that no longer round-trips.
+fn pystring_to_string(s: &Bound<'_, PyString>) -> PyResult<String> {
+    s.to_str().map(str::to_owned).map_err(|_| {
+        errors::encode_error(
+            "cannot serialize a str containing unpaired surrogates; convert it to \
+             valid Unicode (or recover the original bytes and handle them \
+             explicitly) before dumping"
+                .to_string(),
+        )
+    })
+}
+
 // -- Python -> Value (for dumps) --
 /// Maximum object nesting depth when serializing. A deeply nested or cyclic
 /// (self-referential) Python object would otherwise recurse without bound and
@@ -55,7 +72,9 @@ fn python_to_value_inner(
     // check and fall through to the unchanged slow path, so behavior is
     // identical; only the common case gets faster.
     if typeref::is_exact_str(obj) {
-        return Ok(Value::String(obj.cast::<PyString>()?.to_string().into()));
+        return Ok(Value::String(
+            pystring_to_string(obj.cast::<PyString>()?)?.into(),
+        ));
     }
     if typeref::is_exact_int(obj) {
         return int_to_value(obj);
@@ -84,7 +103,7 @@ fn python_to_value_inner(
         return Ok(Value::Float(obj.extract()?));
     }
     if let Ok(s) = obj.cast::<PyString>() {
-        return Ok(Value::String(s.to_string().into()));
+        return Ok(Value::String(pystring_to_string(s)?.into()));
     }
     if let Ok(b) = obj.cast::<PyBytes>() {
         // Decode strictly: silently replacing invalid UTF-8 would corrupt

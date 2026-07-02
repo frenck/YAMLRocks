@@ -39,6 +39,14 @@ __all__ = [
 YAMLError = yamlrocks.YAMLRocksError
 
 
+# PyYAML's SafeLoader uses the YAML 1.1 resolver: `yes`/`no`/`on`/`off` are
+# booleans, `0777` is octal, `1_000` has underscores, and so on. To be a faithful
+# drop-in, the shim resolves scalars the same way via `OPT_PYYAML_COMPAT` (which
+# also keeps bare `y`/`n` as strings, exactly as PyYAML does). Without it, a
+# config like `enabled: yes` would silently load as the string `"yes"`.
+_COMPAT = yamlrocks.OPT_PYYAML_COMPAT
+
+
 def _read(stream: Any) -> Any:
     """Accept a str/bytes document or a file-like object, like PyYAML."""
     if hasattr(stream, "read"):
@@ -48,7 +56,7 @@ def _read(stream: Any) -> Any:
 
 def safe_load(stream: Any) -> Any:
     """Parse the first YAML document from ``stream`` (str, bytes, or file)."""
-    return yamlrocks.loads(_read(stream))
+    return yamlrocks.loads(_read(stream), option=_COMPAT)
 
 
 def safe_load_all(stream: Any) -> list[Any]:
@@ -57,7 +65,7 @@ def safe_load_all(stream: Any) -> list[Any]:
     PyYAML returns a generator; this returns a list, which is iterable in the
     same way for the common ``list(yaml.safe_load_all(...))`` usage.
     """
-    return yamlrocks.loads_all(_read(stream))
+    return yamlrocks.loads_all(_read(stream), option=_COMPAT)
 
 
 # YAMLRocks does not deserialize arbitrary Python objects, so the full-power
@@ -74,7 +82,10 @@ def load_all(stream: Any, Loader: Any = None) -> list[Any]:
 
 
 def _dump_options(default_flow_style: bool, sort_keys: bool, indent: int | None) -> int:
-    option = 0
+    # Target the PyYAML (1.1) schema on the way out too, so a dumped string that
+    # a 1.1 reader would read as a bool/number/timestamp (`yes`, `0777`, a date)
+    # is quoted, matching PyYAML's own output and keeping round-trips faithful.
+    option = _COMPAT
     if default_flow_style:
         option |= yamlrocks.OPT_FLOW_STYLE
     if sort_keys:

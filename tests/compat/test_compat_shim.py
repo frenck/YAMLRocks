@@ -34,6 +34,20 @@ def test_load_is_safe_load():
     assert yaml.load("a: 1", Loader=object()) == {"a": 1}
 
 
+def test_shim_resolves_scalars_like_pyyaml():
+    """As a PyYAML drop-in, the shim uses PyYAML's YAML 1.1 resolution: `yes`/`on`
+    are booleans, `0777` is octal, `1_000` has underscores. Without this the shim
+    would silently load a config's `enabled: yes` as the string `"yes"`."""
+    assert yaml.safe_load("v: yes") == {"v": True}
+    assert yaml.safe_load("v: 'no'") == {"v": "no"}  # quoted stays a string
+    assert yaml.safe_load("v: 0777") == {"v": 511}
+    assert yaml.safe_load("v: 1_000") == {"v": 1000}
+    # PyYAML omits bare y/n from booleans; the shim matches (they stay strings).
+    assert yaml.safe_load("v: y") == {"v": "y"}
+    # A string a 1.1 reader would coerce is quoted on the way out, so it survives.
+    assert yaml.safe_load(yaml.safe_dump({"v": "yes"})) == {"v": "yes"}
+
+
 def test_safe_dump_returns_str():
     """safe_dump returns a str when no stream is given."""
     out = yaml.safe_dump({"a": 1, "b": 2})

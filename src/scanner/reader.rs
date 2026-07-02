@@ -247,6 +247,22 @@ impl<'input> Reader<'input> {
         is_whitespace_or_break_byte(self.input.as_bytes()[self.pos - 1])
     }
 
+    /// Bulk-skip a run of spaces, advancing the column by the run length.
+    ///
+    /// Spaces are single-byte, so the run is found with one tight byte scan and
+    /// `pos`/`column` update once, instead of a bounds-checked peek/advance
+    /// cycle per character. Indentation makes these runs long and frequent.
+    #[inline]
+    pub fn skip_spaces(&mut self) {
+        let bytes = self.input.as_bytes();
+        let mut i = self.pos;
+        while i < bytes.len() && bytes[i] == b' ' {
+            i += 1;
+        }
+        self.column += (i - self.pos) as u32;
+        self.pos = i;
+    }
+
     /// Advance by one character.
     #[inline]
     pub fn advance(&mut self) {

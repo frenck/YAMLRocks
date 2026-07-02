@@ -88,12 +88,18 @@ impl<'input> Parser<'input> {
 
     /// Parse all events from the input.
     pub fn parse_all(&mut self) -> Result<Vec<Event<'input>>, ScanError> {
-        // Preallocate from the source length (real YAML averages well under one
-        // event per several bytes), so the vector does not grow by repeated
-        // doubling and the copies that come with it. Capped so a crafted large
-        // input cannot force an outsized up-front allocation; past the cap the
+        // Preallocate from the source length. Structured YAML runs 2-4 bytes
+        // per event (a terse `k:` line is under 2), so a small document gets a
+        // full-density reserve (half its byte length): for a document that fits
+        // comfortably in one allocation, a single doubling right at the end of
+        // the parse costs more than the over-reserve. A large document instead
+        // gets the statistical density (an eighth): growth doublings amortize
+        // over its parse time, while a full-density reserve would allocate far
+        // past what scalar-heavy input ever fills. The cap keeps a crafted
+        // input from forcing an outsized up-front allocation; past it the
         // vector simply grows as before.
-        let mut events = Vec::with_capacity((self.input_len / 8).clamp(8, 65_536));
+        let estimate = (self.input_len / 8).max((self.input_len / 2).min(4096));
+        let mut events = Vec::with_capacity(estimate.clamp(8, 65_536));
         loop {
             let event = self.next_event()?;
             let is_end = matches!(event.kind, EventKind::StreamEnd);

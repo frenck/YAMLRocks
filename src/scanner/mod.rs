@@ -146,11 +146,14 @@ impl<'input> Scanner<'input> {
     pub fn new(input: &'input str) -> Self {
         Self {
             reader: Reader::new(input),
-            tokens: VecDeque::new(),
-            indent_stack: Vec::new(),
+            // Pre-sized so ordinary documents never grow them: the token
+            // queue holds a handful of lookahead tokens and the indent stacks
+            // track block nesting depth.
+            tokens: VecDeque::with_capacity(16),
+            indent_stack: Vec::with_capacity(16),
             current_indent: -1,
             current_is_seq: false,
-            indent_kinds: Vec::new(),
+            indent_kinds: Vec::with_capacity(16),
             flow_level: 0,
             flow_value_seen: false,
             flow_need_sep: false,
@@ -486,7 +489,9 @@ impl<'input> Scanner<'input> {
         loop {
             match self.reader.peek() {
                 ' ' => {
-                    self.reader.advance();
+                    // Indentation and separation are runs of spaces; skip the
+                    // whole run in one pass rather than one byte per loop turn.
+                    self.reader.skip_spaces();
                 }
                 '\t' => {
                     if self.flow_level == 0 {
@@ -561,9 +566,7 @@ impl<'input> Scanner<'input> {
     /// Only skips spaces on the same line; does not cross line boundaries.
     fn check_value_after_scalar(&mut self) -> bool {
         let saved = self.reader.save();
-        while !self.reader.is_eof() && self.reader.peek() == ' ' {
-            self.reader.advance();
-        }
+        self.reader.skip_spaces();
         if !self.reader.is_eof() && self.reader.peek() == ':' {
             let next = self.reader.peek_next();
             if next.map_or(true, is_whitespace_or_break)

@@ -156,6 +156,47 @@ def test_deeply_nested_input_survives_small_thread_stack():
     assert proc.stdout.strip() == b"OK"
 
 
+# The hashable-key conversion (a sequence/mapping used as a mapping key becomes
+# a nested tuple) recurses per level of the key, so it needs the same on-demand
+# stack growth as the value paths above. Its frames are small, so only a stack
+# well under 1 MB exposes an unguarded recursion; 256 KB crashed (SIGSEGV) at
+# depth 900 before the guard.
+_COMPLEX_KEY_SCRIPT = """
+import threading, yamlrocks
+deep_key = b"? " + b"[" * %(depth)d + b"]" * %(depth)d + b"\\n: 1\\n"
+def work():
+    yamlrocks.loads(deep_key)
+threading.stack_size(256 * 1024)
+t = threading.Thread(target=work)
+t.start()
+t.join()
+print("OK")
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX thread stack sizing")
+def test_deep_complex_key_survives_small_thread_stack():
+    """A deeply nested complex key must not overflow a small thread stack.
+
+    Converting a collection key to its hashable Python counterpart recurses per
+    key level; the guard grows the native stack on demand so a near-maximum
+    -depth key on a 256 KB worker thread converts cleanly instead of
+    segfaulting the interpreter. Runs in a subprocess so a regression cannot
+    abort pytest.
+    """
+    import subprocess
+
+    script = _COMPLEX_KEY_SCRIPT % {"depth": 900}
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, timeout=60
+    )
+    assert proc.returncode == 0, (
+        f"deep complex key crashed on a 256 KB thread stack: rc={proc.returncode} "
+        f"stderr={proc.stderr.decode()[:400]}"
+    )
+    assert proc.stdout.strip() == b"OK"
+
+
 # -- Circular includes -------------------------------------------------------
 
 

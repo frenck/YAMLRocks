@@ -43,6 +43,19 @@ def test_non_finite_floats_become_null():
     )
 
 
+@pytest.mark.parametrize(
+    "value", [1e16, 1e-7, 1e100, 1.7976931348623157e308, 5e-324, 0.1]
+)
+def test_large_and_tiny_floats_use_compact_scientific_notation(value):
+    """A large- or small-magnitude float emits in compact scientific notation
+    (e.g. `1.0e+16`), not a full positional decimal that balloons to hundreds of
+    digits, and it round-trips exactly through stdlib json."""
+    out = yamlrocks.to_json({"v": value})
+    # No grotesque expansion: `1e100` must not become a 100-digit string.
+    assert len(out) < 40
+    assert json.loads(out)["v"] == value
+
+
 def test_non_string_scalar_keys_are_stringified():
     """Int/bool/null/float keys stringify to their JSON scalar text."""
     assert yamlrocks.to_json({None: 1}) == b'{"null":1}'

@@ -75,13 +75,13 @@ fn write_float(out: &mut String, value: f64) {
         out.push_str("null");
         return;
     }
-    let s = format!("{value}");
-    // Keep floats distinguishable from integers (`1.0`, not `1`).
-    if s.contains(['.', 'e', 'E']) {
-        out.push_str(&s);
-    } else {
-        let _ = write!(out, "{s}.0");
-    }
+    // Reuse the shared canonical spelling (the YAML path uses it too), so a large
+    // or tiny magnitude emits in scientific notation (`1.0e+16`) rather than
+    // Rust's default `{}`, which never uses exponents and would expand `1e100` to
+    // 101 digits. The `.`/mantissa keeps it distinguishable from an integer, and
+    // the special values are already handled above (so `.inf`/`.nan` never reach
+    // here). The exponent form (`1.0e+16`) is valid JSON and parses back exactly.
+    out.push_str(&crate::emit_util::canonical_float(value));
 }
 
 fn write_array(

@@ -457,10 +457,7 @@ fn special_type_to_value(
     };
     match type_name.as_str() {
         "Decimal" if type_module()? == "decimal" => {
-            if let Ok(f) = obj.extract::<f64>() {
-                return Ok(Some(Value::Float(f)));
-            }
-            return Ok(Some(Value::String(obj.str()?.to_string().into())));
+            return decimal_to_value(py, obj);
         }
         "UUID" if type_module()? == "uuid" => {
             return Ok(Some(Value::String(obj.str()?.to_string().into())))
@@ -477,6 +474,45 @@ fn special_type_to_value(
     }
 
     Ok(None)
+}
+
+/// Convert a `decimal.Decimal` to a `Value` without silently losing precision.
+///
+/// The old path extracted an `f64`, which rounds a 30-digit integer or a
+/// high-precision fraction down to a double. Instead:
+/// - a non-finite Decimal (`NaN`/`Infinity`) keeps the `f64` path, so it renders
+///   as `.nan`/`.inf` like any float;
+/// - an integral Decimal becomes a `BigInt` of its exact digits (arbitrary
+///   precision, re-reads as an `int`);
+/// - a fractional Decimal that an `f64` captures exactly (its shortest repr
+///   round-trips back to the same Decimal) becomes that `Float`, so a plain
+///   `Decimal("3.14")` still emits as `3.14`;
+/// - any other fractional Decimal keeps its exact digits as a string, so the
+///   value is preserved in the output rather than rounded away.
+fn decimal_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<Value<'static>>> {
+    // `is_finite` is false for NaN/Infinity; fall back to the float rendering.
+    if !obj.call_method0("is_finite")?.extract::<bool>()? {
+        let f = obj.extract::<f64>().unwrap_or(f64::NAN);
+        return Ok(Some(Value::Float(f)));
+    }
+    // Fixed-point form (`format(d, "f")`) gives the exact digits with no
+    // scientific `E` notation, so `Decimal("1E+29")` becomes `100...0`.
+    let fixed: String = obj.call_method1("__format__", ("f",))?.extract()?;
+    if !fixed.contains('.') {
+        return Ok(Some(Value::BigInt(fixed.into())));
+    }
+    // Emit as a plain float when an f64 captures the value to full working
+    // precision, i.e. the float's shortest repr round-trips back to the same
+    // Decimal (`Decimal(repr(float(d))) == d`).
+    if let Ok(f) = obj.extract::<f64>() {
+        let repr = pyo3::types::PyFloat::new(py, f).repr()?;
+        let round_tripped = obj.get_type().call1((repr,))?;
+        if obj.eq(&round_tripped)? {
+            return Ok(Some(Value::Float(f)));
+        }
+    }
+    // Higher precision than an f64 can hold: keep the exact digits verbatim.
+    Ok(Some(Value::String(fixed.into())))
 }
 
 /// Whether `obj` is an `enum.Enum` instance (detected via its metaclass).

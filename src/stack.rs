@@ -52,7 +52,10 @@ use crate::roundtrip::ast::{YamlNode, YamlNodeKind};
 /// stack (the build paths grow the stack on demand via [`guard`], but a drop
 /// happens after those return).
 pub(crate) fn drop_value_tree(value: Value<'_>) {
-    let mut work = vec![value];
+    // Pre-sized so small trees drop with a single work-list allocation instead
+    // of doubling through the first pushes.
+    let mut work = Vec::with_capacity(32);
+    work.push(value);
     while let Some(node) = work.pop() {
         match node {
             Value::Sequence(items) => work.extend(items),

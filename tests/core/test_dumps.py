@@ -47,6 +47,21 @@ def test_dumps_invalid_utf8_bytes_is_rejected():
         yamlrocks.dumps({"k": b"\xff\xfe"})
 
 
+@pytest.mark.parametrize(
+    "obj",
+    [
+        "\ud800",  # bare lone surrogate
+        b"file\xff.txt".decode("utf-8", "surrogateescape"),  # surrogateescape
+        {b"k\xff".decode("utf-8", "surrogateescape"): 1},  # as a mapping key
+        ["\udcff"],  # inside a sequence
+    ],
+)
+def test_dumps_lone_surrogate_str_is_rejected(obj):
+    """A str with an unpaired surrogate raises instead of being replaced by U+FFFD."""
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="surrogate"):
+        yamlrocks.dumps(obj)
+
+
 def test_dumps_empty_collections_use_flow():
     """Dump empty mappings and sequences using flow style."""
     assert yamlrocks.dumps({"a": {}, "b": []}) == b"a: {}\nb: []\n"

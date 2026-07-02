@@ -54,8 +54,10 @@ pub fn value_to_python_with(
     value: &Value<'_>,
     tags: TagPolicy<'_, '_>,
 ) -> PyResult<Py<PyAny>> {
-    let mut keys = KeyCache::default();
-    value_to_python_cached(py, value, tags, &mut keys)
+    // Pre-sized so typical documents (a few dozen distinct keys) fill the
+    // cache without a rehash.
+    let mut keys = KeyCache::with_capacity_and_hasher(32, ahash::RandomState::default());
+    value_to_python_cached(py, value, tags, &mut keys, 0)
 }
 
 fn value_to_python_cached<'tree>(
@@ -63,8 +65,16 @@ fn value_to_python_cached<'tree>(
     value: &'tree Value<'_>,
     tags: TagPolicy<'_, '_>,
     keys: &mut KeyCache<'tree>,
+    depth: usize,
 ) -> PyResult<Py<PyAny>> {
-    crate::stack::guard(|| value_to_python_inner(py, value, tags, keys))
+    // Checking the remaining stack costs a TLS lookup, so guard every eighth
+    // level rather than every one: eight conversion frames stay far below the
+    // guard's `RED_ZONE` headroom, keeping the overflow invariant intact.
+    if depth & 7 == 0 {
+        crate::stack::guard(|| value_to_python_inner(py, value, tags, keys, depth))
+    } else {
+        value_to_python_inner(py, value, tags, keys, depth)
+    }
 }
 
 fn value_to_python_inner<'tree>(
@@ -72,6 +82,7 @@ fn value_to_python_inner<'tree>(
     value: &'tree Value<'_>,
     tags: TagPolicy<'_, '_>,
     keys: &mut KeyCache<'tree>,
+    depth: usize,
 ) -> PyResult<Py<PyAny>> {
     let obj = match value {
         Value::Null => py.None(),
@@ -95,7 +106,7 @@ fn value_to_python_inner<'tree>(
                 Bound::from_owned_ptr_or_err(py, ffi::PyList_New(len as ffi::Py_ssize_t))?
             };
             for (i, item) in items.iter().enumerate() {
-                let child = value_to_python_cached(py, item, tags, keys)?;
+                let child = value_to_python_cached(py, item, tags, keys, depth + 1)?;
                 // SAFETY: `i` is in bounds (< len), the list is freshly created
                 // and not shared, and `into_ptr` hands over an owned reference
                 // for `PyList_SET_ITEM` to steal.
@@ -127,9 +138,9 @@ fn value_to_python_inner<'tree>(
                     // `list`/`dict`; convert it to its hashable counterpart (a
                     // sequence becomes a tuple, a mapping a frozenset of items).
                     Value::Sequence(_) | Value::Mapping(_) => value_to_hashable_key(py, key, tags)?,
-                    other => value_to_python_cached(py, other, tags, keys)?,
+                    other => value_to_python_cached(py, other, tags, keys, depth + 1)?,
                 };
-                let py_val = value_to_python_cached(py, val, tags, keys)?;
+                let py_val = value_to_python_cached(py, val, tags, keys, depth + 1)?;
                 // `PyDict_SetItem` does not steal references; it increments its
                 // own on success, so our `py_key`/`py_val` are released when they
                 // drop at the end of the iteration. YAML permits non-scalar keys,
@@ -151,7 +162,7 @@ fn value_to_python_inner<'tree>(
             dict.into_any().unbind()
         }
         Value::Tagged(tag, inner) => {
-            let inner_py = value_to_python_cached(py, inner, tags, keys)?;
+            let inner_py = value_to_python_cached(py, inner, tags, keys, depth + 1)?;
             resolve_tagged(py, tag.as_str(), inner_py, tags)?
         }
     };

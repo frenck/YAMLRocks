@@ -555,8 +555,15 @@ impl<'input> Decoder<'input> {
         }
         // Grow the native stack if it is running low, so deeply nested input
         // (bounded above by `MAX_DEPTH`) cannot overflow a small thread stack
-        // before the cap fires. See [`crate::stack`].
-        let result = crate::stack::guard(|| self.decode_node_inner(events));
+        // before the cap fires. See [`crate::stack`]. Checking the remaining
+        // stack costs a TLS lookup, so guard every eighth level rather than
+        // every one: eight decode frames stay far below the guard's `RED_ZONE`
+        // headroom, keeping the overflow invariant intact.
+        let result = if self.depth & 7 == 1 {
+            crate::stack::guard(|| self.decode_node_inner(events))
+        } else {
+            self.decode_node_inner(events)
+        };
         self.depth -= 1;
         result
     }

@@ -116,6 +116,18 @@ def test_negative_sexagesimal():
     assert load11("-1:30") == -90
 
 
+@pytest.mark.parametrize("text", ["03:30", "0:30", "00:00", "023:30", "1:030", "1:90"])
+def test_leading_zero_and_out_of_range_sexagesimal_stay_strings(text):
+    """The 1.1 int production is `[1-9][0-9_]*(:[0-5]?[0-9])+`: a leading-zero
+    first segment (a time of day like `03:30`) or an out-of-range/oversized
+    later segment is a plain string, not base-60. PyYAML agrees."""
+    assert load11(text) == text
+    assert (
+        yamlrocks.loads(f"x: {text}".encode(), option=yamlrocks.OPT_PYYAML_COMPAT)["x"]
+        == text
+    )
+
+
 def test_underscores_in_float():
     """Strip underscores from floats under OPT_YAML_1_1."""
     assert load11("1_000.5") == 1000.5

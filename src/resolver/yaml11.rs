@@ -199,6 +199,10 @@ fn try_parse_int_11(value: &str) -> Option<i64> {
 }
 
 fn parse_sexagesimal_int(value: &str) -> Option<i64> {
+    // The YAML 1.1 int sexagesimal production is `[-+]?[1-9][0-9_]*(:[0-5]?[0-9])+`
+    // (PyYAML matches it exactly). The leading segment must start `1`-`9`, so a
+    // leading-zero first segment (`03:30`, `0:30`, a time of day) is a string,
+    // not base-60. The float form allows a leading zero, so it is handled apart.
     let mut result: i64 = 0;
     for (i, part) in value.split(':').enumerate() {
         // A per-segment sign (`5:+30`) is not sexagesimal; the value's own sign is
@@ -207,12 +211,18 @@ fn parse_sexagesimal_int(value: &str) -> Option<i64> {
             return None;
         }
         let n: i64 = part.parse().ok()?;
-        // Only the leading segment may exceed 59 (e.g. `90:00`); every later
-        // segment is a base-60 digit and must stay in 0..60. Keying this off the
-        // position rather than the running total keeps a legitimate leading `0`
-        // (as in `0:30`) from being mistaken for the first segment again later.
-        if i > 0 && !(0..60).contains(&n) {
-            return None;
+        if i == 0 {
+            // The leading segment matches `[1-9][0-9]*`: it may exceed 59
+            // (`90:00`) but must not start with `0`.
+            if part.starts_with('0') {
+                return None;
+            }
+        } else {
+            // Every later segment is a base-60 digit `[0-5]?[0-9]`: one or two
+            // digits, staying in 0..60.
+            if part.len() > 2 || !(0..60).contains(&n) {
+                return None;
+            }
         }
         // A value too large to hold in an i64 is not representable as an int, so
         // fall back to a string (`None`) instead of overflowing, exactly as the
@@ -446,10 +456,24 @@ mod tests {
         // Classic base-60: 1:30 == 90, and a leading segment may exceed 59.
         assert_eq!(plain("1:30"), ResolvedValue::Int(90));
         assert_eq!(plain("90:00"), ResolvedValue::Int(5400));
-        // A leading zero segment must not be mistaken for "no segment yet": a
-        // later out-of-range segment is still rejected.
-        assert_eq!(plain("0:30"), ResolvedValue::Int(30));
-        assert!(matches!(plain("0:90"), ResolvedValue::String(_)));
+        assert_eq!(plain("1:2:3"), ResolvedValue::Int(3723));
+        // The spec production is `[1-9][0-9_]*(:[0-5]?[0-9])+`: a leading-zero
+        // first segment is NOT base-60 but a plain string, so a time of day like
+        // `03:30` stays `"03:30"` and does not become 210 (PyYAML agrees).
+        for value in ["0:30", "03:30", "00:00", "023:30"] {
+            assert!(
+                matches!(plain(value), ResolvedValue::String(_)),
+                "{value:?}"
+            );
+        }
+        // A later segment is a single base-60 digit `[0-5]?[0-9]`: out of range
+        // (`1:90`) or more than two digits (`1:030`) falls back to a string.
+        for value in ["1:90", "1:030"] {
+            assert!(
+                matches!(plain(value), ResolvedValue::String(_)),
+                "{value:?}"
+            );
+        }
         // A chain long enough to overflow i64 during base-60 accumulation must
         // fall back to a string, not panic (debug) or wrap (release). Found by
         // the `decode` fuzz target.

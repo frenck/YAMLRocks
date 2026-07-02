@@ -38,6 +38,25 @@ def test_parse_error_is_specific_and_located():
     assert exc.message
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"a: \xed\xa0\x80",  # UTF-8 lone surrogate
+        b"\xff",  # invalid UTF-8 start byte
+        b"key: \xc0\xaf",  # overlong UTF-8
+        b"\xff\xfe\x00",  # UTF-16 LE, odd byte count
+        b"\xff\xfe\x00\xd8",  # UTF-16 LE, unpaired surrogate
+    ],
+)
+def test_malformed_encoding_is_a_yamlrocks_error(raw):
+    """A malformed byte encoding raises a YAMLRocksError (not a bare ValueError
+    leaking from Rust), so `except YAMLRocksError` catches it."""
+    with pytest.raises(ex.YAMLRocksError) as info:
+        yamlrocks.loads(raw)
+    # It stays ValueError-compatible for existing callers.
+    assert isinstance(info.value, ValueError)
+
+
 def test_duplicate_key_error(tmp_path):
     """A duplicate key under OPT_DUPLICATE_KEYS_ERROR is its own class."""
     with pytest.raises(ex.YAMLRocksDuplicateKeyError):

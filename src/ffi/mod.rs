@@ -785,12 +785,14 @@ fn detect_encoding(b: &[u8]) -> Encoding {
 /// Decode YAML input bytes to a UTF-8 `String`, accepting UTF-8, UTF-16, and
 /// UTF-32 (with or without a BOM) as the spec requires. A non-UTF-8 stream is
 /// transcoded; any leading byte order mark survives as U+FEFF for the reader to
-/// strip. Invalid input raises a clear, encoding-specific error rather than the
-/// generic "invalid UTF-8" (or, worse, silently mis-parsing UTF-16 as Latin-1).
+/// strip. Invalid input raises a clear, encoding-specific `YAMLRocksDecodeError`
+/// (inside the library's exception hierarchy, so `except YAMLRocksError` catches
+/// it) rather than a bare `ValueError` leaking from Rust, or, worse, silently
+/// mis-parsing UTF-16 as Latin-1.
 fn bytes_to_string(bytes: &[u8]) -> PyResult<String> {
     match detect_encoding(bytes) {
         Encoding::Utf8 => String::from_utf8(bytes.to_vec())
-            .map_err(|e| PyValueError::new_err(format!("invalid UTF-8: {e}"))),
+            .map_err(|e| errors::decode_message(format!("invalid UTF-8: {e}"))),
         Encoding::Utf16Le => decode_utf16(bytes, false),
         Encoding::Utf16Be => decode_utf16(bytes, true),
         Encoding::Utf32Le => decode_utf32(bytes, false),
@@ -800,7 +802,7 @@ fn bytes_to_string(bytes: &[u8]) -> PyResult<String> {
 
 fn decode_utf16(bytes: &[u8], big_endian: bool) -> PyResult<String> {
     if bytes.len() % 2 != 0 {
-        return Err(PyValueError::new_err(
+        return Err(errors::decode_message(
             "invalid UTF-16: byte count is not a multiple of 2",
         ));
     }
@@ -816,12 +818,12 @@ fn decode_utf16(bytes: &[u8], big_endian: bool) -> PyResult<String> {
         })
         .collect();
     String::from_utf16(&units)
-        .map_err(|_| PyValueError::new_err("invalid UTF-16: unpaired surrogate"))
+        .map_err(|_| errors::decode_message("invalid UTF-16: unpaired surrogate"))
 }
 
 fn decode_utf32(bytes: &[u8], big_endian: bool) -> PyResult<String> {
     if bytes.len() % 4 != 0 {
-        return Err(PyValueError::new_err(
+        return Err(errors::decode_message(
             "invalid UTF-32: byte count is not a multiple of 4",
         ));
     }
@@ -835,7 +837,7 @@ fn decode_utf32(bytes: &[u8], big_endian: bool) -> PyResult<String> {
                 u32::from_le_bytes(quad)
             };
             char::from_u32(code)
-                .ok_or_else(|| PyValueError::new_err("invalid UTF-32: not a Unicode scalar value"))
+                .ok_or_else(|| errors::decode_message("invalid UTF-32: not a Unicode scalar value"))
         })
         .collect()
 }

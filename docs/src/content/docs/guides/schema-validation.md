@@ -250,28 +250,59 @@ yamlrocks.loads(b"3.14", schema=schema)
 #                         the anyOf schemas at $ (line 1, column 1)
 ```
 
+## Patterns
+
+`pattern` constrains a string with a regular expression, and `patternProperties`
+applies a schema to every key that matches a pattern. The regex engine runs in
+guaranteed linear time, so an untrusted schema pattern cannot stall the
+validator, and an invalid pattern is reported as a schema error rather than
+silently skipped.
+
+```python
+import yamlrocks
+
+schema = {
+    "type": "object",
+    "properties": {"name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}},
+    "patternProperties": {"^port_": {"type": "integer"}},
+}
+
+source = """
+name: web-app
+port_http: 80
+port_https: 443
+"""
+
+yamlrocks.loads(source, schema=schema)
+# {'name': 'web-app', 'port_http': 80, 'port_https': 443}
+```
+
+A property name is always treated as a string, so `propertyNames` and a
+`patternProperties` key match a numeric-looking key like `123` as the text
+`"123"`.
+
 ## Supported keywords
 
 YAMLRocks implements a practical, draft-7-ish subset of JSON Schema, enough to
 express the constraints configuration files actually need, without pulling in a
 full validator. The supported keywords are:
 
-| Group       | Keywords                                                                     |
-| ----------- | ---------------------------------------------------------------------------- |
-| Types       | `type` (`null`, `boolean`, `integer`, `number`, `string`, `array`, `object`) |
-| Values      | `enum`, `const`                                                              |
-| Objects     | `properties`, `required`, `additionalProperties` (boolean or schema)         |
-| Arrays      | `items`, `minItems`, `maxItems`                                              |
-| Numbers     | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`                 |
-| Strings     | `minLength`, `maxLength`                                                     |
-| Combinators | `allOf`, `anyOf`, `oneOf`, `not`                                             |
-| References  | `$ref` (local `#/...` pointers, including `#/$defs/...`)                     |
+| Group       | Keywords                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Types       | `type` (`null`, `boolean`, `integer`, `number`, `string`, `array`, `object`; a whole-number float counts as `integer`)                                       |
+| Values      | `enum`, `const`                                                                                                                                              |
+| Objects     | `properties`, `patternProperties`, `required`, `additionalProperties` (boolean or schema), `propertyNames`, `minProperties`, `maxProperties`, `dependencies` |
+| Arrays      | `items` (single schema or the draft-7 tuple form), `additionalItems`, `minItems`, `maxItems`, `contains`, `uniqueItems`                                      |
+| Numbers     | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`                                                                                   |
+| Strings     | `minLength`, `maxLength`, `pattern`                                                                                                                          |
+| Combinators | `allOf`, `anyOf`, `oneOf`, `not`                                                                                                                             |
+| References  | `$ref` (local `#/...` pointers, including `#/$defs/...`)                                                                                                     |
 
 :::note[Unknown keywords are ignored]
 This is a deliberately small subset. Keywords YAMLRocks does not implement (such as
-`pattern` or `format`) are skipped rather than rejected, so a richer schema
-written for another validator still works here; it just validates against the
-keywords listed above. If you need a feature that is missing, validate with a
+`format`, or `if`/`then`/`else`) are skipped rather than rejected, so a richer
+schema written for another validator still works here; it just validates against
+the keywords listed above. If you need a feature that is missing, validate with a
 dedicated JSON Schema library after `loads` returns.
 :::
 

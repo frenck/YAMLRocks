@@ -48,8 +48,9 @@ def test_list_is_real_list_subclass():
     assert items.__line__ == 2
 
 
-def test_config_file_is_none_without_includes():
-    """__file__ is None when loaded without includes."""
+def test_config_file_is_none_for_in_memory_bytes():
+    """__file__ is None when there is no source path: in-memory bytes with no
+    root_path have nowhere to point."""
     data = yamlrocks.loads(b"a: 1\n", option=ANN)
     assert data.__file__ is None
 
@@ -136,6 +137,16 @@ def test_root_reports_real_path_via_load(tmp_path):
     assert data.__file__ == str(cfg)
     assert data["server"].__file__ == str(cfg)
     assert next(iter(data)).__file__ == str(cfg)
+
+
+def test_root_reports_real_path_via_load_without_includes(tmp_path):
+    """The top-level file's path reaches annotated nodes even without
+    ``OPT_INCLUDES``: ``load(path)`` alone is enough for ``__file__``."""
+    cfg = tmp_path / "configuration.yaml"
+    cfg.write_text("name: home\nserver:\n  host: localhost\n")
+    data = yamlrocks.load(str(cfg), option=ANN)
+    assert data["name"].__file__ == str(cfg)
+    assert next(iter(data["server"])).__file__ == str(cfg)
 
 
 # -- Annotated mode runs the same structural validation as the default path -----

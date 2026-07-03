@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import yamlrocks
 
 
@@ -173,3 +175,30 @@ def test_merge_sequence_with_non_mergeable_element_keeps_only_leftover():
     assert (
         yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_dict()["o"] == expected
     )
+
+
+@pytest.mark.parametrize(
+    ("src", "order"),
+    [
+        # A `<<` expands at its own position; explicit keys keep their spot.
+        (b"base: &b {x: 1}\nuse:\n  <<: *b\n  y: 2\n", ["x", "y"]),
+        (b"base: &b {x: 1}\nuse:\n  y: 2\n  <<: *b\n", ["y", "x"]),
+        # An explicit key overrides a merged one in place (keeps its position).
+        (b"base: &b {x: 1, z: 9}\nuse:\n  z: 0\n  <<: *b\n  y: 2\n", ["z", "x", "y"]),
+        # A list merge expands each source in order, at the `<<` position.
+        (
+            b"a: &a {p: 1}\nb: &b {q: 2}\nuse:\n  <<: [*a, *b]\n  r: 3\n",
+            ["p", "q", "r"],
+        ),
+    ],
+)
+def test_merge_key_order_is_source_order_on_every_path(src, order):
+    """Merged keys land at the `<<` position and explicit keys keep their written
+    spot, and the fast, annotated, and round-trip paths all agree on that order
+    (previously the fast path put explicit keys first, diverging from the others)."""
+    fast = list(yamlrocks.loads(src)["use"].keys())
+    annotated = list(dict(yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED)["use"]))
+    round_trip = list(
+        yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_dict()["use"].keys()
+    )
+    assert fast == annotated == round_trip == order

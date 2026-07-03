@@ -186,7 +186,7 @@ use:
 """
 
 yamlrocks.loads(merge)
-# {'base': {'x': 1}, 'use': {'y': 2, 'x': 1}}
+# {'base': {'x': 1}, 'use': {'x': 1, 'y': 2}}
 ```
 
 Explicit keys win over merged ones, and earlier merges win over later ones,

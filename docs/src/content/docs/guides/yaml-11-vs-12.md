@@ -104,7 +104,7 @@ use:
 """
 
 yamlrocks.loads(source)
-# {'base': {'x': 1}, 'use': {'y': 2, 'x': 1}}
+# {'base': {'x': 1}, 'use': {'x': 1, 'y': 2}}
 ```
 
 ## Why 1.2 is the default

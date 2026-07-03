@@ -387,3 +387,42 @@ def test_duplicate_tag_directive_is_rejected():
         yamlrocks.loads(src)
     # A different handle on the same line is fine.
     assert yamlrocks.loads(b"%TAG !e! tag:a:\n%TAG !f! tag:b:\n---\nx: 1\n") == {"x": 1}
+
+
+def test_verbatim_tag_canonicalized_for_handler():
+    """A verbatim `!<uri>` reaches a handler as the bare URI, like `%TAG` expansion."""
+    src = b"x: !<tag:example.com,2020:app/foo> bar\n"
+    seen = []
+    yamlrocks.loads(src, tag_handler=lambda tag, val: seen.append(tag) or val)
+    assert seen == ["tag:example.com,2020:app/foo"]
+
+
+def test_verbatim_tag_passthrough_keeps_verbatim_spelling():
+    """A passthrough `YAMLRocksTag` keeps the `!<...>` spelling so `dumps` accepts it.
+
+    Canonicalizing the passthrough tag to a bare URI would make `dumps` reject it
+    (`validate_tag` requires a leading `!`), breaking the load/dump round-trip.
+    """
+    src = b"x: !<tag:example.com,2020:app/foo> bar\n"
+    node = yamlrocks.loads(src, option=yamlrocks.OPT_PASSTHROUGH_TAG)["x"]
+    assert node.tag == "!<tag:example.com,2020:app/foo>"
+    # The verbatim tag survives a dump/load round-trip through the passthrough object.
+    reloaded = yamlrocks.loads(
+        yamlrocks.dumps(node), option=yamlrocks.OPT_PASSTHROUGH_TAG
+    )
+    assert reloaded.tag == node.tag
+    assert reloaded.value == node.value
+
+
+def test_verbatim_tag_value_round_trips():
+    """A verbatim-tagged value survives a dump/load round-trip via passthrough.
+
+    The default `loads` strips custom tags, so this exercises `OPT_PASSTHROUGH_TAG`,
+    where the `!<...>` spelling is preserved and `dumps` can re-emit it.
+    """
+    for src in [b"!<tag:example.com,2020:foo> bar", b"!<a> y"]:
+        tag = yamlrocks.loads(src, option=yamlrocks.OPT_PASSTHROUGH_TAG)
+        reloaded = yamlrocks.loads(
+            yamlrocks.dumps(tag), option=yamlrocks.OPT_PASSTHROUGH_TAG
+        )
+        assert (reloaded.tag, reloaded.value) == (tag.tag, tag.value), src

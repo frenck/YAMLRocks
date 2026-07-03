@@ -555,23 +555,45 @@ fn check_numeric(
             }
         }
     }
-    if let Some(mult) = get(schema, "multipleOf").and_then(as_f64) {
-        if mult > 0.0 && !is_multiple_of(num, mult) {
-            errors.push(err(
-                node,
-                path,
-                &format!("value {num} is not a multiple of {mult}"),
-            ));
+    if let Some(mult_value) = get(schema, "multipleOf") {
+        if let Some(mult) = as_f64(mult_value) {
+            if mult > 0.0 && !is_multiple_of(resolved, mult_value, num, mult) {
+                errors.push(err(
+                    node,
+                    path,
+                    &format!("value {num} is not a multiple of {mult}"),
+                ));
+            }
         }
     }
 }
 
-/// Whether `num` is an integer multiple of `mult`, tolerant of float rounding so
-/// `6 / 2` and `0.3 / 0.1` are accepted. `mult` is assumed positive (the caller
-/// guards `mult > 0`, matching the JSON Schema requirement).
-fn is_multiple_of(num: f64, mult: f64) -> bool {
-    let ratio = num / mult;
-    (ratio - ratio.round()).abs() <= 1e-9 * ratio.abs().max(1.0)
+/// A value's exact integer form, if it has one: a plain `Int`, or a `BigInt`
+/// whose digits fit `i128` (which covers every realistic integer). Used for an
+/// exact `multipleOf` check that a lossy `f64` conversion would get wrong.
+fn as_i128(value: &Value) -> Option<i128> {
+    match value {
+        Value::Int(i) => Some(*i as i128),
+        Value::BigInt(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Whether `value` is an integer multiple of `mult_value`.
+///
+/// When both operands are integers the check is exact (integer modulo), so a
+/// large integer like `10000000000000001` is not mistaken for a multiple of `2`
+/// after losing precision as an `f64`. When either operand is a float the check
+/// is best-effort within floating-point precision: the value must sit within a
+/// few ULPs of the nearest multiple, so `0.3` counts as a multiple of `0.1`
+/// (binary rounding) while `3.0000001` does not. `mult` is positive (the caller
+/// guards `mult > 0`, per the JSON Schema requirement).
+fn is_multiple_of(value: &Value, mult_value: &Value, num: f64, mult: f64) -> bool {
+    if let (Some(v), Some(m)) = (as_i128(value), as_i128(mult_value)) {
+        return m != 0 && v % m == 0;
+    }
+    let nearest = (num / mult).round() * mult;
+    (num - nearest).abs() <= num.abs().max(mult) * f64::EPSILON * 8.0
 }
 
 fn check_string(

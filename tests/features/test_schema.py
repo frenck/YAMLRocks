@@ -693,3 +693,26 @@ def test_schema_invalid_pattern_is_reported_not_ignored():
         yamlrocks.loads(
             b'v: "x"', schema={"properties": {"v": {"pattern": "[unclosed"}}}
         )
+
+
+def test_multiple_of_is_exact_for_integers():
+    """`multipleOf` on integers is exact, not a lossy float check: a large odd
+    integer is not mistaken for a multiple of an even one after `f64` rounding.
+    Big integers beyond `i64` are handled exactly too (via `i128`)."""
+    # Regression: this large odd integer used to pass `multipleOf: 2` because it
+    # lost precision as an f64.
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(b"10000000000000001\n", schema={"multipleOf": 2})
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(b"10000000000000002\n", schema={"multipleOf": 4})
+    # A big integer past i64 is still checked exactly.
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(b"100000000000000000000000001\n", schema={"multipleOf": 2})
+    # Genuine multiples still pass.
+    assert yamlrocks.loads(b"9\n", schema={"multipleOf": 3}) == 9
+    assert yamlrocks.loads(
+        b"100000000000000000000000000\n", schema={"multipleOf": 2}
+    ) == (100000000000000000000000000)
+    # A clearly non-integral float multiple is rejected.
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(b"3.0000001\n", schema={"multipleOf": 1.0})

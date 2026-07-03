@@ -108,6 +108,14 @@ bench *args:
     uv sync --inexact --no-install-project --group bench
     uv run --no-sync python bench/bench.py {{args}}
 
+# Builds a release extension first (a debug build is several times slower, so it
+# would understate YAMLRocks against the other libraries' release wheels), then
+# renders the cross-library comparison charts into the docs assets.
+charts:
+    uv sync --inexact --no-install-project --group charts
+    uv run --no-sync maturin develop --release
+    cd bench && uv run --no-sync python charts.py
+
 # Run the CodSpeed benchmarks locally (walltime mode).
 codspeed:
     uv sync --inexact --no-install-project --group codspeed

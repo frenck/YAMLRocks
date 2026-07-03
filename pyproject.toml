@@ -92,6 +92,18 @@ lint = ["ruff==0.15.20", "codespell==2.4.2", "zizmor==1.26.1"]
 codspeed = [{ include-group = "test" }, "pytest-codspeed==5.0.3"]
 # Comparison libraries used only by the one-off bench/bench.py report.
 bench = ["pyyaml==6.0.3", "ruamel.yaml==0.19.1", "yamlium==0.2.5"]
+# Renders the cross-library comparison charts (just charts) into the docs assets.
+# Adds the wider field (Rust-backed ryaml/py-yaml12/yaml_rs, the ordered and strict
+# pure-Python parsers) that only bench/compare.py needs, plus matplotlib.
+charts = [
+  { include-group = "bench" },
+  "ryaml==0.5.1",
+  "py-yaml12==0.1.0",
+  "yaml-rs==0.1.4",
+  "oyaml==1.0",
+  "strictyaml==1.7.3",
+  "matplotlib==3.11.0",
+]
 # Everything needed for local development, in one install. Includes the `just`
 # task runner (the `rust-just` wheel bundles the binary), so `uv run just` works
 # with no separate install.

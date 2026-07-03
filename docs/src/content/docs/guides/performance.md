@@ -13,6 +13,29 @@ Run `python bench/bench.py` in the repository to reproduce these numbers on your
 own machine. The figures below come from a release build and are indicative.
 Your hardware, payload, and Python version will move them around.
 
+## Across the field
+
+Loading and dumping a representative set of payloads once, across ten YAML
+libraries. Lower is faster, and the scale is logarithmic, so each gridline is 10x.
+
+![Parsing throughput across libraries: YAMLRocks is fastest, ahead of yaml_rs, py-yaml12, ryaml, PyYAML's C loader, and far ahead of the pure-Python libraries.](/benchmarks/load.svg)
+
+![Serializing throughput across libraries: YAMLRocks is fastest, ahead of yaml_rs, py-yaml12, ryaml, yamlium, PyYAML's C dumper, and the pure-Python libraries.](/benchmarks/dump.svg)
+
+YAMLRocks leads on both. The closest contenders are the other Rust-backed parsers
+(`yaml_rs`, `ryaml`, `py-yaml12`), and the comparison is not quite like for like:
+none of them apply YAML merge keys (a `<<` is left as a literal key); `ryaml` and
+`yaml_rs` reject a duplicate key outright where YAMLRocks (and PyYAML) keep the
+last; `ryaml` errors on an integer larger than 64 bits and `py-yaml12` returns it
+as a lossy float. `oyaml` is PyYAML with ordered dicts, so it tracks pure-Python
+PyYAML exactly. `strictyaml` is deliberately restrictive (it rejects flow style
+and returns every scalar as a string) and has no general dumper, so it appears in
+the parsing chart only.
+
+Regenerate the charts with `just charts`, which builds a release extension first
+(a debug build is several times slower, and would understate YAMLRocks against
+the other libraries' release wheels).
+
 ## Headline numbers
 
 Every figure below is how many times **faster YAMLRocks is** than the named library.

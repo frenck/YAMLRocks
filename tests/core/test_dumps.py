@@ -539,6 +539,27 @@ def test_dumps_pyyaml_compat_keeps_bare_y_n_but_quotes_sexagesimal():
     assert yamlrocks.dumps({"k": "1:30"}, option=PYC) == b'k: "1:30"\n'
 
 
+@pytest.mark.parametrize("schema", [Y11, PYC])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2020-01-02",
+        "2020-01-02T10:00:00",
+        "2020-01-02 10:00:00.5Z",
+        "2001-12-15 2:59:43.10",
+    ],
+)
+def test_dumps_1_1_quotes_timestamp_strings(schema, value):
+    """A 1.1 reader reads a timestamp as a date, so a 1.1-targeted dump quotes it; 1.2 leaves it bare."""
+    assert b'"' in yamlrocks.dumps({"k": value}, option=schema)
+    assert b'"' not in yamlrocks.dumps({"k": value})
+
+
+def test_dumps_1_1_does_not_over_quote_non_timestamps():
+    """A single-digit-field date (`2020-1-2`) is a plain string to a 1.1 reader too, so it is not quoted."""
+    assert yamlrocks.dumps({"k": "2020-1-2"}, option=PYC) == b"k: 2020-1-2\n"
+
+
 def test_dumps_default_is_unchanged_by_the_1_1_dump_work():
     """The 1.2 default output is untouched: a 1.1-only ambiguity stays bare."""
     assert yamlrocks.dumps({"mac": "01:02:03"}) == b"mac: 01:02:03\n"

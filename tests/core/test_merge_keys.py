@@ -202,3 +202,18 @@ def test_merge_key_order_is_source_order_on_every_path(src, order):
         yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_dict()["use"].keys()
     )
     assert fast == annotated == round_trip == order
+
+
+def test_duplicate_key_in_merge_source_uses_last_value():
+    """A `<<` source mapping that repeats a key contributes that key's LAST value
+    (the value it has as data), not the first, matching how the same anchor
+    materializes on its own and every other path (and PyYAML). An explicit key in
+    the target still wins over the merged one."""
+    # `&a {x: 1, x: 2}` is `{x: 2}` as data, so merging it gives x = 2, not 1.
+    assert yamlrocks.loads(b"a: &a {x: 1, x: 2}\nc:\n  <<: *a\n")["c"] == {"x": 2}
+    # Block-style anchor with a repeated key behaves the same.
+    assert yamlrocks.loads(b"a: &a\n  x: 1\n  x: 2\nc:\n  <<: *a\n")["c"] == {"x": 2}
+    # An explicit target key still overrides the (deduped) merged value.
+    assert yamlrocks.loads(b"a: &a {x: 1, x: 2}\nc:\n  x: 9\n  <<: *a\n")["c"] == {
+        "x": 9
+    }

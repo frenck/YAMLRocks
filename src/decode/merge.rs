@@ -193,6 +193,27 @@ pub(super) fn is_merge_key(key: &Value<'_>) -> bool {
     matches!(key, Value::Tagged(tag, _) if tag == MERGE_TAG)
 }
 
+/// Collapse duplicate keys in a mapping's pairs to last-wins, keeping each key at
+/// the position it first appeared, so the pairs read as the mapping's data value
+/// (a repeated key resolves to its last value, exactly as building a Python dict
+/// would). Only used for a `<<` merge source, where a duplicate would otherwise
+/// be resolved first-wins. Runs only when a `<<` is present, over the (typically
+/// small) merge source, so the extra pass is off the hot path.
+fn dedup_last_wins<'i>(pairs: Vec<(Value<'i>, Value<'i>)>) -> Vec<(Value<'i>, Value<'i>)> {
+    let mut seen: HashMap<String, usize> = HashMap::with_capacity(pairs.len());
+    let mut out: Vec<(Value<'i>, Value<'i>)> = Vec::with_capacity(pairs.len());
+    for (key, val) in pairs {
+        match seen.entry(key_sig(&key)) {
+            Entry::Occupied(slot) => out[*slot.get()].1 = val,
+            Entry::Vacant(slot) => {
+                slot.insert(out.len());
+                out.push((key, val));
+            }
+        }
+    }
+    out
+}
+
 /// Merge a `<<` value (a mapping, or a sequence of mappings) into `result`,
 /// adding only keys that are not already present.
 ///
@@ -207,7 +228,12 @@ fn merge_into<'i>(
 ) -> Option<Value<'i>> {
     match merge {
         Value::Mapping(pairs) => {
-            for (key, val) in pairs {
+            // A merge source that repeats a key contributes that key's *last*
+            // value (the value the mapping has as data), so collapse duplicates
+            // last-wins before merging. Without this the first duplicate would win
+            // here, so `<<: *a` with `&a {x: 1, x: 2}` merged `x: 1` while the same
+            // anchor materializes as `{x: 2}` everywhere else (and in PyYAML).
+            for (key, val) in dedup_last_wins(pairs) {
                 // A key already present (an explicit key, or an earlier merge) is
                 // not overridden; only a missing key is pulled in, at its position.
                 if let Entry::Vacant(slot) = index.entry(key_sig(&key)) {

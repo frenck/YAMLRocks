@@ -1,7 +1,8 @@
 //! YAML merge-key (`<<`) resolution for the fast decode path.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use super::Value;
@@ -31,7 +32,7 @@ fn literal_merge_key() -> Value<'static> {
 }
 
 /// An injective string signature of a mapping key, so membership during a merge
-/// is O(1) via a `HashSet` rather than an O(n) linear scan (a single `<<` over a
+/// is O(1) via a hash map rather than an O(n) linear scan (a single `<<` over a
 /// large mapping was otherwise quadratic). It mirrors `Value`'s own equality,
 /// which is type-distinct: `Int(1)` and `Float(1.0)` are different keys. Strings
 /// are length-prefixed so no value can spoof another's signature.
@@ -128,28 +129,43 @@ fn apply_merge_keys_inner(value: &mut Value<'_>) {
             if !pairs.iter().any(|(k, _)| is_merge_key(k)) {
                 return;
             }
+            // Rebuild the mapping in source order. An explicit (non-merge) key is
+            // inserted at its position, overriding in place a value merged in
+            // earlier if the same key was already pulled in (explicit keys win). A
+            // `<<` expands its mapping at its own position, contributing only keys
+            // not already present, so an explicit key and an earlier merge both
+            // win. This keeps the fast path's key order identical to the annotated
+            // and round-trip paths, which build the same shape through Python dict
+            // insertion. `index` maps a key signature to its slot in `result` for
+            // O(1) membership, so a `<<` over a large mapping stays linear.
             let mut result: Vec<(Value<'_>, Value<'_>)> = Vec::with_capacity(pairs.len());
-            let mut merges: Vec<(Value<'_>, Value<'_>)> = Vec::new();
+            let mut index: HashMap<String, usize> = HashMap::new();
             for (key, val) in std::mem::take(pairs) {
                 if is_merge_key(&key) {
-                    merges.push((key, val));
+                    if let Some(unmerged) = merge_into(&mut result, &mut index, val) {
+                        // The `<<` value is not a mapping (or list of mappings) the
+                        // parser can fold, e.g. a custom tag such as
+                        // `<<: !include other.yaml` (a deferred marker resolved by
+                        // the host). Keep it under the literal `<<` key rather than
+                        // dropping it, so the host can run its own merge pass. (The
+                        // marker is internal; it must not escape into the data.)
+                        let sig = key_sig(&literal_merge_key());
+                        if let Entry::Vacant(slot) = index.entry(sig) {
+                            slot.insert(result.len());
+                            result.push((literal_merge_key(), unmerged));
+                        }
+                    }
                 } else {
-                    result.push((key, val));
-                }
-            }
-            // Track present keys by signature so a merge skips already-present keys
-            // in O(1); the explicit (non-merge) keys seed it.
-            let mut seen: HashSet<String> = result.iter().map(|(k, _)| key_sig(k)).collect();
-            for (_marker, merge) in merges {
-                if let Some(unmerged) = merge_into(&mut result, &mut seen, merge) {
-                    // The `<<` value is not a mapping (or list of mappings) the
-                    // parser can fold, e.g. a custom tag such as
-                    // `<<: !include other.yaml` (a deferred marker resolved by
-                    // the host). Keep the key as the literal string `<<` with its
-                    // resolved value rather than silently dropping it, so the host
-                    // can run its own merge pass over it. (The marker is internal;
-                    // it must not escape into the returned data.)
-                    result.push((literal_merge_key(), unmerged));
+                    let sig = key_sig(&key);
+                    match index.get(&sig) {
+                        // An explicit key already merged in: override its value in
+                        // place, keeping the position it first appeared at.
+                        Some(&i) => result[i].1 = val,
+                        None => {
+                            index.insert(sig, result.len());
+                            result.push((key, val));
+                        }
+                    }
                 }
             }
             *pairs = result;
@@ -186,15 +202,16 @@ pub(super) fn is_merge_key(key: &Value<'_>) -> bool {
 /// contributes nothing and is ignored.
 fn merge_into<'i>(
     result: &mut Vec<(Value<'i>, Value<'i>)>,
-    seen: &mut HashSet<String>,
+    index: &mut HashMap<String, usize>,
     merge: Value<'i>,
 ) -> Option<Value<'i>> {
     match merge {
         Value::Mapping(pairs) => {
             for (key, val) in pairs {
-                // `insert` returns false when the key is already present (an
-                // explicit key, or an earlier merge), so it is not overridden.
-                if seen.insert(key_sig(&key)) {
+                // A key already present (an explicit key, or an earlier merge) is
+                // not overridden; only a missing key is pulled in, at its position.
+                if let Entry::Vacant(slot) = index.entry(key_sig(&key)) {
+                    slot.insert(result.len());
                     result.push((key, val));
                 }
             }
@@ -205,7 +222,7 @@ fn merge_into<'i>(
             // can be preserved under `<<` rather than silently lost.
             let mut leftover = Vec::new();
             for item in items {
-                if let Some(unmerged) = merge_into(result, seen, item) {
+                if let Some(unmerged) = merge_into(result, index, item) {
                     leftover.push(unmerged);
                 }
             }

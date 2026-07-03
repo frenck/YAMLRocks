@@ -949,6 +949,24 @@ impl<'input> Composer<'input> {
             ));
         }
 
+        // An implicit single-pair mapping with an empty key (`[: v]`): a `:` with
+        // no preceding node opens the pair, so the key is null (mirrors the fast
+        // path's empty-key handling in `decode_sequence_item`).
+        if flow && self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Value) {
+            let pair_span = events[self.pos].span;
+            self.pos += 1;
+            let val = self
+                .compose_node(events)?
+                .unwrap_or_else(|| null(pair_span));
+            return Ok(Some(
+                YamlNode::new(
+                    YamlNodeKind::Mapping(vec![(null(pair_span), val)]),
+                    pair_span,
+                )
+                .with_style(NodeStyle::Flow),
+            ));
+        }
+
         let Some(key) = self.compose_node(events)? else {
             return Ok(None);
         };

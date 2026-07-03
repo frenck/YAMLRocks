@@ -788,11 +788,16 @@ impl<'input> Decoder<'input> {
 
             // A bare `Key` here means an empty value followed by a sibling key
             // at the same indent (a nested mapping is always preceded by
-            // `MappingStart`). The value is null; do not consume the key. The
+            // `MappingStart`). The value is null; do not consume the key. A
+            // `Value` marks a `:` separator, so meeting one while decoding a
+            // node means that node (an empty key like `{: 1}` or `{? : 1}`, or
+            // an empty value) is null; leave the `:` for the caller to consume,
+            // otherwise the following scalar would be misread as this node. The
             // collection-end markers are likewise not nodes, returning without
             // consuming lets the enclosing collection see its own terminator
             // rather than silently swallowing it.
             EventKind::Key { .. }
+            | EventKind::Value
             | EventKind::StreamEnd
             | EventKind::DocumentEnd
             | EventKind::DocumentStart
@@ -1044,9 +1049,21 @@ impl<'input> Decoder<'input> {
             return Ok(Some(Value::Mapping(vec![(key, val)])));
         }
         let key_span = events.get(self.pos).map(|e| e.span).unwrap_or_default();
-        let Some(key) = self.decode_node(events)? else {
-            return Ok(None);
-        };
+        // An implicit single-pair mapping whose key is empty (`[: v]`): the `:`
+        // has no preceding node, so `decode_node` stops on the `Value` without
+        // consuming it. The key is null and the `Value` branch below builds the
+        // pair. Distinguish this from a genuine end (where `decode_node` also
+        // returns `None`) by checking for the `Value` marker first.
+        let key =
+            if flow && self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Value)
+            {
+                Value::Null
+            } else {
+                match self.decode_node(events)? {
+                    Some(key) => key,
+                    None => return Ok(None),
+                }
+            };
         // Implicit single-pair mapping with no `Key` marker (e.g. an anchored
         // key `[&c c: d]`): a `:` follows the node.
         if flow && self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Value) {

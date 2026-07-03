@@ -70,6 +70,35 @@ def test_flow_mapping_bare_keys_are_null():
     }
 
 
+def test_flow_mapping_empty_key_is_null_not_swapped():
+    """An empty flow-mapping key (`{: v}`, `{? : v}`) is `{null: v}`, not swapped."""
+    assert yamlrocks.loads(b"{: 1}") == {None: 1}
+    assert yamlrocks.loads(b"{? : 1}") == {None: 1}
+    assert yamlrocks.loads(b"{a: 1, : 2}") == {"a": 1, None: 2}
+    assert yamlrocks.loads(b"{:}") == {None: None}
+    assert yamlrocks.loads(b"[{: 1}]") == [{None: 1}]
+    assert yamlrocks.loads(b"[: v]") == [{None: "v"}]
+
+
+def test_block_mapping_empty_key_is_null():
+    """A block-mapping entry with an empty key (`: 1`, `:`) is `{null: ...}`."""
+    assert yamlrocks.loads(b": 1") == {None: 1}
+    assert yamlrocks.loads(b":") == {None: None}
+    assert yamlrocks.loads(b": 1", option=yamlrocks.OPT_ANNOTATED) == {None: 1}
+
+
+def test_flow_sequence_single_pair_empty_key_round_trips():
+    """An empty-key flow single pair (`[: v]`) survives the round-trip path.
+
+    The round-trip composer must mirror the fast path here: the element is a
+    one-entry mapping `{null: v}`, not a dropped node, and re-emitting stays
+    byte-for-byte.
+    """
+    assert yamlrocks.loads(b"[: v]", option=yamlrocks.OPT_ANNOTATED) == [{None: "v"}]
+    doc = yamlrocks.loads(b"[: v]\n", option=yamlrocks.OPT_ROUND_TRIP)
+    assert yamlrocks.dumps(doc) == b"[: v]\n"
+
+
 def test_flow_sequence():
     """Parse a flow-style sequence into a list."""
     assert yamlrocks.loads(b"[1, 2, 3]") == [1, 2, 3]

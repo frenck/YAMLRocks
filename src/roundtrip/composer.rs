@@ -192,7 +192,11 @@ fn collect_node_divergences(node: &YamlNode, schema: Schema, out: &mut Vec<Strin
 }
 
 /// A canonical, type-tagged signature for a mapping key so equal keys collide
-/// and differently-typed keys (`1` vs `"1"`) do not.
+/// and differently-typed keys (`1` vs `"1"`) do not. Numeric keys collapse the
+/// way Python's `dict` does (`1`, `1.0`, and `True` are one key), so the
+/// duplicate-key check catches a collision that only appears once the mapping
+/// becomes a `dict`. The plain merge key `<<` keeps the `s:<<` signature its
+/// caller special-cases.
 fn key_signature(node: &YamlNode, schema: Schema) -> String {
     match &node.kind {
         YamlNodeKind::Null => "null".to_owned(),
@@ -200,10 +204,21 @@ fn key_signature(node: &YamlNode, schema: Schema) -> String {
             let resolved = schema.resolve(text, *style, node.tag.as_deref());
             match resolved {
                 ResolvedValue::Null => "null".to_owned(),
-                ResolvedValue::Bool(b) => format!("b:{b}"),
-                ResolvedValue::Int(i) => format!("i:{i}"),
-                ResolvedValue::BigInt(s) => format!("i:{s}"),
-                ResolvedValue::Float(f) => format!("f:{f}"),
+                // Python: `True == 1`, `False == 0`, so a bool collides with the
+                // matching integer; an integral float collides with the integer.
+                ResolvedValue::Bool(b) => format!("n:{}", i64::from(b)),
+                ResolvedValue::Int(i) => format!("n:{i}"),
+                ResolvedValue::BigInt(s) => format!("n:{s}"),
+                ResolvedValue::Float(f) => {
+                    if f.is_finite()
+                        && f.fract() == 0.0
+                        && (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&f)
+                    {
+                        format!("n:{}", f as i64)
+                    } else {
+                        format!("f:{}", f.to_bits())
+                    }
+                }
                 ResolvedValue::String(s) => format!("s:{s}"),
             }
         }

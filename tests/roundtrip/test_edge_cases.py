@@ -361,3 +361,19 @@ def test_round_trip_assign_by_resolved_key_updates_the_entry():
         True: 9,
         False: 7,
     }
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["x,y", "arr[0]", "has, comma", "k: v", "a{b}c", "trailing:"],
+)
+def test_edit_into_flow_collection_quotes_indicators(value):
+    """A value assigned into a flow collection (`[...]`/`{...}`) that contains a
+    flow indicator (`,[]{}` or `: `) is quoted, so it round-trips as one string
+    instead of splitting the entry or breaking the parse."""
+    doc = yamlrocks.loads(b"seq: [1, 2]\nmap: {x: 1}\n", option=RT)
+    doc["seq"][0] = value
+    doc["map"]["x"] = value
+    out = doc.to_yaml()
+    reloaded = yamlrocks.loads(out)
+    assert reloaded == {"seq": [value, 2], "map": {"x": value}}

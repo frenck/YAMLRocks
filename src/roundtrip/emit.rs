@@ -64,6 +64,13 @@ struct RoundTripEmitter {
     /// How a synthetic (edited-in) null is rendered. Loaded nulls ignore this and
     /// re-emit in their original form.
     null_style: NullStyle,
+    /// Depth of flow collections (`{}`/`[]`) currently open. When non-zero, a
+    /// plain scalar that contains a flow indicator (`,` `[` `]` `{` `}` `: `) must
+    /// be quoted: those characters are ordinary text in block context (a loaded
+    /// plain scalar may hold them) but would end the entry or collection early
+    /// inside flow. An edited-in value assigned into a flow collection is the case
+    /// that reaches here as a bare plain scalar.
+    flow_depth: usize,
 }
 
 impl RoundTripEmitter {
@@ -71,6 +78,7 @@ impl RoundTripEmitter {
         Self {
             buf: Vec::with_capacity(256),
             null_style,
+            flow_depth: 0,
         }
     }
 
@@ -437,6 +445,14 @@ impl RoundTripEmitter {
             ScalarStyle::Plain if value.starts_with('\u{feff}') => {
                 crate::emit_util::push_double_quoted(&mut self.buf, value);
             }
+            // Inside a flow collection a bare `,`/`[`/`]`/`{`/`}`/`: ` would end
+            // the entry or collection early, so a plain scalar carrying one must
+            // be quoted. This only bites an edited-in value: a loaded plain scalar
+            // never contains a bare flow indicator (the scanner would not produce
+            // it). See [`plain_unsafe_in_flow`].
+            ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => {
+                crate::emit_util::push_double_quoted(&mut self.buf, value);
+            }
             ScalarStyle::Plain => self.buf.extend_from_slice(value.as_bytes()),
             ScalarStyle::SingleQuoted => crate::emit_util::push_single_quoted(&mut self.buf, value),
             ScalarStyle::DoubleQuoted => crate::emit_util::push_double_quoted(&mut self.buf, value),
@@ -481,6 +497,7 @@ impl RoundTripEmitter {
 
     fn emit_flow_sequence(&mut self, items: &[YamlNode], indent: usize) {
         self.buf.push(b'[');
+        self.flow_depth += 1;
         for (i, item) in items.iter().enumerate() {
             if i > 0 {
                 self.buf.extend_from_slice(b", ");
@@ -488,11 +505,13 @@ impl RoundTripEmitter {
             self.emit_anchor_tag(item);
             self.emit_inline_content(item, indent);
         }
+        self.flow_depth -= 1;
         self.buf.push(b']');
     }
 
     fn emit_flow_mapping(&mut self, pairs: &[(YamlNode, YamlNode)], indent: usize) {
         self.buf.push(b'{');
+        self.flow_depth += 1;
         for (i, (key, val)) in pairs.iter().enumerate() {
             if i > 0 {
                 self.buf.extend_from_slice(b", ");
@@ -503,6 +522,7 @@ impl RoundTripEmitter {
             self.emit_anchor_tag(val);
             self.emit_inline_content(val, indent);
         }
+        self.flow_depth -= 1;
         self.buf.push(b'}');
     }
 
@@ -712,6 +732,18 @@ fn is_empty_scalar(node: &YamlNode) -> bool {
         YamlNodeKind::Scalar(value, ScalarStyle::Plain) => value.is_empty(),
         _ => false,
     }
+}
+
+/// Whether a plain scalar's content would be misread inside a flow collection.
+/// The flow indicators `,` `[` `]` `{` `}` end an entry or the collection, and a
+/// `: ` (colon then space) or a trailing `:` starts a mapping value, so a plain
+/// scalar containing any of them must be quoted when emitted in flow context.
+fn plain_unsafe_in_flow(value: &str) -> bool {
+    value
+        .bytes()
+        .any(|b| matches!(b, b',' | b'[' | b']' | b'{' | b'}'))
+        || value.contains(": ")
+        || value.ends_with(':')
 }
 
 /// Whether a mapping key cannot be written as an inline implicit key and must

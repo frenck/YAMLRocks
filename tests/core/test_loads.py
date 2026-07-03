@@ -446,3 +446,62 @@ def test_indented_marker_as_sequence_item(marker):
 def test_column_zero_markers_still_delimit_documents():
     """The fix must not stop real column-0 markers from delimiting documents."""
     assert yamlrocks.loads_all(b"---\nx\n...\n---\ny\n") == ["x", "y"]
+
+
+# -- Non-printable input is rejected (YAML 1.2 c-printable, like PyYAML) --------
+# Raw C0/C1 control characters, DEL, and the U+FFFE/U+FFFF non-characters are
+# ill-formed input; a conformant parser must refuse them, PyYAML does too. This
+# is distinct from an *escaped* control in a double-quoted scalar, which is
+# produced from an escape sequence and stays valid (see below).
+
+
+@pytest.mark.parametrize(
+    "cp",
+    [
+        0x00,
+        0x01,
+        0x08,
+        0x0B,
+        0x0C,
+        0x0E,
+        0x1F,
+        0x7F,
+        0x80,
+        0x84,
+        0x86,
+        0x9F,
+        0xFFFE,
+        0xFFFF,
+    ],
+)
+def test_raw_control_character_is_rejected(cp):
+    """A raw non-printable character anywhere in the stream is rejected."""
+    src = f"a: x{chr(cp)}y\n".encode()
+    with pytest.raises(
+        yamlrocks.YAMLRocksParseError, match="disallowed control character"
+    ):
+        yamlrocks.loads(src)
+    # Every load path shares the scanner, so round-trip must refuse it too.
+    with pytest.raises(yamlrocks.YAMLRocksParseError):
+        yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP)
+
+
+@pytest.mark.parametrize("cp", [0x09, 0x85, 0xA0, 0x263A])
+def test_printable_character_is_accepted(cp):
+    """Tab, NEL, NBSP, and ordinary Unicode stay valid content: the printable
+    set must not be over-tightened. (LF/CR are line breaks, exercised
+    throughout the suite.)"""
+    yamlrocks.loads(f'a: "x{chr(cp)}y"\n'.encode())
+
+
+def test_escaped_control_in_double_quotes_stays_valid():
+    """An escaped control (not a raw byte) is legal and yields the control char;
+    the raw-byte rejection must not touch escape handling."""
+    assert yamlrocks.loads(rb'a: "\0\t\x1b"')["a"] == "\x00\t\x1b"
+
+
+def test_control_character_error_points_at_the_character():
+    """The rejection reports the offending character's line and column."""
+    with pytest.raises(yamlrocks.YAMLRocksParseError) as exc:
+        yamlrocks.loads(b"a: b\nc: x\x01y\n")
+    assert (exc.value.line, exc.value.column) == (2, 5)

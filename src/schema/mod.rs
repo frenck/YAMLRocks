@@ -4,13 +4,18 @@
 //! every error carry the source location of the offending node, so schema
 //! failures report a precise line and column.
 //!
-//! A practical subset of JSON Schema (draft 7-ish) is supported: `type`,
-//! `enum`, `const`, `properties`, `required`, `additionalProperties` (boolean),
-//! `items`, `minimum`/`maximum`, `exclusiveMinimum`/`exclusiveMaximum`,
-//! `minLength`/`maxLength`, `minItems`/`maxItems`, the `allOf`/`anyOf`/`oneOf`/
-//! `not` combinators, and `$ref` to local `#/...` pointers (including
-//! `#/$defs/...`). Other keywords are ignored; an unresolvable `$ref` is an
-//! error rather than silently permissive.
+//! A practical subset of JSON Schema (draft 7-ish) is supported: `type` (with a
+//! whole-number float accepted as `integer`), `enum`, `const`, `properties`,
+//! `patternProperties`, `required`, `additionalProperties` (boolean or schema),
+//! `propertyNames`, `minProperties`/`maxProperties`, `dependencies` (property and
+//! schema forms), `items` (single schema, or the draft-07 tuple form with
+//! `additionalItems`), `contains`, `minItems`/`maxItems`, `uniqueItems`,
+//! `minimum`/`maximum`, `exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`,
+//! `minLength`/`maxLength`, `pattern`, the `allOf`/`anyOf`/`oneOf`/`not`
+//! combinators, and `$ref` to local `#/...` pointers (including `#/$defs/...`).
+//! Remaining keywords (`format`, `if`/`then`/`else`, ...) are ignored; an
+//! unresolvable `$ref` and an invalid `pattern` regex are errors rather than
+//! silently permissive.
 
 mod directive;
 
@@ -472,8 +477,15 @@ fn type_matches(name: &str, value: &Value) -> bool {
         "null" => matches!(value, Value::Null),
         "boolean" => matches!(value, Value::Bool(_)),
         // `BigInt` is an integer too large for `i64`; it is still an integer (and
-        // a number) for schema typing.
-        "integer" => matches!(value, Value::Int(_) | Value::BigInt(_)),
+        // a number) for schema typing. Per JSON Schema draft-07 a float with a
+        // zero fractional part is also an integer (`1.0`, `100.0`, `1e2`), so a
+        // YAML scalar written that way validates against `integer` (matching the
+        // `jsonschema` reference); a non-integral float like `2.5` does not.
+        "integer" => match value {
+            Value::Int(_) | Value::BigInt(_) => true,
+            Value::Float(f) => f.is_finite() && f.fract() == 0.0,
+            _ => false,
+        },
         "number" => matches!(value, Value::Int(_) | Value::Float(_) | Value::BigInt(_)),
         "string" => matches!(value, Value::String(_)),
         "array" => matches!(value, Value::Sequence(_)),
@@ -543,6 +555,23 @@ fn check_numeric(
             }
         }
     }
+    if let Some(mult) = get(schema, "multipleOf").and_then(as_f64) {
+        if mult > 0.0 && !is_multiple_of(num, mult) {
+            errors.push(err(
+                node,
+                path,
+                &format!("value {num} is not a multiple of {mult}"),
+            ));
+        }
+    }
+}
+
+/// Whether `num` is an integer multiple of `mult`, tolerant of float rounding so
+/// `6 / 2` and `0.3 / 0.1` are accepted. `mult` is assumed positive (the caller
+/// guards `mult > 0`, matching the JSON Schema requirement).
+fn is_multiple_of(num: f64, mult: f64) -> bool {
+    let ratio = num / mult;
+    (ratio - ratio.round()).abs() <= 1e-9 * ratio.abs().max(1.0)
 }
 
 fn check_string(
@@ -572,6 +601,25 @@ fn check_string(
             ));
         }
     }
+    if let Some(Value::String(pattern)) = get(schema, "pattern") {
+        match compile_pattern(pattern) {
+            Ok(re) if !re.is_match(s) => errors.push(err(
+                node,
+                path,
+                &format!("string does not match pattern /{pattern}/"),
+            )),
+            Err(message) => errors.push(err(node, path, &message)),
+            _ => {}
+        }
+    }
+}
+
+/// Compile a JSON Schema `pattern` into a `regex::Regex`. JSON Schema patterns
+/// are unanchored (a match anywhere satisfies them), which is the crate's default.
+/// An invalid pattern is surfaced as a schema error rather than silently ignored.
+fn compile_pattern(pattern: &str) -> Result<regex::Regex, String> {
+    regex::Regex::new(pattern)
+        .map_err(|_| format!("schema has an invalid regex pattern /{pattern}/"))
 }
 
 fn check_object(
@@ -602,8 +650,28 @@ fn check_object(
         }
     }
 
-    // properties + additionalProperties
+    // properties + patternProperties + additionalProperties
     let additional = get(schema, "additionalProperties");
+    let pattern_properties = match get(schema, "patternProperties") {
+        Some(Value::Mapping(entries)) => entries.as_slice(),
+        _ => &[],
+    };
+    // Compile each `patternProperties` regex once, up front, and reuse it across
+    // every key: compilation is far costlier than matching, so recompiling per
+    // key would be O(keys x patterns). An invalid pattern is reported once here,
+    // not once per key.
+    let compiled_patterns: Vec<(Result<regex::Regex, String>, &Value)> = pattern_properties
+        .iter()
+        .filter_map(|(pat, subschema)| match pat {
+            Value::String(pattern) => Some((compile_pattern(pattern), subschema)),
+            _ => None,
+        })
+        .collect();
+    for (compiled, _) in &compiled_patterns {
+        if let Err(message) = compiled {
+            errors.push(err(node, path, message));
+        }
+    }
     for (key, val) in pairs {
         let Some(key_name) = scalar_key_name(key) else {
             continue;
@@ -616,6 +684,16 @@ fn check_object(
                 validate_node(val, subschema, &child_path, ctx.child(), errors);
             }
         }
+        // patternProperties: a key matching a pattern is validated against that
+        // pattern's schema, and (like `properties`) is no longer "additional".
+        for (compiled, subschema) in &compiled_patterns {
+            if let Ok(re) = compiled {
+                if re.is_match(&key_name) {
+                    matched = true;
+                    validate_node(val, subschema, &child_path, ctx.child(), errors);
+                }
+            }
+        }
         if !matched {
             match additional {
                 Some(Value::Bool(false)) => errors.push(err(
@@ -625,6 +703,82 @@ fn check_object(
                 )),
                 Some(sub @ Value::Mapping(_)) => {
                     validate_node(val, sub, &child_path, ctx.child(), errors)
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // minProperties / maxProperties
+    let count = pairs.len() as i64;
+    if let Some(min) = get(schema, "minProperties").and_then(as_count_bound) {
+        if count < min {
+            errors.push(err(
+                node,
+                path,
+                &format!("object has fewer than minProperties {min}"),
+            ));
+        }
+    }
+    if let Some(max) = get(schema, "maxProperties").and_then(as_count_bound) {
+        if count > max {
+            errors.push(err(
+                node,
+                path,
+                &format!("object has more than maxProperties {max}"),
+            ));
+        }
+    }
+
+    // propertyNames: every key must validate against the subschema *as a string*.
+    // JSON Schema always treats a property name as a string, so validate the raw
+    // key lexeme wrapped in a string node rather than the resolved key (a `123:`
+    // key is the name "123", not the integer 123, so `type: string` passes and a
+    // `pattern` is actually applied to it).
+    if let Some(names_schema) = get(schema, "propertyNames") {
+        for (key, _) in pairs {
+            if let Some(name) = scalar_key_name(key) {
+                let child_path = format!("{path}.{name}");
+                let name_node = YamlNode::new(
+                    YamlNodeKind::Scalar(name.clone(), ScalarStyle::DoubleQuoted),
+                    key.span,
+                );
+                validate_node(&name_node, names_schema, &child_path, ctx.child(), errors);
+            }
+        }
+    }
+
+    // dependencies: a present property can require sibling properties (an array of
+    // names) or that the whole object validate against a schema (a schema
+    // dependency), per draft-07.
+    if let Some(Value::Mapping(deps)) = get(schema, "dependencies") {
+        for (dep_key, dep_val) in deps {
+            let Value::String(trigger) = dep_key else {
+                continue;
+            };
+            if !pairs.iter().any(|(k, _)| scalar_key_eq(k, trigger)) {
+                continue;
+            }
+            match dep_val {
+                // Property dependency: each named sibling must also be present.
+                Value::Sequence(required) => {
+                    for req in required {
+                        if let Value::String(name) = req {
+                            if !pairs.iter().any(|(k, _)| scalar_key_eq(k, name)) {
+                                errors.push(err(
+                                    node,
+                                    path,
+                                    &format!(
+                                        "property '{trigger}' requires '{name}' to also be present"
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+                // Schema dependency: the whole object must match the schema.
+                Value::Mapping(_) | Value::Bool(_) => {
+                    validate_node(node, dep_val, path, ctx.child(), errors);
                 }
                 _ => {}
             }
@@ -662,10 +816,78 @@ fn check_array(
             ));
         }
     }
-    if let Some(items_schema) = get(schema, "items") {
-        for (i, item) in items.iter().enumerate() {
-            let child_path = format!("{path}[{i}]");
-            validate_node(item, items_schema, &child_path, ctx.child(), errors);
+    match get(schema, "items") {
+        // Tuple form: `items` is an array of schemas validated positionally
+        // (draft-07). Element `i` is checked against `items[i]`; elements past
+        // the tuple are checked against `additionalItems` (a schema to apply, or
+        // `false` to forbid extras), and allowed when it is absent.
+        Some(Value::Sequence(schemas)) => {
+            let additional = get(schema, "additionalItems");
+            for (i, item) in items.iter().enumerate() {
+                let child_path = format!("{path}[{i}]");
+                if let Some(subschema) = schemas.get(i) {
+                    validate_node(item, subschema, &child_path, ctx.child(), errors);
+                } else {
+                    match additional {
+                        Some(Value::Bool(false)) => errors.push(err(
+                            item,
+                            &child_path,
+                            &format!("array has more items than the {} allowed", schemas.len()),
+                        )),
+                        Some(sub @ (Value::Mapping(_) | Value::Bool(true))) => {
+                            validate_node(item, sub, &child_path, ctx.child(), errors)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // Single-schema form: every element is validated against the one schema.
+        Some(items_schema) => {
+            for (i, item) in items.iter().enumerate() {
+                let child_path = format!("{path}[{i}]");
+                validate_node(item, items_schema, &child_path, ctx.child(), errors);
+            }
+        }
+        None => {}
+    }
+
+    // uniqueItems: no two elements may be equal. Elements are compared with
+    // `value_eq`, the same equality `enum`/`const` use (and the `jsonschema`
+    // reference): `1` equals `1.0`, and objects compare order-independently, so
+    // `[1, 1.0]` and `[{a: 1, b: 2}, {b: 2, a: 1}]` are flagged as duplicates. The
+    // resolved values are dropped iteratively to keep a deep tree from
+    // overflowing the stack on teardown.
+    if matches!(get(schema, "uniqueItems"), Some(Value::Bool(true))) {
+        let resolved: Vec<Value> = items
+            .iter()
+            .map(|item| resolve_deep(item, ctx.yaml_11))
+            .collect();
+        let duplicate = resolved
+            .iter()
+            .enumerate()
+            .any(|(i, a)| resolved[i + 1..].iter().any(|b| value_eq(a, b)));
+        for value in resolved {
+            crate::stack::drop_value_tree(value);
+        }
+        if duplicate {
+            errors.push(err(node, path, "array items are not unique"));
+        }
+    }
+
+    // contains: at least one element must validate against the subschema.
+    if let Some(contains) = get(schema, "contains") {
+        let any = items.iter().any(|item| {
+            let mut probe = Vec::new();
+            validate_node(item, contains, path, ctx.child(), &mut probe);
+            probe.is_empty()
+        });
+        if !any {
+            errors.push(err(
+                node,
+                path,
+                "no array item matches the 'contains' schema",
+            ));
         }
     }
 }
@@ -1017,5 +1239,36 @@ mod tests {
         // A quoted "<<" is a literal key, not a merge, so it stays and trips
         // additionalProperties: false.
         assert!(errors("prod:\n  \"<<\": 1\n", &schema2) > 0);
+    }
+
+    #[test]
+    fn tuple_items_validate_positionally() {
+        // `items` as an array checks element i against schema i (draft-07 tuple).
+        let schema = obj(vec![
+            ("type", s("array")),
+            (
+                "items",
+                Value::Sequence(vec![
+                    obj(vec![("type", s("integer"))]),
+                    obj(vec![("type", s("string"))]),
+                ]),
+            ),
+        ]);
+        assert_eq!(errors("[1, two]\n", &schema), 0);
+        assert!(errors("[one, two]\n", &schema) > 0); // first must be an integer
+                                                      // Extra items are allowed when `additionalItems` is absent.
+        assert_eq!(errors("[1, two, 3]\n", &schema), 0);
+
+        // `additionalItems: false` forbids elements past the tuple.
+        let strict = obj(vec![
+            ("type", s("array")),
+            (
+                "items",
+                Value::Sequence(vec![obj(vec![("type", s("integer"))])]),
+            ),
+            ("additionalItems", Value::Bool(false)),
+        ]);
+        assert_eq!(errors("[1]\n", &strict), 0);
+        assert!(errors("[1, 2]\n", &strict) > 0);
     }
 }

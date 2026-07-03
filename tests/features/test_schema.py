@@ -620,3 +620,76 @@ def test_merge_sequence_preserves_all_leftovers_for_validation():
     failing = {"properties": {"o": {"properties": {"<<": {"minItems": 3}}}}}
     with pytest.raises(yamlrocks.YAMLRocksSchemaError):
         yamlrocks.loads(src, schema=failing)
+
+
+def test_tuple_form_items_validates_positionally():
+    """`items` as an array of schemas validates each element against its position
+    (draft-07 tuple validation), instead of accepting anything."""
+    schema = {"type": "array", "items": [{"type": "integer"}, {"type": "string"}]}
+    assert yamlrocks.loads(b"[1, two]\n", schema=schema) == [1, "two"]
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(b"[one, two]\n", schema=schema)
+
+
+def test_tuple_form_items_additional_items_false_forbids_extras():
+    """`additionalItems: false` rejects elements past the declared tuple."""
+    schema = {
+        "type": "array",
+        "items": [{"type": "integer"}],
+        "additionalItems": False,
+    }
+    assert yamlrocks.loads(b"[1]\n", schema=schema) == [1]
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(b"[1, 2]\n", schema=schema)
+
+
+@pytest.mark.parametrize(
+    ("doc", "schema", "valid"),
+    [
+        (b"6", {"type": "integer", "multipleOf": 2}, True),
+        (b"7", {"type": "integer", "multipleOf": 2}, False),
+        (b"[1, 2, 3]", {"type": "array", "uniqueItems": True}, True),
+        (b"[1, 1, 2]", {"type": "array", "uniqueItems": True}, False),
+        # uniqueItems uses value equality: 1 == 1.0, and objects compare
+        # order-independently, so these are duplicates.
+        (b"[1, 1.0]", {"uniqueItems": True}, False),
+        (b"[{a: 1, b: 2}, {b: 2, a: 1}]", {"uniqueItems": True}, False),
+        (b'[1, "x"]', {"type": "array", "contains": {"type": "string"}}, True),
+        (b"[1, 2]", {"type": "array", "contains": {"type": "string"}}, False),
+        (b"{a: 1, b: 2}", {"minProperties": 2, "maxProperties": 2}, True),
+        (b"{a: 1}", {"minProperties": 2}, False),
+        (b"{a: 1, b: 2, c: 3}", {"maxProperties": 2}, False),
+        (b"{a: 1, b: 2}", {"dependencies": {"a": ["b"]}}, True),
+        (b"{a: 1}", {"dependencies": {"a": ["b"]}}, False),
+        (b"{ab: 1}", {"propertyNames": {"maxLength": 3}}, True),
+        (b"{abcd: 1}", {"propertyNames": {"maxLength": 3}}, False),
+        # A property name is always a string, even a numeric-looking key: `123`
+        # is the name "123", so `type: string` passes and a `pattern` applies.
+        (b"{123: x}", {"propertyNames": {"type": "string"}}, True),
+        (b"{123: x}", {"propertyNames": {"pattern": "^[a-z]+$"}}, False),
+        (b'v: "12345"', {"properties": {"v": {"pattern": "^[0-9]+$"}}}, True),
+        (b'v: "12a"', {"properties": {"v": {"pattern": "^[0-9]+$"}}}, False),
+        (b"{s_x: 1}", {"patternProperties": {"^s_": {"type": "integer"}}}, True),
+        (b"{s_x: hi}", {"patternProperties": {"^s_": {"type": "integer"}}}, False),
+        (b"1.0", {"type": "integer"}, True),  # integral float is an integer (draft-07)
+        (b"2.5", {"type": "integer"}, False),
+    ],
+)
+def test_extended_schema_keywords(doc, schema, valid):
+    """The extended keyword set (multipleOf, uniqueItems, contains,
+    min/maxProperties, dependencies, propertyNames, pattern, patternProperties,
+    and integral-float integers) is enforced, not silently ignored."""
+    if valid:
+        yamlrocks.loads(doc, schema=schema)
+    else:
+        with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+            yamlrocks.loads(doc, schema=schema)
+
+
+def test_schema_invalid_pattern_is_reported_not_ignored():
+    """A malformed regex in a schema pattern surfaces as a schema error rather
+    than being silently skipped."""
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError, match="regex"):
+        yamlrocks.loads(
+            b'v: "x"', schema={"properties": {"v": {"pattern": "[unclosed"}}}
+        )

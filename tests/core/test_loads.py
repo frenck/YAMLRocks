@@ -505,3 +505,56 @@ def test_control_character_error_points_at_the_character():
     with pytest.raises(yamlrocks.YAMLRocksParseError) as exc:
         yamlrocks.loads(b"a: b\nc: x\x01y\n")
     assert (exc.value.line, exc.value.column) == (2, 5)
+
+
+# -- A tag on an empty block-sequence entry is an empty node, not a nest --------
+# `- !!str` followed by a sibling `-` is an empty (tagged) scalar entry, and the
+# next `-` is a sibling of the same sequence, not a nested sequence the tag
+# absorbs. The scanner emits one BlockSequenceStart; there is no nested one, so
+# nesting the siblings was wrong. Distinct from an indentless sequence in a
+# mapping-value position (`k:\n- a`), which must still nest under the key.
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        (b"- !!str\n- x\n", ["", "x"]),
+        (b"- !!str\n- a\n- b\n", ["", "a", "b"]),
+        (b"- !!null\n- x\n", [None, "x"]),
+        (b"-\n- y\n", [None, "y"]),  # the untagged form was always correct
+        # YAML test suite FH7J, which ships only an event stream (no in.json), so
+        # its value went unchecked by the compliance harness.
+        (
+            b"- !!str\n-\n  !!null : a\n  b: !!str\n- !!str : !!null\n",
+            ["", {None: "a", "b": ""}, {"": None}],
+        ),
+    ],
+)
+def test_tagged_empty_sequence_entry_is_a_sibling_not_a_nest(src, expected):
+    """A tag on an empty `-` entry yields an empty node; the next `-` is a
+    sibling, on the fast path."""
+    assert yamlrocks.loads(src) == expected
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        (b"k:\n- a\n- b\n", {"k": ["a", "b"]}),
+        (b"k: !!seq\n- a\n- b\n", {"k": ["a", "b"]}),
+    ],
+)
+def test_indentless_sequence_as_mapping_value_still_nests(src, expected):
+    """A block sequence at the key's own indent is still the key's value: the
+    fix must not turn an indentless value sequence into siblings."""
+    assert yamlrocks.loads(src) == expected
+
+
+def test_tagged_empty_sequence_entry_round_trips_and_keeps_structure():
+    """The round-trip and annotated paths share the composer, so pin the
+    structure there too: re-emit byte-for-byte, and the sequence has the empty
+    entry plus its sibling rather than a spurious nested sequence."""
+    src = b"- !!str\n- x\n"
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_yaml() == src
+    annotated = yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED)
+    assert len(annotated) == 2
+    assert annotated[1] == "x"

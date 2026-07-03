@@ -59,7 +59,13 @@ pub enum EventKind<'input> {
 
     BlockEnd,
 
-    Key,
+    /// A mapping key marker. `explicit` is true when the source wrote the key
+    /// with an explicit `?` indicator; false for an implicit `key:`. Only the
+    /// round-trip composer reads it (to preserve the `?` on re-emit); the fast
+    /// decode path ignores it.
+    Key {
+        explicit: bool,
+    },
     Value,
     SequenceEntry,
     FlowEntry,

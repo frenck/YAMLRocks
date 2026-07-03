@@ -787,7 +787,7 @@ impl<'input> Decoder<'input> {
             // collection-end markers are likewise not nodes, returning without
             // consuming lets the enclosing collection see its own terminator
             // rather than silently swallowing it.
-            EventKind::Key
+            EventKind::Key { .. }
             | EventKind::StreamEnd
             | EventKind::DocumentEnd
             | EventKind::DocumentStart
@@ -889,7 +889,7 @@ impl<'input> Decoder<'input> {
                 EventKind::FlowEntry => {
                     self.pos += 1;
                 }
-                EventKind::Key => {
+                EventKind::Key { .. } => {
                     let key_span = events[self.pos].span;
                     self.pos += 1;
                     // An explicit `?` key (which reaches here with a `Key`
@@ -1026,7 +1026,8 @@ impl<'input> Decoder<'input> {
         }
         // A `Key` marker (the scanner's detection of `[a: b]` or an explicit
         // `[? a : b]`) introduces a single-pair mapping element.
-        if flow && self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Key) {
+        if flow && self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Key { .. })
+        {
             let key_span = events[self.pos].span;
             self.pos += 1;
             let key = self.decode_node(events)?.unwrap_or(Value::Null);
@@ -1081,7 +1082,7 @@ impl<'input> Decoder<'input> {
                                 | EventKind::SequenceEnd
                                 | EventKind::MappingEnd
                                 | EventKind::BlockEnd
-                                | EventKind::Key
+                                | EventKind::Key { .. }
                         )
                     {
                         items.push(Value::Null);

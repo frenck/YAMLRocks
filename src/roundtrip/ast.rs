@@ -50,6 +50,13 @@ pub struct YamlNode {
     /// re-emission; a *loaded* null always re-emits in its original form so an
     /// untouched value stays byte-for-byte.
     pub synthetic: bool,
+    /// Whether this node, as a mapping key, was written with an explicit `?`
+    /// indicator in the source (`? key`). Only meaningful when the node sits in
+    /// key position; `false` otherwise. Preserved so re-emission after an edit
+    /// keeps the author's explicit-key form instead of collapsing it to the
+    /// implicit `key:` form. A key that structurally *requires* the explicit form
+    /// (a block collection or block scalar) is emitted explicitly regardless.
+    pub explicit_key: bool,
 }
 
 impl YamlNode {
@@ -71,6 +78,7 @@ impl YamlNode {
             directives: Vec::new(),
             leading_bom: false,
             synthetic: false,
+            explicit_key: false,
         }
     }
 

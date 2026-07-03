@@ -70,7 +70,14 @@ pub enum TokenKind<'input> {
     FlowSequenceEnd,
     FlowEntry,
 
-    Key,
+    /// A mapping key marker. `explicit` is true when the source wrote the key
+    /// with an explicit `?` indicator (`? key`), false for an implicit key
+    /// (`key:`, including the retroactive marker the scanner inserts when a `:`
+    /// confirms a key). Preserved so the round-trip emitter can re-emit the
+    /// author's `?` form after an edit instead of collapsing it to implicit.
+    Key {
+        explicit: bool,
+    },
     Value,
 
     Scalar(Cow<'input, str>, ScalarStyle),

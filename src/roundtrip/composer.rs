@@ -692,7 +692,7 @@ impl<'input> Composer<'input> {
             // loop can observe them. A bare `Key` means an empty value followed
             // by a sibling key (a nested mapping is always preceded by
             // `MappingStart`), so it is a null value, not a new mapping.
-            EventKind::Key
+            EventKind::Key { .. }
             | EventKind::StreamEnd
             | EventKind::DocumentEnd
             | EventKind::DocumentStart
@@ -778,11 +778,15 @@ impl<'input> Composer<'input> {
                 EventKind::FlowEntry => {
                     self.pos += 1;
                 }
-                EventKind::Key => {
+                EventKind::Key { explicit } => {
+                    let explicit = *explicit;
                     self.pos += 1;
-                    let key = self
+                    let mut key = self
                         .compose_node(events)?
                         .unwrap_or_else(|| YamlNode::new(YamlNodeKind::Null, Span::default()));
+                    // Remember an author-written `?` so re-emission after an edit
+                    // keeps the explicit-key form instead of collapsing it.
+                    key.explicit_key = explicit;
                     if self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Value)
                     {
                         self.pos += 1;
@@ -923,12 +927,16 @@ impl<'input> Composer<'input> {
 
         // An explicit `Key` marker (`[a: b]`, `[? a : b]`) opens a single-pair
         // mapping element.
-        if flow && self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Key) {
+        if let Some(EventKind::Key { explicit }) =
+            (self.pos < events.len() && flow).then(|| &events[self.pos].kind)
+        {
+            let explicit = *explicit;
             let pair_span = events[self.pos].span;
             self.pos += 1;
-            let key = self
+            let mut key = self
                 .compose_node(events)?
                 .unwrap_or_else(|| null(pair_span));
+            key.explicit_key = explicit;
             if self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Value) {
                 self.pos += 1;
             }
@@ -983,7 +991,7 @@ impl<'input> Composer<'input> {
                     | EventKind::SequenceEnd
                     | EventKind::MappingEnd
                     | EventKind::BlockEnd
-                    | EventKind::Key
+                    | EventKind::Key { .. }
             )
         {
             return Ok(Some(YamlNode::new(YamlNodeKind::Null, dash_span)));

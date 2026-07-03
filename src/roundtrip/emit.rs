@@ -722,6 +722,12 @@ fn is_empty_scalar(node: &YamlNode) -> bool {
 /// (plain or quoted scalars, aliases, empty or single-line flow collections)
 /// stays inline. Found by the `roundtrip` fuzz target.
 fn key_needs_explicit(key: &YamlNode) -> bool {
+    // The author wrote an explicit `?`: preserve it on re-emit (fidelity), as
+    // long as the key can still open with a `? ` line. A block collection or a
+    // block scalar is emitted explicitly anyway, below.
+    if key.explicit_key && matches!(&key.kind, YamlNodeKind::Scalar(..) | YamlNodeKind::Alias(_)) {
+        return true;
+    }
     match &key.kind {
         YamlNodeKind::Mapping(m) => key.style == NodeStyle::Block && !m.is_empty(),
         YamlNodeKind::Sequence(s) => key.style == NodeStyle::Block && !s.is_empty(),
@@ -816,6 +822,30 @@ mod tests {
             &reparsed[0].kind,
             YamlNodeKind::Scalar(s, _) if s == "\u{feff}*"
         ));
+    }
+
+    /// An author-written explicit `?` key survives a re-emit (after an edit),
+    /// while an implicit key never sprouts one. Regression for the explicit-key
+    /// fidelity fix.
+    #[test]
+    fn explicit_scalar_key_is_preserved_on_reemit() {
+        for src in [
+            "? explicit\n: value\n",
+            "? a\n: 1\n? b\n: 2\n",
+            "map:\n  ? k\n  : v\n",
+        ] {
+            let out = reemit(src);
+            assert!(
+                out.contains("? "),
+                "explicit `?` dropped for {src:?}:\n{out}"
+            );
+            assert!(same_value(src, &out));
+        }
+        let implicit = reemit("a: 1\nb: 2\n");
+        assert!(
+            !implicit.contains('?'),
+            "implicit key gained a `?`:\n{implicit}"
+        );
     }
 
     /// A loaded (non-synthetic) null re-emits empty regardless of the style, while

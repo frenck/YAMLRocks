@@ -210,6 +210,20 @@ def test_edit_preserves_foot_comment():
     assert b"# foot" in yamlrocks.dumps(doc)
 
 
+def test_explicit_question_mark_key_survives_edit():
+    """An author's explicit `? key` survives a re-emit after an unrelated edit."""
+    doc = yamlrocks.loads(b"? explicit\n: value\nother: 1\n", option=RT)
+    doc["other"] = 2
+    assert doc.to_yaml() == b"? explicit\n: value\nother: 2\n"
+
+
+def test_implicit_key_does_not_gain_question_mark_on_edit():
+    """An ordinary implicit key must not sprout a `?` when the document is edited."""
+    doc = yamlrocks.loads(b"a: 1\nother: 1\n", option=RT)
+    doc["other"] = 2
+    assert doc.to_yaml() == b"a: 1\nother: 2\n"
+
+
 def test_edit_preserves_sequence_item_comment():
     """Replacing a sequence item keeps the comment attached to it."""
     doc = yamlrocks.loads(b"- one  # first\n- two\n", option=RT)

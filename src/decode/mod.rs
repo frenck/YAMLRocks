@@ -481,7 +481,7 @@ impl<'input> Decoder<'input> {
                     // (matching PyYAML's `safe_load_all`), so document count is a
                     // reliable signal (e.g. distinguishing a config from
                     // frontmatter-plus-empty-config).
-                    let value = self.decode_node(events)?.unwrap_or(Value::Null);
+                    let value = self.decode_node(events, false)?.unwrap_or(Value::Null);
                     documents.push(value);
                     self.expect_document_boundary(events)?;
                     directives_allowed = false;
@@ -563,7 +563,7 @@ impl<'input> Decoder<'input> {
                 _ => {
                     // Implicit document.
                     let start_pos = self.pos;
-                    if let Some(value) = self.decode_node(events)? {
+                    if let Some(value) = self.decode_node(events, false)? {
                         documents.push(value);
                         self.expect_document_boundary(events)?;
                     }
@@ -607,11 +607,19 @@ impl<'input> Decoder<'input> {
         }
     }
 
-    /// Decode a node, enforcing the recursion-depth limit around the actual
-    /// work in [`decode_node_inner`].
+    /// Decode a node, enforcing the recursion-depth limit around the actual work
+    /// in [`decode_node_inner`]. `allow_indentless_seq` is set only when the node
+    /// sits in a mapping-value position, where a block sequence may be written at
+    /// the
+    /// key's own indent with no `SequenceStart` of its own (`k:\n- a`). In every
+    /// other position (a sequence entry, a key, the document root) a bare
+    /// `SequenceEntry` belongs to an enclosing sequence, so it must not be
+    /// absorbed here: a tagged empty entry like `- !!str` followed by a sibling
+    /// `-` is an empty scalar, not a nested sequence.
     fn decode_node(
         &mut self,
         events: &mut [Event<'input>],
+        allow_indentless_seq: bool,
     ) -> Result<Option<Value<'input>>, DecodeError> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
@@ -632,9 +640,9 @@ impl<'input> Decoder<'input> {
         // incremented above, so the root sits at 1 and the `== 1` arm guards
         // it immediately, then every eighth level after (9, 17, ...).
         let result = if self.depth & 7 == 1 {
-            crate::stack::guard(|| self.decode_node_inner(events))
+            crate::stack::guard(|| self.decode_node_inner(events, allow_indentless_seq))
         } else {
-            self.decode_node_inner(events)
+            self.decode_node_inner(events, allow_indentless_seq)
         };
         self.depth -= 1;
         result
@@ -643,6 +651,7 @@ impl<'input> Decoder<'input> {
     fn decode_node_inner(
         &mut self,
         events: &mut [Event<'input>],
+        allow_indentless_seq: bool,
     ) -> Result<Option<Value<'input>>, DecodeError> {
         if self.pos >= events.len() {
             return Ok(None);
@@ -702,9 +711,9 @@ impl<'input> Decoder<'input> {
                 EventKind::Scalar(..)
                     | EventKind::MappingStart { .. }
                     | EventKind::SequenceStart { .. }
-                    | EventKind::SequenceEntry
                     | EventKind::Alias(..)
-            );
+            ) || (allow_indentless_seq
+                && matches!(events[self.pos].kind, EventKind::SequenceEntry));
             if !is_node {
                 let resolved = match self.schema.classify("", ScalarStyle::Plain, Some(tag)) {
                     ScalarKind::Null => Value::Null,
@@ -844,9 +853,11 @@ impl<'input> Decoder<'input> {
                 self.anchors.get(name).expect("anchor present").0.clone()
             }
 
-            EventKind::SequenceEntry => {
+            EventKind::SequenceEntry if allow_indentless_seq => {
                 // A block sequence value may sit at the same indent as its key
-                // (no preceding SequenceStart), so build it here.
+                // (no preceding SequenceStart), so build it here. Only in a
+                // mapping-value position: elsewhere a bare `SequenceEntry` is a
+                // sibling of an enclosing sequence and falls through below.
                 let sequence = self.decode_block_sequence(events)?;
                 Value::Sequence(sequence)
             }
@@ -861,7 +872,12 @@ impl<'input> Decoder<'input> {
             // collection-end markers are likewise not nodes, returning without
             // consuming lets the enclosing collection see its own terminator
             // rather than silently swallowing it.
-            EventKind::Key { .. }
+            // A bare `SequenceEntry` reaches here only when it is *not* a
+            // mapping-value indentless sequence (the guarded arm above): it is a
+            // sibling of an enclosing sequence, so this node is empty. Leave the
+            // marker unconsumed for that sequence's loop.
+            EventKind::SequenceEntry
+            | EventKind::Key { .. }
             | EventKind::Value
             | EventKind::StreamEnd
             | EventKind::DocumentEnd
@@ -879,7 +895,7 @@ impl<'input> Decoder<'input> {
 
             _ => {
                 self.pos += 1;
-                return self.decode_node(events);
+                return self.decode_node(events, allow_indentless_seq);
             }
         };
 
@@ -970,12 +986,12 @@ impl<'input> Decoder<'input> {
                     // An explicit `?` key (which reaches here with a `Key`
                     // marker) may be a block collection; only a bare key in the
                     // arm below, produced by mis-indented content, may not.
-                    let key = self.decode_node(events)?.unwrap_or(Value::Null);
+                    let key = self.decode_node(events, false)?.unwrap_or(Value::Null);
                     if self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Value)
                     {
                         self.pos += 1;
                     }
-                    let val = self.decode_node(events)?.unwrap_or(Value::Null);
+                    let val = self.decode_node(events, true)?.unwrap_or(Value::Null);
                     self.reject_complex_key(&key, key_span)?;
                     self.check_duplicate_key(&mut seen, &key, key_span)?;
                     pairs.push((key, val));
@@ -992,7 +1008,7 @@ impl<'input> Decoder<'input> {
                     // structured differently by the scanner and handled as before.
                     let bare_scalar_key = matches!(events[self.pos].kind, EventKind::Scalar(..));
                     self.reject_block_collection_key(events, flow)?;
-                    let key = self.decode_node(events)?.unwrap_or(Value::Null);
+                    let key = self.decode_node(events, false)?.unwrap_or(Value::Null);
                     let has_value = self.pos < events.len()
                         && matches!(events[self.pos].kind, EventKind::Value);
                     if has_value {
@@ -1009,7 +1025,7 @@ impl<'input> Decoder<'input> {
                     // one; otherwise decoding here would wrongly consume the next
                     // entry as this key's value.
                     let val = if has_value {
-                        self.decode_node(events)?.unwrap_or(Value::Null)
+                        self.decode_node(events, true)?.unwrap_or(Value::Null)
                     } else {
                         Value::Null
                     };
@@ -1105,11 +1121,11 @@ impl<'input> Decoder<'input> {
         {
             let key_span = events[self.pos].span;
             self.pos += 1;
-            let key = self.decode_node(events)?.unwrap_or(Value::Null);
+            let key = self.decode_node(events, false)?.unwrap_or(Value::Null);
             if self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Value) {
                 self.pos += 1;
             }
-            let val = self.decode_node(events)?.unwrap_or(Value::Null);
+            let val = self.decode_node(events, false)?.unwrap_or(Value::Null);
             self.reject_complex_key(&key, key_span)?;
             return Ok(Some(Value::Mapping(vec![(key, val)])));
         }
@@ -1124,7 +1140,7 @@ impl<'input> Decoder<'input> {
             {
                 Value::Null
             } else {
-                match self.decode_node(events)? {
+                match self.decode_node(events, false)? {
                     Some(key) => key,
                     None => return Ok(None),
                 }
@@ -1133,7 +1149,7 @@ impl<'input> Decoder<'input> {
         // key `[&c c: d]`): a `:` follows the node.
         if flow && self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Value) {
             self.pos += 1;
-            let val = self.decode_node(events)?.unwrap_or(Value::Null);
+            let val = self.decode_node(events, false)?.unwrap_or(Value::Null);
             self.reject_complex_key(&key, key_span)?;
             return Ok(Some(Value::Mapping(vec![(key, val)])));
         }
@@ -1173,7 +1189,7 @@ impl<'input> Decoder<'input> {
                         )
                     {
                         items.push(Value::Null);
-                    } else if let Some(value) = self.decode_node(events)? {
+                    } else if let Some(value) = self.decode_node(events, false)? {
                         items.push(value);
                     }
                 }

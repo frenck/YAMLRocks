@@ -563,7 +563,7 @@ impl<'input> Composer<'input> {
                     // Anchors are document-scoped: a `*alias` cannot reach an
                     // `&anchor` from an earlier document.
                     self.anchors_seen.clear();
-                    if let Some(mut node) = self.compose_node(events)? {
+                    if let Some(mut node) = self.compose_node(events, false)? {
                         // An explicit `---` produces this event; record it so the
                         // marker is preserved on re-emission.
                         node.explicit_start = true;
@@ -597,7 +597,7 @@ impl<'input> Composer<'input> {
                     // A document with no leading `---` still starts fresh: its
                     // anchors must not leak from a previous document.
                     self.anchors_seen.clear();
-                    if let Some(mut node) = self.compose_node(events)? {
+                    if let Some(mut node) = self.compose_node(events, false)? {
                         // The parser requires a `---` after any directive, so a
                         // document reaching this arm normally has none pending.
                         // Attach and mark explicit defensively: emitting the
@@ -620,7 +620,17 @@ impl<'input> Composer<'input> {
         Ok(documents)
     }
 
-    fn compose_node(&mut self, events: &[Event]) -> Result<Option<YamlNode>, ScanError> {
+    /// Compose one node. `allow_indentless_seq` is set only in a mapping-value
+    /// position, where a block sequence may sit at the key's own indent with no
+    /// `SequenceStart` of its own (`k:\n- a`). Elsewhere (a sequence entry, a
+    /// key, the root) a bare `SequenceEntry` belongs to an enclosing sequence, so
+    /// a tagged empty entry (`- !!str` before a sibling `-`) is an empty scalar,
+    /// not a nested sequence. Mirrors the fast decoder's `decode_node`.
+    fn compose_node(
+        &mut self,
+        events: &[Event],
+        allow_indentless_seq: bool,
+    ) -> Result<Option<YamlNode>, ScanError> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             let span = events.get(self.pos).map(|e| e.span).unwrap_or_default();
@@ -633,12 +643,16 @@ impl<'input> Composer<'input> {
         // Grow the native stack if it is running low, so deeply nested input
         // (bounded above by `MAX_DEPTH`) cannot overflow a small thread stack
         // before the cap fires. See [`crate::stack`].
-        let result = crate::stack::guard(|| self.compose_node_inner(events));
+        let result = crate::stack::guard(|| self.compose_node_inner(events, allow_indentless_seq));
         self.depth -= 1;
         result
     }
 
-    fn compose_node_inner(&mut self, events: &[Event]) -> Result<Option<YamlNode>, ScanError> {
+    fn compose_node_inner(
+        &mut self,
+        events: &[Event],
+        allow_indentless_seq: bool,
+    ) -> Result<Option<YamlNode>, ScanError> {
         if self.pos >= events.len() {
             return Ok(None);
         }
@@ -732,7 +746,7 @@ impl<'input> Composer<'input> {
                 YamlNode::new(YamlNodeKind::Alias(name.clone()), span)
             }
 
-            EventKind::SequenceEntry => {
+            EventKind::SequenceEntry if allow_indentless_seq => {
                 let items = self.compose_block_sequence(events)?;
                 YamlNode::new(YamlNodeKind::Sequence(items), span)
             }
@@ -740,8 +754,12 @@ impl<'input> Composer<'input> {
             // Terminators: return without consuming so the enclosing collection
             // loop can observe them. A bare `Key` means an empty value followed
             // by a sibling key (a nested mapping is always preceded by
-            // `MappingStart`), so it is a null value, not a new mapping.
-            EventKind::Key { .. }
+            // `MappingStart`), so it is a null value, not a new mapping. A bare
+            // `SequenceEntry` reaches here only outside a mapping-value position
+            // (the guarded arm above), where it is a sibling of an enclosing
+            // sequence: this node is empty, so leave the marker for that loop.
+            EventKind::SequenceEntry
+            | EventKind::Key { .. }
             | EventKind::StreamEnd
             | EventKind::DocumentEnd
             | EventKind::DocumentStart
@@ -763,7 +781,7 @@ impl<'input> Composer<'input> {
 
             _ => {
                 self.pos += 1;
-                return self.compose_node(events);
+                return self.compose_node(events, allow_indentless_seq);
             }
         };
 
@@ -837,7 +855,7 @@ impl<'input> Composer<'input> {
                     let explicit = *explicit;
                     self.pos += 1;
                     let mut key = self
-                        .compose_node(events)?
+                        .compose_node(events, false)?
                         .unwrap_or_else(|| YamlNode::new(YamlNodeKind::Null, Span::default()));
                     // Remember an author-written `?` so re-emission after an edit
                     // keeps the explicit-key form instead of collapsing it.
@@ -847,7 +865,7 @@ impl<'input> Composer<'input> {
                         self.pos += 1;
                     }
                     let val = self
-                        .compose_node(events)?
+                        .compose_node(events, true)?
                         .unwrap_or_else(|| YamlNode::new(YamlNodeKind::Null, Span::default()));
                     pairs.push((key, val));
                 }
@@ -873,7 +891,7 @@ impl<'input> Composer<'input> {
                         ));
                     }
                     let key = self
-                        .compose_node(events)?
+                        .compose_node(events, false)?
                         .unwrap_or_else(|| YamlNode::new(YamlNodeKind::Null, Span::default()));
                     let has_value = self.pos < events.len()
                         && matches!(events[self.pos].kind, EventKind::Value);
@@ -892,7 +910,7 @@ impl<'input> Composer<'input> {
                     // null value; composing one here would wrongly absorb the next
                     // entry as this key's value.
                     let val = if has_value {
-                        self.compose_node(events)?
+                        self.compose_node(events, true)?
                             .unwrap_or_else(|| YamlNode::new(YamlNodeKind::Null, Span::default()))
                     } else {
                         YamlNode::new(YamlNodeKind::Null, Span::default())
@@ -989,14 +1007,14 @@ impl<'input> Composer<'input> {
             let pair_span = events[self.pos].span;
             self.pos += 1;
             let mut key = self
-                .compose_node(events)?
+                .compose_node(events, false)?
                 .unwrap_or_else(|| null(pair_span));
             key.explicit_key = explicit;
             if self.pos < events.len() && matches!(events[self.pos].kind, EventKind::Value) {
                 self.pos += 1;
             }
             let val = self
-                .compose_node(events)?
+                .compose_node(events, false)?
                 .unwrap_or_else(|| null(pair_span));
             return Ok(Some(
                 YamlNode::new(YamlNodeKind::Mapping(vec![(key, val)]), pair_span)
@@ -1011,7 +1029,7 @@ impl<'input> Composer<'input> {
             let pair_span = events[self.pos].span;
             self.pos += 1;
             let val = self
-                .compose_node(events)?
+                .compose_node(events, false)?
                 .unwrap_or_else(|| null(pair_span));
             return Ok(Some(
                 YamlNode::new(
@@ -1022,7 +1040,7 @@ impl<'input> Composer<'input> {
             ));
         }
 
-        let Some(key) = self.compose_node(events)? else {
+        let Some(key) = self.compose_node(events, false)? else {
             return Ok(None);
         };
         // An implicit single-pair mapping with no `Key` marker (`[&c c: d]`): a
@@ -1031,7 +1049,7 @@ impl<'input> Composer<'input> {
             let pair_span = key.span;
             self.pos += 1;
             let val = self
-                .compose_node(events)?
+                .compose_node(events, false)?
                 .unwrap_or_else(|| null(pair_span));
             return Ok(Some(
                 YamlNode::new(YamlNodeKind::Mapping(vec![(key, val)]), pair_span)
@@ -1069,7 +1087,7 @@ impl<'input> Composer<'input> {
         {
             return Ok(Some(YamlNode::new(YamlNodeKind::Null, dash_span)));
         }
-        self.compose_node(events)
+        self.compose_node(events, false)
     }
 
     fn compose_block_sequence(&mut self, events: &[Event]) -> Result<Vec<YamlNode>, ScanError> {

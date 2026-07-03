@@ -158,6 +158,36 @@ Either way the walk skips hidden entries (any file or directory whose name begin
 with `.`), and when `OPT_SECRETS` is active it also skips a `secrets.yaml` (it is
 configuration for the [`!secret`](/guides/tags/) feature, not content to include).
 
+## Merging an included file with `<<`
+
+A [merge key](/guides/loading/#anchors-aliases-and-merge-keys) can take an
+`!include` as its value: `<<: !include defaults.yaml` folds the included mapping
+into the current one, and locally written keys still win. This is the shared
+"defaults" idiom (Home Assistant's packages pattern), and it works because the
+merge runs after the include resolves:
+
+```python
+import os
+import tempfile
+import yamlrocks
+
+config = tempfile.mkdtemp()
+
+with open(os.path.join(config, "defaults.yaml"), "wb") as handle:
+    handle.write(b"retries: 3\ntimeout: 30\n")
+
+with open(os.path.join(config, "service.yaml"), "wb") as handle:
+    handle.write(b"service:\n  <<: !include defaults.yaml\n  timeout: 60\n")
+
+data = yamlrocks.load(
+    os.path.join(config, "service.yaml"),
+    option=yamlrocks.OPT_INCLUDES,
+)
+
+# The included defaults are merged in; the local `timeout` overrides.
+assert data["service"] == {"retries": 3, "timeout": 60}
+```
+
 ## Editing includes and writing them back
 
 The real power of native includes shows up when you combine `OPT_INCLUDES` with

@@ -115,8 +115,11 @@ fn try_parse_int_12(value: &str) -> Option<i64> {
             return None;
         }
     } else {
-        // Decimal
-        rest.parse::<i64>().ok()?
+        // Decimal. `split_sign` already consumed the one allowed sign, so the
+        // body must not carry another: `i64::parse` would accept `-80` (from
+        // `+-80`), reading it as a number. Reuse the unsigned parse, which
+        // rejects a leading sign, just as the radix paths above do.
+        super::from_radix_unsigned(rest, 10)?
     };
 
     if negative {
@@ -219,6 +222,21 @@ mod tests {
         assert_eq!(plain("0xFF"), ResolvedValue::Int(255));
         assert_eq!(plain("0o17"), ResolvedValue::Int(15));
         assert_eq!(plain("-0x10"), ResolvedValue::Int(-16));
+    }
+
+    #[test]
+    fn decimal_rejects_a_double_sign() {
+        // `split_sign` consumes one sign; `i64::parse` would accept another in
+        // the body, so `+-80` read as -80 instead of the string it is.
+        for value in ["+-80", "-+80", "++80", "--80"] {
+            assert!(
+                matches!(plain(value), ResolvedValue::String(_)),
+                "{value:?}"
+            );
+        }
+        // A single sign is still a number.
+        assert_eq!(plain("+80"), ResolvedValue::Int(80));
+        assert_eq!(plain("-80"), ResolvedValue::Int(-80));
     }
 
     #[test]

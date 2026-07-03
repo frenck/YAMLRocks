@@ -65,5 +65,10 @@ def test_anchors_do_not_cross_documents():
     # The same cross-document reference also errors on the annotated path.
     with pytest.raises(yamlrocks.YAMLRocksDecodeError):
         yamlrocks.loads_all(b"---\n&a x\n---\n*a\n", option=yamlrocks.OPT_ANNOTATED)
+    # An *implicit* first document (no leading `---`) must clear its anchors too,
+    # or its `&x` leaks into the next document instead of raising.
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError):
+        yamlrocks.loads_all(b"a: &x 1\n---\nb: *x\n")
     # Within a single document, aliases still resolve normally.
     assert yamlrocks.loads_all(b"---\na: &x 1\nb: *x\n") == [{"a": 1, "b": 1}]
+    assert yamlrocks.loads_all(b"a: &x 1\nb: *x\n") == [{"a": 1, "b": 1}]

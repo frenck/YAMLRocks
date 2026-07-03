@@ -217,3 +217,25 @@ def test_duplicate_key_in_merge_source_uses_last_value():
     assert yamlrocks.loads(b"a: &a {x: 1, x: 2}\nc:\n  x: 9\n  <<: *a\n")["c"] == {
         "x": 9
     }
+
+
+def test_null_merge_value_is_dropped_on_every_path():
+    """A null `<<` value (`<<: ~`, an empty `<<:`, or a null element of a merge
+    list) contributes nothing and leaves no `<<` key, on every data path. The
+    composer paths used to keep a literal `<<: None`, diverging from the fast
+    path; they now agree."""
+    for src, expected in [
+        (b"base:\n  a: 1\n  <<: ~\n", {"a": 1}),
+        (b"base:\n  a: 1\n  <<:\n", {"a": 1}),
+        (b"a: &a {x: 1}\nbase:\n  <<: [*a, ~]\n", {"x": 1}),
+    ]:
+        assert yamlrocks.loads(src)["base"] == expected
+        assert (
+            dict(yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED)["base"])
+            == expected
+        )
+        assert yamlrocks.loads(src, option=yamlrocks.OPT_INCLUDES)["base"] == expected
+        assert (
+            yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_dict()["base"]
+            == expected
+        )

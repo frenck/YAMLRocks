@@ -65,6 +65,16 @@ This makes round-trip mode safe to drop into a save pipeline: loading and saving
 file the user did not change leaves it untouched, so version control stays quiet
 and diffs stay meaningful.
 
+:::note[Byte fidelity is a UTF-8 guarantee]
+The byte-for-byte promise is for UTF-8 input, which is what real configuration
+files use. YAMLRocks still reads UTF-16 and UTF-32 (the YAML spec requires it,
+detected by a byte order mark or the leading-byte pattern), but it decodes to
+text internally and re-emits as UTF-8. So loading a UTF-16 file gives you the
+right data, but re-emitting it produces the same text encoded as UTF-8, not the
+original UTF-16 bytes. Convert a file to UTF-8 first if you need byte-for-byte
+round-trip editing of it.
+:::
+
 ## Reading values
 
 A `YAMLRocksDocument` reads like the mapping it wraps. Scalar access returns plain Python

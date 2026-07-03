@@ -96,12 +96,35 @@ fn node_to_python_cached_inner(
         }
         YamlNodeKind::Mapping(pairs) => {
             let dict = PyDict::new(py);
-            for (key, val) in pairs {
-                dict.set_item(
-                    node_to_python_key(py, key, schema, anchors, cache),
-                    node_to_python_cached(py, val, schema, anchors, cache),
-                )
-                .unwrap();
+            if mapping_has_merge_key(pairs) {
+                for (key, val) in pairs {
+                    let py_val = node_to_python_cached(py, val, schema, anchors, cache);
+                    if is_ast_merge_key(key) {
+                        // Fold the merge value's keys in, keeping any explicit
+                        // key already set. A non-mergeable value stays under the
+                        // literal `<<`, as the fast path preserves it.
+                        if let Some(preserve) =
+                            merge_converted_into(&dict, py_val.bind(py)).unwrap()
+                        {
+                            let py_key = node_to_python_key(py, key, schema, anchors, cache);
+                            if !dict.contains(&py_key).unwrap() {
+                                dict.set_item(py_key, preserve).unwrap();
+                            }
+                        }
+                    } else {
+                        // An explicit key wins over a merge, so it overwrites.
+                        dict.set_item(node_to_python_key(py, key, schema, anchors, cache), py_val)
+                            .unwrap();
+                    }
+                }
+            } else {
+                for (key, val) in pairs {
+                    dict.set_item(
+                        node_to_python_key(py, key, schema, anchors, cache),
+                        node_to_python_cached(py, val, schema, anchors, cache),
+                    )
+                    .unwrap();
+                }
             }
             dict.into_any().unbind()
         }
@@ -114,6 +137,67 @@ fn node_to_python_cached_inner(
         cache.insert(name.clone(), obj.clone_ref(py));
     }
     obj
+}
+
+/// Whether a mapping-key node is a real YAML merge key (`<<`): a *plain* `<<`
+/// scalar (a quoted `"<<"` is a literal string key), or a node carrying an
+/// explicit `!!merge` tag. Mirrors the fast-path resolver's merge detection so
+/// the AST-based conversions (round-trip `to_dict`, includes, annotated) apply
+/// merges identically to `loads()`.
+pub(crate) fn is_ast_merge_key(key: &YamlNode) -> bool {
+    if let Some(tag) = &key.tag {
+        return matches!(tag.as_str(), "!!merge" | "tag:yaml.org,2002:merge");
+    }
+    matches!(&key.kind, YamlNodeKind::Scalar(text, ScalarStyle::Plain) if text == "<<")
+}
+
+/// Whether any key in a mapping's pairs is a merge key, so the hot no-merge path
+/// stays a plain insert loop and only mappings that actually carry `<<` pay for
+/// the merge-aware handling.
+pub(crate) fn mapping_has_merge_key(pairs: &[(YamlNode, YamlNode)]) -> bool {
+    pairs.iter().any(|(k, _)| is_ast_merge_key(k))
+}
+
+/// Merge an already-converted `<<` value into `dict`, inserting only keys not
+/// already present (so explicit keys and earlier merges win, matching PyYAML,
+/// ruamel, and the fast path). Returns the object to preserve under the literal
+/// `<<` key, or `None` when the value merged completely:
+///
+/// - A mapping merges its entries and returns `None`.
+/// - A sequence merges each element and returns only the elements that could not
+///   be merged, as a list (`None` if all merged), so a mergeable element is not
+///   also duplicated under `<<`. Mirrors the fast path's `merge_into`.
+/// - Anything else (a scalar or custom-tagged node) is returned as-is to
+///   preserve under `<<`, exactly as the fast path does.
+///
+/// `dict.contains` uses Python equality, so a key already present under any
+/// spelling is not overwritten.
+pub(crate) fn merge_converted_into<'py>(
+    dict: &Bound<'py, PyDict>,
+    source: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if let Ok(src) = source.cast::<PyDict>() {
+        for (k, v) in src.iter() {
+            if !dict.contains(&k)? {
+                dict.set_item(k, v)?;
+            }
+        }
+        Ok(None)
+    } else if let Ok(list) = source.cast::<PyList>() {
+        let leftover = PyList::empty(source.py());
+        for item in list.iter() {
+            if let Some(unmerged) = merge_converted_into(dict, &item)? {
+                leftover.append(unmerged)?;
+            }
+        }
+        if leftover.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(leftover.into_any()))
+        }
+    } else {
+        Ok(Some(source.clone()))
+    }
 }
 
 /// Whether a mapping-key node is (or, for an alias, resolves to) a collection.

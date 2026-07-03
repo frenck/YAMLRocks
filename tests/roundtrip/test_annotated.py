@@ -96,6 +96,17 @@ def test_annotated_str_behaves_like_str():
     assert s.__file__ == "c.yaml"
 
 
+def test_annotated_str_uses_slots_not_instance_dict():
+    """YAMLRocksAnnotatedStr stores its metadata in __slots__, not a per-instance
+    __dict__: annotating a large document must not pay a dict per string."""
+    s = yamlrocks.loads(b"a: hello\n", option=ANN)["a"]
+    assert isinstance(s, yamlrocks.YAMLRocksAnnotatedStr)
+    assert not hasattr(s, "__dict__")
+    # Arbitrary attributes are rejected, proving there is no backing dict.
+    with pytest.raises(AttributeError):
+        s.__does_not_exist__ = 1
+
+
 def test_mapping_keys_are_annotated():
     """Mapping keys, not just values, carry their own source location."""
     data = yamlrocks.loads(b"name: app\nserver:\n  host: localhost\n", option=ANN)

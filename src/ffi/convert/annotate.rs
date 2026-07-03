@@ -197,7 +197,11 @@ fn annotate_node_cached_inner(
         };
     }
 
-    let config_file = paths.get(node.span.file_id as usize).cloned();
+    // Borrow the file path and provenance tags: the scalar branch only needs a
+    // `&str`, so cloning per node would heap-allocate a filename for every
+    // scalar just to borrow it. Only the two container branches store an owned
+    // `String` in their pyclass, and they clone locally.
+    let config_file = paths.get(node.span.file_id as usize).map(String::as_str);
     let line = node.span.line + 1;
     let column = node.span.column + 1;
     // 1-based end position (just past the node's last character), mirroring
@@ -213,21 +217,21 @@ fn annotate_node_cached_inner(
     // The config/custom tag that produced this node (`!secret`, `!env_var`,
     // `!include*`, or a custom `!mytag`), and the directive argument it carried,
     // for provenance.
-    let source_tag = node.source_tag().map(str::to_owned);
-    let source_target = node.source_target().map(str::to_owned);
+    let source_tag = node.source_tag();
+    let source_target = node.source_target();
 
     let obj = match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
             let init = PyClassInitializer::from(YAMLRocksAnnotatedDict {
                 __line__: line,
                 __column__: column,
-                __file__: config_file,
+                __file__: config_file.map(str::to_owned),
                 __end_line__: end_line,
                 __end_column__: end_column,
                 __offset__: offset,
                 __end_offset__: end_offset,
-                __source_tag__: source_tag,
-                __source_target__: source_target,
+                __source_tag__: source_tag.map(str::to_owned),
+                __source_target__: source_target.map(str::to_owned),
             });
             let obj = Bound::new(py, init)?;
             let dict = obj.as_any().cast::<PyDict>()?;
@@ -293,13 +297,13 @@ fn annotate_node_cached_inner(
             let init = PyClassInitializer::from(YAMLRocksAnnotatedList {
                 __line__: line,
                 __column__: column,
-                __file__: config_file,
+                __file__: config_file.map(str::to_owned),
                 __end_line__: end_line,
                 __end_column__: end_column,
                 __offset__: offset,
                 __end_offset__: end_offset,
-                __source_tag__: source_tag,
-                __source_target__: source_target,
+                __source_tag__: source_tag.map(str::to_owned),
+                __source_target__: source_target.map(str::to_owned),
             });
             let obj = Bound::new(py, init)?;
             let list = obj.as_any().cast::<PyList>()?;
@@ -329,12 +333,12 @@ fn annotate_node_cached_inner(
                     &s,
                     line,
                     column,
-                    config_file.as_deref(),
+                    config_file,
                     end_line,
                     end_column,
                     style.name(),
-                    source_tag.as_deref(),
-                    source_target.as_deref(),
+                    source_tag,
+                    source_target,
                     offset,
                     end_offset,
                 ),
@@ -345,12 +349,12 @@ fn annotate_node_cached_inner(
                     i.into_pyobject(py)?.into_any().unbind(),
                     line,
                     column,
-                    config_file.as_deref(),
+                    config_file,
                     end_line,
                     end_column,
                     style.name(),
-                    source_tag.as_deref(),
-                    source_target.as_deref(),
+                    source_tag,
+                    source_target,
                     offset,
                     end_offset,
                 ),
@@ -361,12 +365,12 @@ fn annotate_node_cached_inner(
                     PyFloat::new(py, f).into_any().unbind(),
                     line,
                     column,
-                    config_file.as_deref(),
+                    config_file,
                     end_line,
                     end_column,
                     style.name(),
-                    source_tag.as_deref(),
-                    source_target.as_deref(),
+                    source_tag,
+                    source_target,
                     offset,
                     end_offset,
                 ),

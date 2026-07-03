@@ -162,9 +162,11 @@ impl<'input> Parser<'input> {
             }
             TokenKind::FlowSequenceEnd => Ok(Event::new(EventKind::SequenceEnd, span)),
 
-            TokenKind::Key => {
-                // Key is followed by the actual key value
-                Ok(Event::new(EventKind::Key, span))
+            TokenKind::Key { explicit } => {
+                // Key is followed by the actual key value; carry whether the
+                // source used an explicit `?` so the round-trip emitter can
+                // restore it.
+                Ok(Event::new(EventKind::Key { explicit }, span))
             }
             TokenKind::Value => Ok(Event::new(EventKind::Value, span)),
 

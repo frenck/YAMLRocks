@@ -921,7 +921,8 @@ impl<'input> Scanner<'input> {
         if self.flow_level > 0 {
             self.flow_explicit_key = true;
         }
-        self.tokens.push_back(Token::new(TokenKind::Key, span));
+        self.tokens
+            .push_back(Token::new(TokenKind::Key { explicit: true }, span));
         Ok(())
     }
 
@@ -955,7 +956,8 @@ impl<'input> Scanner<'input> {
                         .insert(at, Token::new(TokenKind::BlockMappingStart, key_span));
                     at += 1;
                 }
-                self.tokens.insert(at, Token::new(TokenKind::Key, key_span));
+                self.tokens
+                    .insert(at, Token::new(TokenKind::Key { explicit: false }, key_span));
             } else {
                 let column = self.reader.column() as i32;
                 self.roll_indent(column, span, TokenKind::BlockMappingStart)?;
@@ -1221,7 +1223,8 @@ impl<'input> Scanner<'input> {
                 let key_col = span.column as i32;
                 self.roll_indent(key_col, span, TokenKind::BlockMappingStart)?;
             }
-            self.tokens.push_back(Token::new(TokenKind::Key, span));
+            self.tokens
+                .push_back(Token::new(TokenKind::Key { explicit: false }, span));
             let mut scalar = Token::new(TokenKind::Scalar(value, style), span);
             scalar.end_offset = content_end;
             self.tokens.push_back(scalar);
@@ -1353,7 +1356,8 @@ impl<'input> Scanner<'input> {
                     let key_col = span.column as i32;
                     self.roll_indent(key_col, span, TokenKind::BlockMappingStart)?;
                 }
-                self.tokens.push_back(Token::new(TokenKind::Key, span));
+                self.tokens
+                    .push_back(Token::new(TokenKind::Key { explicit: false }, span));
                 let mut scalar = Token::new(TokenKind::Scalar(value, ScalarStyle::Plain), span);
                 scalar.end_offset = content_end;
                 self.tokens.push_back(scalar);

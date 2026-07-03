@@ -7,7 +7,8 @@ use pyo3::types::{PyDict, PyFloat, PyList};
 use crate::ffi::types::{YAMLRocksAnnotatedDict, YAMLRocksAnnotatedList};
 use crate::resolver::{ResolvedValue, Schema};
 use crate::roundtrip::value::{
-    key_is_collection, node_to_python_cached, node_to_python_key, ObjectCache,
+    is_ast_merge_key, key_is_collection, mapping_has_merge_key, merge_converted_into,
+    node_to_python_cached, node_to_python_key, ObjectCache,
 };
 use crate::roundtrip::{YamlNode, YamlNodeKind};
 
@@ -230,7 +231,39 @@ fn annotate_node_cached_inner(
             });
             let obj = Bound::new(py, init)?;
             let dict = obj.as_any().cast::<PyDict>()?;
+            let has_merge = mapping_has_merge_key(pairs);
             for (key, val) in pairs {
+                let py_val = annotate_node_cached(
+                    py,
+                    val,
+                    paths,
+                    schema,
+                    tags,
+                    anchors,
+                    annotate_numbers,
+                    cache,
+                )?;
+                // Apply a `<<` merge like the fast path, so annotated data reads
+                // the same as `loads()`. The merged-in entries keep their own
+                // annotations (they come from the source mapping's nodes).
+                if has_merge && is_ast_merge_key(key) {
+                    if let Some(preserve) = merge_converted_into(dict, py_val.bind(py))? {
+                        let py_key = annotate_node_cached(
+                            py,
+                            key,
+                            paths,
+                            schema,
+                            tags,
+                            anchors,
+                            annotate_numbers,
+                            cache,
+                        )?;
+                        if !dict.contains(&py_key)? {
+                            dict.set_item(py_key, preserve)?;
+                        }
+                    }
+                    continue;
+                }
                 // Annotate keys too, not just values: a string key becomes an
                 // `YAMLRocksAnnotatedStr` carrying its own line/column/file, so callers can
                 // point an error at the exact key. `YAMLRocksAnnotatedStr` is a `str`
@@ -252,16 +285,6 @@ fn annotate_node_cached_inner(
                         cache,
                     )?
                 };
-                let py_val = annotate_node_cached(
-                    py,
-                    val,
-                    paths,
-                    schema,
-                    tags,
-                    anchors,
-                    annotate_numbers,
-                    cache,
-                )?;
                 dict.set_item(py_key, py_val)?;
             }
             Ok(obj.into_any().unbind())
@@ -423,14 +446,25 @@ fn node_to_python_with_tags_cached_inner(
         }
         YamlNodeKind::Mapping(pairs) => {
             let dict = PyDict::new(py);
+            let has_merge = mapping_has_merge_key(pairs);
             for (key, val) in pairs {
+                let py_val =
+                    node_to_python_with_tags_cached(py, val, schema, tags, anchors, cache)?;
+                if has_merge && is_ast_merge_key(key) {
+                    if let Some(preserve) = merge_converted_into(&dict, py_val.bind(py))? {
+                        let py_key =
+                            node_to_python_with_tags_cached(py, key, schema, tags, anchors, cache)?;
+                        if !dict.contains(&py_key)? {
+                            dict.set_item(py_key, preserve)?;
+                        }
+                    }
+                    continue;
+                }
                 let py_key = if key_is_collection(key, anchors) {
                     node_to_python_key(py, key, schema, anchors, cache)
                 } else {
                     node_to_python_with_tags_cached(py, key, schema, tags, anchors, cache)?
                 };
-                let py_val =
-                    node_to_python_with_tags_cached(py, val, schema, tags, anchors, cache)?;
                 dict.set_item(py_key, py_val)?;
             }
             dict.into_any().unbind()

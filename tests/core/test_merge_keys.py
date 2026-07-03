@@ -125,3 +125,51 @@ def test_merge_key_inside_a_complex_key_does_not_leak_to_tag_handler():
     out = yamlrocks.loads(b"{<<: 1}: v\n", tag_handler=handler)
     assert out == {(("<<", 1),): "v"}
     assert seen == []
+
+
+def test_merge_applied_on_all_data_paths_not_just_fast():
+    """`<<` merges must be applied on every path that returns DATA (annotated,
+    includes, round-trip to_dict), matching the fast `loads()`. Round-trip
+    `to_yaml()` still keeps `<<` literal for byte-for-byte fidelity."""
+    src = b"d: &d\n  x: 1\no:\n  <<: *d\n  y: 9\n"
+    expected = {"x": 1, "y": 9}
+    assert yamlrocks.loads(src)["o"] == expected
+    assert dict(yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED)["o"]) == expected
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_INCLUDES)["o"] == expected
+    doc = yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP)
+    assert doc.to_dict()["o"] == expected
+    # Fidelity: the emitted source still carries the literal merge key.
+    assert doc.to_yaml() == src
+
+
+def test_merge_via_include_is_applied_after_resolution(tmp_path):
+    """`<<: !include base.yaml` merges the included mapping in, the Home Assistant
+    packages pattern, instead of leaving a literal `<<` key."""
+    (tmp_path / "base.yaml").write_bytes(b"x: 1\ny: 2\n")
+    root = b"obj:\n  <<: !include base.yaml\n  y: 9\n"
+    out = yamlrocks.loads(
+        root, option=yamlrocks.OPT_INCLUDES, include_dir=str(tmp_path)
+    )
+    assert out == {"obj": {"x": 1, "y": 9}}
+
+
+def test_quoted_merge_key_stays_literal_on_data_paths():
+    """A quoted `"<<"` is a literal key, never a merge, on the AST paths too."""
+    src = b'o:\n  "<<": 1\n'
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED)["o"] == {"<<": 1}
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_INCLUDES)["o"] == {"<<": 1}
+
+
+def test_merge_sequence_with_non_mergeable_element_keeps_only_leftover():
+    """A `<<` sequence mixing a mapping and a non-mergeable element merges the
+    mapping and keeps only the leftover under the literal `<<`, not the whole
+    list, so the merged keys are not also duplicated. All data paths agree with
+    the fast path (mirrors the fast `merge_into` leftover semantics)."""
+    src = b"base: &b\n  x: 1\no:\n  <<: [*b, plain]\n"
+    expected = {"x": 1, "<<": ["plain"]}
+    assert yamlrocks.loads(src)["o"] == expected
+    assert dict(yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED)["o"]) == expected
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_INCLUDES)["o"] == expected
+    assert (
+        yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_dict()["o"] == expected
+    )

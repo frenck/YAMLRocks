@@ -118,3 +118,17 @@ def test_deleting_unrelated_key_with_preexisting_dangling_alias_is_allowed():
     doc = yamlrocks.loads(b"a: 1\nb: *ghost\nc: 3\n", option=yamlrocks.OPT_ROUND_TRIP)
     del doc["c"]
     assert doc.to_yaml() == b"a: 1\nb: *ghost\n"
+
+
+def test_recursive_self_referential_alias_is_rejected():
+    """A self-referential anchor (`&a` then `- *a`, a list containing itself) is
+    rejected rather than building a cyclic structure. yamlrocks requires an anchor
+    to be defined before it is referenced, which also bounds the
+    infinite-structure/DoS surface; PyYAML/ruamel build the cycle, we do not."""
+    import pytest
+
+    with pytest.raises(yamlrocks.YAMLRocksError, match="alias"):
+        yamlrocks.loads(b"&a\n- *a\n")
+    # A mapping that references its own anchor as a value is rejected too.
+    with pytest.raises(yamlrocks.YAMLRocksError, match="alias"):
+        yamlrocks.loads(b"a: &x\n  b: *x\n")

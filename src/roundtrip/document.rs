@@ -171,7 +171,21 @@ impl YAMLRocksDocument {
         if self.nodes.len() == 1 {
             let anchors = build_anchor_map(&self.nodes);
             let schema = self.schema;
-            del_child(py, &mut self.nodes[0], key, schema, &anchors)
+            // Guard against orphaning an alias: if the document has aliases,
+            // snapshot the tree and the aliases already dangling, delete, then
+            // roll back if the delete leaves a *newly* dangling `*alias`.
+            let snapshot = document_has_aliases(&self.nodes)
+                .then(|| (self.nodes.clone(), dangling_alias_names(&self.nodes)));
+            del_child(py, &mut self.nodes[0], key, schema, &anchors)?;
+            if let Some((snapshot, before)) = snapshot {
+                let after = dangling_alias_names(&self.nodes);
+                if let Some(name) = after.difference(&before).next() {
+                    let name = name.clone();
+                    self.nodes = snapshot;
+                    return Err(dangling_alias_error(&name));
+                }
+            }
+            Ok(())
         } else {
             let idx: usize = key.extract()?;
             if idx >= self.nodes.len() {
@@ -596,9 +610,23 @@ impl YAMLRocksDocumentView {
         let mut doc = self.root.borrow_mut(py);
         let schema = doc.schema;
         let anchors = build_anchor_map(&doc.nodes);
+        // Guard against orphaning an alias elsewhere in the document (see the
+        // top-level `__delitem__`): snapshot the tree and the already-dangling
+        // aliases, roll back only if the delete newly orphans one.
+        let snapshot = document_has_aliases(&doc.nodes)
+            .then(|| (doc.nodes.clone(), dangling_alias_names(&doc.nodes)));
         let node = resolve_path_mut(&mut doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        del_child(py, node, key, schema, &anchors)
+        del_child(py, node, key, schema, &anchors)?;
+        if let Some((snapshot, before)) = snapshot {
+            let after = dangling_alias_names(&doc.nodes);
+            if let Some(name) = after.difference(&before).next() {
+                let name = name.clone();
+                doc.nodes = snapshot;
+                return Err(dangling_alias_error(&name));
+            }
+        }
+        Ok(())
     }
 
     fn __contains__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -1438,6 +1466,66 @@ fn set_child(
             "node is not a mapping or sequence",
         )),
     }
+}
+
+/// Collect every `*alias` name referenced anywhere in a node subtree.
+fn collect_alias_names(node: &YamlNode, out: &mut std::collections::HashSet<String>) {
+    match &node.kind {
+        YamlNodeKind::Alias(name) => {
+            out.insert(name.clone());
+        }
+        YamlNodeKind::Mapping(pairs) => {
+            for (k, v) in pairs {
+                collect_alias_names(k, out);
+                collect_alias_names(v, out);
+            }
+        }
+        YamlNodeKind::Sequence(items) => {
+            for item in items {
+                collect_alias_names(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether the document references any alias at all. A document with no aliases
+/// can never be left with a dangling one, so the delete guard skips the (cloning)
+/// safety check entirely, keeping the common no-anchor case cheap.
+fn document_has_aliases(nodes: &[YamlNode]) -> bool {
+    let mut aliases = std::collections::HashSet::new();
+    for node in nodes {
+        collect_alias_names(node, &mut aliases);
+    }
+    !aliases.is_empty()
+}
+
+/// The set of `*alias` names that no longer resolve to an `&anchor` anywhere in
+/// the document. The delete guard compares this set before and after a delete so
+/// only a *newly* orphaned alias blocks the operation: the round-trip/compose
+/// path does not validate alias targets at load time, so a document may already
+/// carry a dangling alias, and an unrelated delete must not be blamed for it.
+fn dangling_alias_names(nodes: &[YamlNode]) -> std::collections::HashSet<String> {
+    let mut anchors = HashMap::new();
+    for node in nodes {
+        collect_anchor_refs(node, &mut anchors);
+    }
+    let mut aliases = std::collections::HashSet::new();
+    for node in nodes {
+        collect_alias_names(node, &mut aliases);
+    }
+    aliases.retain(|name| !anchors.contains_key(name));
+    aliases
+}
+
+/// The error raised when a delete would orphan an alias (leave a `*name` with no
+/// `&name`), which would emit YAML that no longer parses.
+fn dangling_alias_error(name: &str) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!(
+        "deleting this node would remove anchor '&{name}', still referenced by an \
+         alias '*{name}' elsewhere; the result would not re-parse. Remove or \
+         rewrite the alias first."
+    ))
 }
 
 fn del_child(

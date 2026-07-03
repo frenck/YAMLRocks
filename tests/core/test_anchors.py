@@ -72,3 +72,49 @@ def test_anchors_do_not_cross_documents():
     # Within a single document, aliases still resolve normally.
     assert yamlrocks.loads_all(b"---\na: &x 1\nb: *x\n") == [{"a": 1, "b": 1}]
     assert yamlrocks.loads_all(b"a: &x 1\nb: *x\n") == [{"a": 1, "b": 1}]
+
+
+def test_deleting_an_anchor_target_still_referenced_raises():
+    """Deleting an anchor target an alias still references raises, leaving the doc intact."""
+    import pytest
+
+    doc = yamlrocks.loads(
+        b"base: &b\n  x: 1\nref: *b\nother: 2\n", option=yamlrocks.OPT_ROUND_TRIP
+    )
+    with pytest.raises(ValueError, match="alias"):
+        del doc["base"]
+    assert doc.to_yaml() == b"base: &b\n  x: 1\nref: *b\nother: 2\n"
+    assert yamlrocks.loads(doc.to_yaml())["ref"] == {"x": 1}
+
+
+def test_deleting_the_alias_itself_is_allowed():
+    """Removing the alias (not its anchor target) is safe and leaves valid YAML."""
+    doc = yamlrocks.loads(
+        b"base: &b\n  x: 1\nref: *b\nother: 2\n", option=yamlrocks.OPT_ROUND_TRIP
+    )
+    del doc["ref"]
+    assert yamlrocks.loads(doc.to_yaml()) == {"base": {"x": 1}, "other": 2}
+
+
+def test_deleting_a_nested_anchor_target_still_referenced_raises():
+    """The guard covers a nested-view delete, not only the top-level path."""
+    import pytest
+
+    src = b"outer:\n  inner: &b 1\nref: *b\n"
+    doc = yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP)
+    with pytest.raises(ValueError, match="alias"):
+        del doc["outer"]["inner"]
+    assert doc.to_yaml() == src
+    assert yamlrocks.loads(doc.to_yaml())["ref"] == 1
+
+
+def test_deleting_unrelated_key_with_preexisting_dangling_alias_is_allowed():
+    """A delete is only blocked for an alias it *newly* orphans.
+
+    The round-trip path does not validate alias targets at load time, so a
+    document can already carry a dangling `*alias`. Deleting an unrelated key must
+    not be blamed for that pre-existing break.
+    """
+    doc = yamlrocks.loads(b"a: 1\nb: *ghost\nc: 3\n", option=yamlrocks.OPT_ROUND_TRIP)
+    del doc["c"]
+    assert doc.to_yaml() == b"a: 1\nb: *ghost\n"

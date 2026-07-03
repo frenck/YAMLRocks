@@ -227,6 +227,10 @@ impl<'input> Scanner<'input> {
     fn fetch_more_tokens(&mut self) -> Result<(), ScanError> {
         if !self.stream_started {
             self.stream_started = true;
+            // Reject non-printable input up front (once), so every load path
+            // refuses raw control characters the way the YAML spec (and PyYAML)
+            // require, before any token is produced.
+            self.reader.check_printable()?;
             let span = self.reader.span();
             self.tokens
                 .push_back(Token::new(TokenKind::StreamStart, span));

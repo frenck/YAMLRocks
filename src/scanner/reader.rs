@@ -3,6 +3,7 @@ use super::char_traits::{
     PLAIN_STOP_BLOCK, PLAIN_STOP_FLOW,
 };
 use super::token::Span;
+use super::ScanError;
 
 /// Character-by-character reader over a UTF-8 string input.
 ///
@@ -71,6 +72,90 @@ impl<'input> Reader<'input> {
     #[inline]
     pub fn column(&self) -> u32 {
         self.column
+    }
+
+    /// Reject any character outside the YAML 1.2 printable set (`c-printable`),
+    /// pointing the error at the first offending character. Raw control
+    /// characters are ill-formed input and PyYAML rejects them too; an *escaped*
+    /// control in a double-quoted scalar is unaffected, since the scalar scanner
+    /// produces it later from an escape sequence, not from a raw byte here. Runs
+    /// once, before the first token, so every load path is covered.
+    ///
+    /// This is a byte scan, not a `char` scan: the fast path is a handful of
+    /// comparisons per byte, so validating the whole input stays cheap. The only
+    /// non-ASCII offenders are the C1 controls (`U+0080..=U+009F`, encoded
+    /// `0xC2 0x80..0x9F`) and the two non-characters `U+FFFE`/`U+FFFF` (encoded
+    /// `0xEF 0xBF 0xBE`/`0xBF`), so they need a small look-ahead on their lead
+    /// byte; every other lead/continuation byte falls straight through.
+    pub fn check_printable(&self) -> Result<(), ScanError> {
+        let bytes = self.input.as_bytes();
+        let start = if self.had_bom { BOM_LEN } else { 0 };
+        let mut i = start;
+        while i < bytes.len() {
+            let b = bytes[i];
+            // Fast path: printable ASCII (`0x20..=0x7E`) is the overwhelming
+            // majority of bytes, and `wrapping_sub` folds the range check into a
+            // single comparison that pipelines cleanly.
+            if b.wrapping_sub(0x20) < 0x5f {
+                i += 1;
+                continue;
+            }
+            let bad = if b < 0x20 {
+                b != b'\t' && b != b'\n' && b != b'\r'
+            } else if b == 0x7f {
+                true
+            } else if b == 0xc2 && i + 1 < bytes.len() {
+                // C1 control, but NEL (`U+0085`, `0xC2 0x85`) is printable.
+                let n = bytes[i + 1];
+                (0x80..=0x9f).contains(&n) && n != 0x85
+            } else if b == 0xef && i + 2 < bytes.len() {
+                bytes[i + 1] == 0xbf && (bytes[i + 2] == 0xbe || bytes[i + 2] == 0xbf)
+            } else {
+                false
+            };
+            if bad {
+                return Err(self.non_printable_error(i));
+            }
+            i += 1;
+        }
+        Ok(())
+    }
+
+    /// Build the error for a non-printable byte at `offset`, decoding the
+    /// character and computing its line/column from the preceding text. Only
+    /// runs on the rejection path, so the extra scan here is off the hot path.
+    fn non_printable_error(&self, offset: usize) -> ScanError {
+        let start = if self.had_bom { BOM_LEN } else { 0 };
+        let mut line = 0u32;
+        let mut column = 0u32;
+        let mut prev_cr = false;
+        for ch in self.input[start..offset].chars() {
+            match ch {
+                '\n' => {
+                    // A `\n` right after a `\r` is the tail of one CRLF break,
+                    // already counted, so do not count it twice.
+                    if !prev_cr {
+                        line += 1;
+                        column = 0;
+                    }
+                    prev_cr = false;
+                }
+                '\r' => {
+                    line += 1;
+                    column = 0;
+                    prev_cr = true;
+                }
+                _ => {
+                    column += 1;
+                    prev_cr = false;
+                }
+            }
+        }
+        let ch = self.input[offset..].chars().next().unwrap_or('\u{0}');
+        ScanError::new(
+            format!("disallowed control character U+{:04X}", ch as u32),
+            Span::new(self.file_id, line, column, offset),
+        )
     }
 
     /// Create a span at the current position.

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-mod merge;
+pub(crate) mod merge;
 
 use crate::parser::{Event, EventKind, Parser};
 use crate::resolver::{ScalarKind, Schema};

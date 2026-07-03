@@ -558,3 +558,65 @@ def test_schema_accepts_integer_valued_float_bounds():
     assert yamlrocks.loads(b"a: [1, 2]\n", schema=schema) == {"a": [1, 2]}
     with pytest.raises(yamlrocks.YAMLRocksSchemaError):
         yamlrocks.loads(b"a: [1]\n", schema=schema)
+
+
+def test_merge_key_violation_in_merged_value_is_caught():
+    """A `<<` merge is applied before validation, so a type violation carried in
+    through the merge is caught (validation sees what `loads()` returns)."""
+    schema = {
+        "type": "object",
+        "properties": {"prod": {"properties": {"port": {"type": "integer"}}}},
+    }
+    src = b"d: &d\n  port: not_a_number\nprod:\n  <<: *d\n"
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(src, schema=schema)
+
+
+def test_merge_key_satisfies_required_and_is_not_an_extra_property():
+    """`required` met only through a `<<` merge passes, and the literal `<<` key
+    is consumed so it is not flagged by additionalProperties: false."""
+    schema = {
+        "properties": {
+            "prod": {
+                "required": ["a", "b"],
+                "additionalProperties": False,
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"},
+                },
+            }
+        }
+    }
+    assert yamlrocks.loads(
+        b"d: &d\n  a: 1\n  b: 2\nprod:\n  <<: *d\n", schema=schema
+    ) == {
+        "d": {"a": 1, "b": 2},
+        "prod": {"a": 1, "b": 2},
+    }
+
+
+def test_explicit_key_overrides_merged_value_in_validation():
+    """An explicit key wins over the merged one, so the explicit (valid) value is
+    what gets validated."""
+    schema = {"properties": {"prod": {"properties": {"port": {"type": "integer"}}}}}
+    src = b"d: &d\n  port: not_a_number\nprod:\n  <<: *d\n  port: 5\n"
+    assert yamlrocks.loads(src, schema=schema) == {
+        "d": {"port": "not_a_number"},
+        "prod": {"port": 5},
+    }
+
+
+def test_merge_sequence_preserves_all_leftovers_for_validation():
+    """A `<<` sequence mixing a mapping and several non-mergeable elements merges
+    the mapping and preserves every leftover (not just the first) under one
+    literal `<<`, so the validator sees the same shape `loads()` returns."""
+    # `loads()` keeps both scalars under `<<` as a two-element list.
+    src = b"base: &b\n  x: 1\no:\n  <<: [*b, p, q]\n"
+    assert yamlrocks.loads(src)["o"] == {"x": 1, "<<": ["p", "q"]}
+    # The validator must see the same two-element `<<`; before, it saw only `[p]`.
+    passing = {"properties": {"o": {"properties": {"<<": {"minItems": 2}}}}}
+    assert yamlrocks.loads(src, schema=passing)["o"]["<<"] == ["p", "q"]
+    # minItems: 3 correctly fails (there are only two leftovers).
+    failing = {"properties": {"o": {"properties": {"<<": {"minItems": 3}}}}}
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(src, schema=failing)

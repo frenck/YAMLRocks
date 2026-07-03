@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use crate::decode::Value;
 use crate::resolver::ResolvedValue;
 use crate::roundtrip::{YamlNode, YamlNodeKind};
-use crate::scanner::Span;
+use crate::scanner::{ScalarStyle, Span};
 
 /// Alias-hop bound, fast-failing a pure alias cycle. Counts only alias follows,
 /// not tree depth, so a legitimately deep document is not truncated.
@@ -91,7 +91,13 @@ pub fn validate(node: &YamlNode, schema: &Value, yaml_11: bool) -> Vec<SchemaErr
     let mut anchors = HashMap::new();
     collect_anchors(node, &mut anchors);
     let mut budget = MAX_ALIAS_NODES;
-    let resolved = expand_aliases(node, &anchors, 0, &mut budget);
+    let mut resolved = expand_aliases(node, &anchors, 0, &mut budget);
+    // Apply `<<` merge keys so the validator sees the same mapping `loads()`
+    // returns. Without this it would check the literal `<<` key and miss every
+    // merged-in property (a violation slips through, a merge-satisfied `required`
+    // is wrongly flagged). Runs after alias expansion, so a `<<: *anchor` value
+    // is already the concrete mapping.
+    apply_merge_keys(&mut resolved, yaml_11);
 
     let mut errors = Vec::new();
     let ref_budget = std::cell::Cell::new(MAX_REF_FOLLOWS);
@@ -194,6 +200,133 @@ fn expand_aliases_inner(
         }
         _ => node.clone(),
     }
+}
+
+/// Apply YAML merge keys (`<<`) on the AST, in place, matching the fast path's
+/// [`crate::decode::merge`] semantics: explicitly written keys win, and earlier
+/// merges win over later ones (only missing keys are pulled in). Aliases are
+/// already expanded, so every `<<` value is a concrete mapping (or a sequence of
+/// mappings). Keeps validation checking the shape `loads()` actually returns.
+fn apply_merge_keys(node: &mut YamlNode, yaml_11: bool) {
+    // Grow the native stack on demand so a deeply nested tree cannot overflow a
+    // small thread stack; the recursion re-enters here per level.
+    crate::stack::guard(|| apply_merge_keys_inner(node, yaml_11))
+}
+
+fn apply_merge_keys_inner(node: &mut YamlNode, yaml_11: bool) {
+    match &mut node.kind {
+        YamlNodeKind::Mapping(pairs) => {
+            // Resolve any merges nested in the values first (bottom-up), so a
+            // merge value that itself contains a `<<` is already flattened.
+            for (_, val) in pairs.iter_mut() {
+                apply_merge_keys(val, yaml_11);
+            }
+            if !pairs.iter().any(|(k, _)| is_merge_key_node(k, yaml_11)) {
+                return;
+            }
+            let mut result: Vec<(YamlNode, YamlNode)> = Vec::with_capacity(pairs.len());
+            let mut merges: Vec<(YamlNode, YamlNode)> = Vec::new();
+            for (key, val) in std::mem::take(pairs) {
+                if is_merge_key_node(&key, yaml_11) {
+                    merges.push((key, val));
+                } else {
+                    result.push((key, val));
+                }
+            }
+            // Seed the seen-set with the explicit keys so a merge never overrides
+            // one; signatures match the decoder's, keeping dedup type-distinct.
+            let mut seen: std::collections::HashSet<String> = result
+                .iter()
+                .map(|(k, _)| node_key_sig(k, yaml_11))
+                .collect();
+            for (key, val) in merges {
+                if let Some(unmerged) = merge_node_into(&mut result, &mut seen, val, yaml_11) {
+                    // A non-mergeable leftover is preserved under the literal `<<`
+                    // key (reusing the merge key's span), so the validator sees
+                    // the same shape `loads()` leaves behind. Matches the fast
+                    // path's `merge_into` caller.
+                    let mut literal = key;
+                    literal.tag = None;
+                    literal.kind = YamlNodeKind::Scalar("<<".to_owned(), ScalarStyle::Plain);
+                    result.push((literal, unmerged));
+                }
+            }
+            *pairs = result;
+        }
+        YamlNodeKind::Sequence(items) => {
+            for item in items.iter_mut() {
+                apply_merge_keys(item, yaml_11);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Merge a `<<` value into `result`, adding only keys not already present.
+/// Returns the node to preserve under the literal `<<` key, or `None` when the
+/// value merged completely:
+///
+/// - A mapping merges its entries and returns `None`.
+/// - A sequence merges each element and returns only the non-mergeable leftovers
+///   as a single sequence (`None` if all merged), so a mergeable element is not
+///   also duplicated and every leftover is kept (not just the first).
+/// - Anything else (a scalar, null contributes nothing, or a custom-tagged node
+///   the host would resolve) is returned as-is to preserve.
+///
+/// Mirrors the fast path's [`crate::decode::merge`] `merge_into`.
+fn merge_node_into(
+    result: &mut Vec<(YamlNode, YamlNode)>,
+    seen: &mut std::collections::HashSet<String>,
+    mut val: YamlNode,
+    yaml_11: bool,
+) -> Option<YamlNode> {
+    match std::mem::replace(&mut val.kind, YamlNodeKind::Null) {
+        YamlNodeKind::Mapping(pairs) => {
+            for (k, v) in pairs {
+                if seen.insert(node_key_sig(&k, yaml_11)) {
+                    result.push((k, v));
+                }
+            }
+            None
+        }
+        YamlNodeKind::Sequence(items) => {
+            let mut leftover = Vec::new();
+            for item in items {
+                if let Some(unmerged) = merge_node_into(result, seen, item, yaml_11) {
+                    leftover.push(unmerged);
+                }
+            }
+            if leftover.is_empty() {
+                None
+            } else {
+                val.kind = YamlNodeKind::Sequence(leftover);
+                Some(val)
+            }
+        }
+        // An empty (`null`) merge value contributes nothing.
+        YamlNodeKind::Null => None,
+        // A scalar or custom-tagged value cannot be merged; hand it back as-is
+        // (with its original span/tag) to preserve under `<<`.
+        other => {
+            val.kind = other;
+            Some(val)
+        }
+    }
+}
+
+/// Whether a mapping key is a real merge key: a *plain* `<<` scalar (a quoted
+/// `"<<"` is a literal string), or a node carrying an explicit `!!merge` tag.
+fn is_merge_key_node(key: &YamlNode, _yaml_11: bool) -> bool {
+    if let Some(tag) = &key.tag {
+        return matches!(tag.as_str(), "!!merge" | "tag:yaml.org,2002:merge");
+    }
+    matches!(&key.kind, YamlNodeKind::Scalar(text, ScalarStyle::Plain) if text == "<<")
+}
+
+/// A signature of a mapping key that matches the decoder's, so merge dedup here
+/// agrees with `loads()` (type-distinct: `1` and `"1"` are different keys).
+fn node_key_sig(key: &YamlNode, yaml_11: bool) -> String {
+    crate::decode::merge::key_sig(&resolve_deep(key, yaml_11))
 }
 
 fn validate_node(
@@ -847,5 +980,42 @@ mod tests {
             ),
         ]);
         assert_eq!(errors("base: &a 7\nuse: *a\n", &schema), 0);
+    }
+
+    #[test]
+    fn merge_keys_are_applied_before_validation() {
+        // A `<<` merge must be resolved so the validator checks the merged shape
+        // `loads()` returns, not the literal `<<` key.
+        let prod = obj(vec![(
+            "properties",
+            obj(vec![("port", obj(vec![("type", s("integer"))]))]),
+        )]);
+        let schema = obj(vec![
+            ("type", s("object")),
+            ("properties", obj(vec![("prod", prod)])),
+        ]);
+        // A violation carried in via the merge is caught.
+        assert!(errors("d: &d\n  port: bad\nprod:\n  <<: *d\n", &schema) > 0);
+        // An explicit key overrides the merged one (explicit wins).
+        assert_eq!(
+            errors("d: &d\n  port: bad\nprod:\n  <<: *d\n  port: 5\n", &schema),
+            0
+        );
+
+        // `required` satisfied only through the merge is accepted, and the `<<`
+        // key itself is not flagged as an additional property.
+        let prod_req = obj(vec![
+            ("required", Value::Sequence(vec![s("a")])),
+            ("additionalProperties", Value::Bool(false)),
+            (
+                "properties",
+                obj(vec![("a", obj(vec![("type", s("integer"))]))]),
+            ),
+        ]);
+        let schema2 = obj(vec![("properties", obj(vec![("prod", prod_req)]))]);
+        assert_eq!(errors("d: &d\n  a: 1\nprod:\n  <<: *d\n", &schema2), 0);
+        // A quoted "<<" is a literal key, not a merge, so it stays and trips
+        // additionalProperties: false.
+        assert!(errors("prod:\n  \"<<\": 1\n", &schema2) > 0);
     }
 }

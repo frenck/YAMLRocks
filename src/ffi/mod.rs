@@ -1114,7 +1114,15 @@ fn loads_via_ast(
         (nodes, file_map, file_sources)
     } else {
         let nodes = composer::compose(input).map_err(|e| errors::parse_error(py, &e, None))?;
-        (nodes, Vec::new(), Vec::new())
+        // Register the root document's path (from `load(path)`, passed as
+        // `root_path`) so annotated nodes report `__file__` even without
+        // `!include` resolution. The composer stamps root nodes with file_id 0,
+        // which lines up with index 0 of the file map. The source is unused here
+        // (only includes, skipped below, read it), so keep it `None`.
+        match root_path {
+            Some(path) => (nodes, vec![path], vec![None]),
+            None => (nodes, Vec::new(), Vec::new()),
+        }
     };
 
     // The root gate above validates the root document, but the round-trip

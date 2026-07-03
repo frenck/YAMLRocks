@@ -133,6 +133,34 @@ def test_duplicate_keys_distinguish_value_types():
     assert out == {1: "a", "1": "b"}
 
 
+@pytest.mark.parametrize(
+    "src",
+    [
+        b"1: a\n1.0: b\n",  # int vs equal float
+        b"true: a\n1: b\n",  # bool True vs 1
+        b"0: a\nfalse: b\n",  # 0 vs False
+        b"2.0: a\n2: b\n",  # integral float vs int
+    ],
+)
+@pytest.mark.parametrize(
+    "extra", [0, yamlrocks.OPT_ROUND_TRIP, yamlrocks.OPT_ANNOTATED]
+)
+def test_duplicate_keys_error_catches_python_equal_numeric_keys(src, extra):
+    """Keys distinct in YAML but equal as Python dict keys (1, 1.0, True) are flagged."""
+    with pytest.raises(yamlrocks.YAMLRocksDuplicateKeyError):
+        yamlrocks.loads(src, option=yamlrocks.OPT_DUPLICATE_KEYS_ERROR | extra)
+
+
+def test_duplicate_keys_numeric_non_equal_are_allowed():
+    """Numerically distinct keys (1 and 2, 1 and 1.5) are not duplicates."""
+    assert yamlrocks.loads(
+        b"1: a\n2: b\n", option=yamlrocks.OPT_DUPLICATE_KEYS_ERROR
+    ) == {1: "a", 2: "b"}
+    assert yamlrocks.loads(
+        b"1: a\n1.5: b\n", option=yamlrocks.OPT_DUPLICATE_KEYS_ERROR
+    ) == {1: "a", 1.5: "b"}
+
+
 def test_option_flags_are_distinct_bits():
     """Each option flag is a single distinct bit."""
     flags = [

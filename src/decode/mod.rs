@@ -6,7 +6,7 @@ mod merge;
 use crate::parser::{Event, EventKind, Parser};
 use crate::resolver::{ScalarKind, Schema};
 use crate::scanner::{ScalarStyle, Span};
-use merge::{apply_merge_keys, is_merge_key, key_sig};
+use merge::{apply_merge_keys, is_merge_key};
 
 /// Decode YAML input into a nested Rust value tree.
 ///
@@ -308,6 +308,58 @@ impl<'input> Decoder<'input> {
         }
     }
 
+    /// A signature for a mapping key that collapses keys Python treats as equal:
+    /// `1`, `1.0`, and `True` are one `dict` key, so a document with all three
+    /// silently overwrites down to one entry. This mirrors Python's `==`/`hash`
+    /// (unlike [`merge::key_sig`], which is type-distinct for merge semantics), so
+    /// `OPT_DUPLICATE_KEYS_ERROR` catches a collision that only shows up once the
+    /// mapping becomes a `dict`.
+    fn python_dup_key_sig(value: &Value<'input>) -> String {
+        match value {
+            Value::Null => "null".to_owned(),
+            // Python: `True == 1`, `False == 0` (equal and same hash), so a bool
+            // collides with the matching integer.
+            Value::Bool(b) => format!("n:{}", i64::from(*b)),
+            Value::Int(i) => format!("n:{i}"),
+            Value::BigInt(s) => format!("n:{s}"),
+            Value::Float(f) => Self::float_dup_sig(*f),
+            Value::String(s) => format!("s:{}:{s}", s.len()),
+            Value::Tagged(tag, inner) => {
+                format!("t:{tag}:{}", Self::python_dup_key_sig(inner))
+            }
+            Value::Sequence(items) => {
+                let inner: Vec<String> = items.iter().map(Self::python_dup_key_sig).collect();
+                format!("seq:[{}]", inner.join(","))
+            }
+            Value::Mapping(pairs) => {
+                let inner: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        format!(
+                            "{}={}",
+                            Self::python_dup_key_sig(k),
+                            Self::python_dup_key_sig(v)
+                        )
+                    })
+                    .collect();
+                format!("map:{{{}}}", inner.join(","))
+            }
+        }
+    }
+
+    /// An integral, in-range float shares a signature with the equal integer
+    /// (`1.0` collides with `1`); any other float keys off its bit pattern.
+    fn float_dup_sig(f: f64) -> String {
+        if f.is_finite()
+            && f.fract() == 0.0
+            && (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&f)
+        {
+            format!("n:{}", f as i64)
+        } else {
+            format!("f:{}", f.to_bits())
+        }
+    }
+
     /// If duplicate-key checking is enabled, error when `key` was already seen in
     /// this mapping. `seen` holds an injective signature of every prior key, so
     /// membership is O(1) (a linear scan made a large mapping quadratic). The
@@ -324,7 +376,9 @@ impl<'input> Decoder<'input> {
             return Ok(());
         }
         // `insert` returns true when the key is new; a false means a duplicate.
-        if seen.insert(key_sig(key)) {
+        // Use the Python-equality signature so `1`/`1.0`/`True` collide the way
+        // they will once the mapping is a `dict`.
+        if seen.insert(Self::python_dup_key_sig(key)) {
             return Ok(());
         }
         let name = match key {

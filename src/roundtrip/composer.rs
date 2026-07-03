@@ -502,6 +502,11 @@ struct Composer<'input> {
     pending_anchor: Option<String>,
     pending_comments: Vec<String>,
     depth: usize,
+    /// Names of the `&anchor`s defined so far in the current document, so an
+    /// `*alias` can be rejected when it names an anchor that has not been defined
+    /// (an unknown or forward reference), matching the fast decoder and PyYAML.
+    /// Anchors do not cross documents, so this is cleared at each document start.
+    anchors_seen: HashSet<String>,
 }
 
 impl<'input> Composer<'input> {
@@ -514,6 +519,7 @@ impl<'input> Composer<'input> {
             pending_anchor: None,
             pending_comments: Vec::new(),
             depth: 0,
+            anchors_seen: HashSet::new(),
         }
     }
 
@@ -554,6 +560,9 @@ impl<'input> Composer<'input> {
                 EventKind::DocumentStart => {
                     let marker_span = events[self.pos].span;
                     self.pos += 1;
+                    // Anchors are document-scoped: a `*alias` cannot reach an
+                    // `&anchor` from an earlier document.
+                    self.anchors_seen.clear();
                     if let Some(mut node) = self.compose_node(events)? {
                         // An explicit `---` produces this event; record it so the
                         // marker is preserved on re-emission.
@@ -585,6 +594,9 @@ impl<'input> Composer<'input> {
                 }
                 _ => {
                     let start_pos = self.pos;
+                    // A document with no leading `---` still starts fresh: its
+                    // anchors must not leak from a previous document.
+                    self.anchors_seen.clear();
                     if let Some(mut node) = self.compose_node(events)? {
                         // The parser requires a `---` after any directive, so a
                         // document reaching this arm normally has none pending.
@@ -642,6 +654,14 @@ impl<'input> Composer<'input> {
                     self.pos += 1;
                 }
                 EventKind::Anchor(name) => {
+                    // A node can carry only one anchor; a second with no
+                    // intervening node (`&a\n&b value`) is invalid.
+                    if self.pending_anchor.is_some() {
+                        return Err(ScanError::new(
+                            "a node cannot have two anchors".to_owned(),
+                            events[self.pos].span,
+                        ));
+                    }
                     self.pending_anchor = Some(name.clone());
                     self.pos += 1;
                 }
@@ -694,6 +714,20 @@ impl<'input> Composer<'input> {
             }
 
             EventKind::Alias(name) => {
+                // An alias is a bare reference: it cannot carry its own anchor or
+                // tag (`&b *a` / `!t *a` are invalid), and it must name an anchor
+                // already defined in this document (an unknown or forward
+                // reference is an error, not a silent null). Mirrors the fast
+                // decoder and PyYAML.
+                if anchor.is_some() || tag.is_some() {
+                    return Err(ScanError::new(
+                        "an alias node cannot have an anchor or tag".to_owned(),
+                        span,
+                    ));
+                }
+                if !self.anchors_seen.contains(name) {
+                    return Err(ScanError::new(format!("unknown alias: *{name}"), span));
+                }
                 self.pos += 1;
                 YamlNode::new(YamlNodeKind::Alias(name.clone()), span)
             }
@@ -733,6 +767,12 @@ impl<'input> Composer<'input> {
             }
         };
 
+        // Record this node's anchor only now, after its children are composed, so
+        // a self-referential alias (`&a [*a]`) is still an unknown reference when
+        // the inner `*a` is reached, matching the fast decoder.
+        if let Some(name) = &anchor {
+            self.anchors_seen.insert(name.clone());
+        }
         node.anchor = anchor;
         node.tag = tag;
         node.comments = comments;

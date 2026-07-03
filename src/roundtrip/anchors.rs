@@ -431,13 +431,36 @@ mod tests {
 
     #[test]
     fn cyclic_anchor_terminates_via_depth_cap() {
-        // A self-referential anchor (`&x` whose value contains `*x`) would recurse
-        // forever without the alias-hop depth cap. This is cheap (the cap stops it
-        // after MAX_ALIAS_DEPTH hops); the larger alias-bomb class is bounded by
-        // the shared node budget in `build_anchor_map`, not exercised here because
-        // doing so would allocate up to that budget.
-        let map = build_anchor_map(&roots("a: &x\n  self: *x\n"));
+        // A self-referential anchor (`&x` whose value contains `*x`) is rejected at
+        // compose time now (an `*alias` must name an anchor already defined in the
+        // document), so a document can no longer build a cyclic AST. The alias-hop
+        // depth cap remains as defense-in-depth for a cycle constructed directly:
+        // build one by hand and confirm expansion terminates rather than recursing
+        // forever. The larger alias-bomb class is bounded by the shared node budget
+        // in `build_anchor_map`, not exercised here because it would allocate up to
+        // that budget.
+        let zero = Span {
+            file_id: 0,
+            line: 0,
+            column: 0,
+            offset: 0,
+        };
+        let mut node = YamlNode::new(
+            YamlNodeKind::Mapping(vec![(
+                YamlNode::new(
+                    YamlNodeKind::Scalar("self".to_owned(), crate::scanner::ScalarStyle::Plain),
+                    zero,
+                ),
+                YamlNode::new(YamlNodeKind::Alias("x".to_owned()), zero),
+            )]),
+            zero,
+        );
+        node.anchor = Some("x".to_owned());
+        let map = build_anchor_map(&[node]);
         assert!(map.contains_key("x"));
+
+        // And the composer refuses the same structure from a document.
+        assert!(compose("a: &x\n  self: *x\n").is_err());
     }
 
     #[test]

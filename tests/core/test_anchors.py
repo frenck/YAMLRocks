@@ -108,16 +108,45 @@ def test_deleting_a_nested_anchor_target_still_referenced_raises():
     assert yamlrocks.loads(doc.to_yaml())["ref"] == 1
 
 
-def test_deleting_unrelated_key_with_preexisting_dangling_alias_is_allowed():
-    """A delete is only blocked for an alias it *newly* orphans.
+def test_unknown_alias_is_rejected_on_every_load_path():
+    """An `*alias` that names no anchor is an error on every path, not a silent
+    null. The round-trip and includes paths run through the composer, which used
+    to skip this check and quietly resolve an undefined (or forward) reference to
+    `None`; they now reject it like the fast and annotated paths (and PyYAML)."""
+    import pytest
 
-    The round-trip path does not validate alias targets at load time, so a
-    document can already carry a dangling `*alias`. Deleting an unrelated key must
-    not be blamed for that pre-existing break.
-    """
-    doc = yamlrocks.loads(b"a: 1\nb: *ghost\nc: 3\n", option=yamlrocks.OPT_ROUND_TRIP)
-    del doc["c"]
-    assert doc.to_yaml() == b"a: 1\nb: *ghost\n"
+    for opt in (
+        0,
+        yamlrocks.OPT_ANNOTATED,
+        yamlrocks.OPT_ROUND_TRIP,
+        yamlrocks.OPT_INCLUDES,
+    ):
+        with pytest.raises(yamlrocks.YAMLRocksError, match="unknown alias"):
+            yamlrocks.loads(b"a: 1\nb: *ghost\n", option=opt)
+    # A forward reference (`*x` before `&x`) is likewise rejected, and an anchor
+    # does not leak across documents.
+    with pytest.raises(yamlrocks.YAMLRocksError, match="unknown alias"):
+        yamlrocks.loads(b"---\na: &x 1\n---\nb: *x\n", option=yamlrocks.OPT_ROUND_TRIP)
+
+
+def test_malformed_anchor_or_tag_is_rejected_on_every_load_path():
+    """An alias cannot carry its own anchor/tag, and a node cannot have two
+    anchors. The composer paths enforce this like the fast decoder (and PyYAML),
+    instead of silently accepting the malformed node."""
+    import pytest
+
+    for opt in (
+        0,
+        yamlrocks.OPT_ANNOTATED,
+        yamlrocks.OPT_ROUND_TRIP,
+        yamlrocks.OPT_INCLUDES,
+    ):
+        with pytest.raises(yamlrocks.YAMLRocksError, match="anchor or tag"):
+            yamlrocks.loads(b"a: &a 1\nb: &b *a\n", option=opt)
+        with pytest.raises(yamlrocks.YAMLRocksError, match="anchor or tag"):
+            yamlrocks.loads(b"a: &a 1\nb: !!str *a\n", option=opt)
+        with pytest.raises(yamlrocks.YAMLRocksError, match="two anchors"):
+            yamlrocks.loads(b"a: &a\n  &b 1\n", option=opt)
 
 
 def test_recursive_self_referential_alias_is_rejected():

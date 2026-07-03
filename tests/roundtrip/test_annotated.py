@@ -660,3 +660,28 @@ def test_source_target_survives_pickle(tmp_path):
 def test_bare_constructed_has_no_source_target():
     assert yamlrocks.YAMLRocksAnnotatedStr("x").__source_target__ is None
     assert yamlrocks.YAMLRocksAnnotatedDict().__source_target__ is None
+
+
+# -- An empty node keeps its tag's resolution on the AST paths ------------------
+# An empty scalar can still carry a tag (`k: !!str` is ""), so the annotated and
+# to_dict paths must resolve the tag against empty content like the fast decoder,
+# not drop it and return None.
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        (b"k: !!str\n", ""),
+        (b"k: !!null\n", None),
+        (b"k: !!str ''\n", ""),
+    ],
+)
+def test_empty_tagged_scalar_matches_fast_path(src, expected):
+    """An empty tagged scalar resolves the same on the annotated, to_dict, and
+    fast paths (regression: annotated returned None for an empty `!!str`)."""
+    fast = yamlrocks.loads(src)["k"]
+    assert fast == expected
+    assert yamlrocks.loads(src, option=ANN)["k"] == expected
+    assert (
+        yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_dict()["k"] == expected
+    )

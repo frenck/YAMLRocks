@@ -33,6 +33,18 @@ pub fn node_to_python_with(
 /// PyYAML (so `d['base'] is d['ref']`), instead of an independent copy.
 pub(crate) type ObjectCache = HashMap<String, Py<PyAny>>;
 
+/// Convert a resolved scalar value into its Python object.
+fn resolved_to_py(py: Python<'_>, resolved: ResolvedValue) -> Py<PyAny> {
+    match resolved {
+        ResolvedValue::Null => py.None(),
+        ResolvedValue::Bool(b) => b.into_pyobject(py).unwrap().to_owned().into_any().unbind(),
+        ResolvedValue::Int(i) => i.into_pyobject(py).unwrap().into_any().unbind(),
+        ResolvedValue::BigInt(s) => crate::ffi::py_int_from_decimal(py, &s),
+        ResolvedValue::Float(f) => PyFloat::new(py, f).into_any().unbind(),
+        ResolvedValue::String(s) => PyString::new(py, &s).into_any().unbind(),
+    }
+}
+
 /// Resolve a node to a Python value, sharing object identity across aliases via
 /// `cache`. An `&anchor`'s converted object is recorded under its name; a later
 /// `*alias` returns that same object (a new reference to it). Because a valid
@@ -72,19 +84,16 @@ fn node_to_python_cached_inner(
     }
 
     let obj = match &node.kind {
-        YamlNodeKind::Null => py.None(),
+        // An empty node can still carry a tag (`k: !!str` is "", `!!int` a typed
+        // error, and so on), so resolve the tag against empty content the way the
+        // fast decoder does. An untagged null, or a tag that resolves to null,
+        // stays `None`.
+        YamlNodeKind::Null => match node.tag.as_deref() {
+            Some(tag) => resolved_to_py(py, schema.resolve("", ScalarStyle::Plain, Some(tag))),
+            None => py.None(),
+        },
         YamlNodeKind::Scalar(value, style) => {
-            let resolved = schema.resolve(value, *style, node.tag.as_deref());
-            match resolved {
-                ResolvedValue::Null => py.None(),
-                ResolvedValue::Bool(b) => {
-                    b.into_pyobject(py).unwrap().to_owned().into_any().unbind()
-                }
-                ResolvedValue::Int(i) => i.into_pyobject(py).unwrap().into_any().unbind(),
-                ResolvedValue::BigInt(s) => crate::ffi::py_int_from_decimal(py, &s),
-                ResolvedValue::Float(f) => PyFloat::new(py, f).into_any().unbind(),
-                ResolvedValue::String(s) => PyString::new(py, &s).into_any().unbind(),
-            }
+            resolved_to_py(py, schema.resolve(value, *style, node.tag.as_deref()))
         }
         YamlNodeKind::Sequence(items) => {
             let list = PyList::empty(py);

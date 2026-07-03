@@ -407,3 +407,12 @@ def test_yaml_11_underscored_big_integer_loads_as_int(text, expected):
     value = yamlrocks.loads(text.encode(), option=yamlrocks.OPT_YAML_1_1)
     assert isinstance(value, int) and not isinstance(value, bool)
     assert value == expected
+
+
+@pytest.mark.parametrize("text", ["+-80", "-+80", "++80", "--80", "+-1_0"])
+def test_double_sign_is_a_string_not_a_number(text):
+    """A scalar with more than one leading sign is not a number: `+-80` is the
+    string "+-80", not -80 (the sign is consumed once, the body must not carry
+    another). Checked in both schemas since each has its own integer parser."""
+    assert yamlrocks.loads(text.encode()) == text
+    assert yamlrocks.loads(text.encode(), option=yamlrocks.OPT_YAML_1_1) == text

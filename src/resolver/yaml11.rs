@@ -188,7 +188,10 @@ fn try_parse_int_11(value: &str) -> Option<i64> {
         // Sexagesimal: 1:30 = 90
         parse_sexagesimal_int(clean)?
     } else {
-        clean.parse::<i64>().ok()?
+        // `split_sign` already consumed the one allowed sign, so a further sign
+        // in the body (`+-80`, `--80`) is not a number; the unsigned parse
+        // rejects it, unlike `i64::parse`, matching the radix paths above.
+        super::from_radix_unsigned(clean, 10)?
     };
 
     if negative {

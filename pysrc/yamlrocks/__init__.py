@@ -144,6 +144,8 @@ class _SourceTagProvenance:
     The booleans are convenience checks over the built-in config-tag subset.
     """
 
+    __slots__ = ()
+
     __source_tag__: str | None
 
     @property
@@ -177,6 +179,19 @@ class YAMLRocksAnnotatedStr(str, _SourceTagProvenance):
     Defined in Python because a native extension cannot efficiently subclass the
     immutable ``str`` type.
     """
+
+    __slots__ = (
+        "__column__",
+        "__end_column__",
+        "__end_line__",
+        "__end_offset__",
+        "__file__",
+        "__line__",
+        "__offset__",
+        "__source_tag__",
+        "__source_target__",
+        "__style__",
+    )
 
     __line__: int
     __column__: int

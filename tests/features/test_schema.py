@@ -716,3 +716,29 @@ def test_multiple_of_is_exact_for_integers():
     # A clearly non-integral float multiple is rejected.
     with pytest.raises(yamlrocks.YAMLRocksSchemaError):
         yamlrocks.loads(b"3.0000001\n", schema={"multipleOf": 1.0})
+
+
+def test_numeric_checks_handle_yaml_1_1_underscore_big_ints():
+    """A YAML 1.1 big-int literal keeps its `_` separators in the resolved value,
+    so the numeric checks must strip them before parsing. Otherwise the parse
+    failed and the whole numeric check (multipleOf, minimum, ...) was silently
+    skipped, letting an odd big integer pass `multipleOf: 2`."""
+    opt = yamlrocks.OPT_YAML_1_1
+    # Odd big int with separators is not a multiple of 2; even one is.
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(
+            b"20_000_000_000_000_000_001\n", option=opt, schema={"multipleOf": 2}
+        )
+    assert (
+        yamlrocks.loads(
+            b"20_000_000_000_000_000_000\n", option=opt, schema={"multipleOf": 2}
+        )
+        == 20000000000000000000
+    )
+    # A bound check on the same literal is enforced, not skipped.
+    with pytest.raises(yamlrocks.YAMLRocksSchemaError):
+        yamlrocks.loads(
+            b"20_000_000_000_000_000_001\n",
+            option=opt,
+            schema={"minimum": 99999999999999999999999},
+        )

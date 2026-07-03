@@ -574,7 +574,9 @@ fn check_numeric(
 fn as_i128(value: &Value) -> Option<i128> {
     match value {
         Value::Int(i) => Some(*i as i128),
-        Value::BigInt(s) => s.parse().ok(),
+        // A `BigInt` keeps its source lexeme, so a YAML 1.1 literal retains its
+        // `_` digit separators; strip them before parsing (see `as_f64`).
+        Value::BigInt(s) => s.replace('_', "").parse().ok(),
         _ => None,
     }
 }
@@ -1064,8 +1066,11 @@ fn as_f64(value: &Value) -> Option<f64> {
         Value::Int(i) => Some(*i as f64),
         Value::Float(f) => Some(*f),
         // A big integer is compared lossily against `minimum`/`maximum`, matching
-        // how a JSON Schema validator coerces it to a number for bound checks.
-        Value::BigInt(s) => s.parse::<f64>().ok(),
+        // how a JSON Schema validator coerces it to a number for bound checks. Its
+        // lexeme keeps any YAML 1.1 `_` digit separators, so strip them first;
+        // otherwise the parse fails and the whole numeric check is skipped (the
+        // value would slip past `minimum`/`maximum`/`multipleOf` entirely).
+        Value::BigInt(s) => s.replace('_', "").parse::<f64>().ok(),
         _ => None,
     }
 }

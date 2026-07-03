@@ -90,6 +90,26 @@ def test_dumps_sort_keys():
     assert out == b"a: 2\nb: 3\nc: 1\n"
 
 
+def test_dumps_sort_keys_orders_non_string_keys():
+    """OPT_SORT_KEYS sorts non-string keys too, not only strings: integers sort
+    numerically (like PyYAML), and mixed keys group by type (null, bool, number,
+    string) rather than leaving non-string keys in insertion order."""
+    assert yamlrocks.dumps(
+        {3: "a", 1: "b", 10: "c", 2: "d"}, option=yamlrocks.OPT_SORT_KEYS
+    ) == (b"1: b\n2: d\n3: a\n10: c\n")
+    assert (
+        yamlrocks.dumps(
+            {"z": 1, 2: 2, True: 3, None: 4, "a": 5}, option=yamlrocks.OPT_SORT_KEYS
+        )
+        == b"null: 4\ntrue: 3\n2: 2\na: 5\nz: 1\n"
+    )
+    # Big integers (past i64) sort by magnitude, interleaved with small ints.
+    big = {30000000000000000000: "c", 5: "small", 20000000000000000000: "b"}
+    assert yamlrocks.dumps(big, option=yamlrocks.OPT_SORT_KEYS) == (
+        b"5: small\n20000000000000000000: b\n30000000000000000000: c\n"
+    )
+
+
 def test_dumps_indent_4():
     """Dump nested blocks with four-space indentation via OPT_INDENT_4."""
     out = yamlrocks.dumps({"a": {"b": 1}}, option=yamlrocks.OPT_INDENT_4)

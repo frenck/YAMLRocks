@@ -587,7 +587,7 @@ impl<'a> Emitter<'a> {
     ) -> Vec<&'p (Value<'v>, Value<'v>)> {
         let mut refs: Vec<&(Value<'v>, Value<'v>)> = pairs.iter().collect();
         if self.options.sort_keys {
-            refs.sort_by(|(a, _), (b, _)| key_sort_str(a).cmp(key_sort_str(b)));
+            refs.sort_by(|(a, _), (b, _)| compare_keys(a, b));
         }
         refs
     }
@@ -668,12 +668,52 @@ impl<'a> Emitter<'a> {
     }
 }
 
-/// Borrow a string view of a key for sorting; non-strings sort as empty.
-fn key_sort_str<'v>(value: &'v Value<'_>) -> &'v str {
-    match value {
-        Value::String(s) => s.as_ref(),
-        _ => "",
+/// Total ordering of mapping keys for `sort_keys`, so *every* key type sorts
+/// deterministically, not just strings (previously a non-string key sorted as an
+/// empty string, leaving numeric/bool keys in insertion order and floating them
+/// ahead of string keys). Keys are grouped by type, then ordered within a group:
+/// booleans `false` before `true`, numbers numerically (matching PyYAML's numeric
+/// sort, so the PyYAML-compat `dumps` agrees), strings lexically. Every complex
+/// key (a sequence, mapping, or tagged node) shares one rank, so complex keys
+/// keep their relative input order via the stable sort. A pure string-keyed
+/// mapping, the common case, is unchanged.
+fn compare_keys(a: &Value, b: &Value) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    fn rank(v: &Value) -> u8 {
+        match v {
+            Value::Null => 0,
+            Value::Bool(_) => 1,
+            Value::Int(_) | Value::BigInt(_) | Value::Float(_) => 2,
+            Value::String(_) => 3,
+            // All complex keys share a rank so the stable sort leaves them in
+            // input order (there is no meaningful cross-type ordering for them).
+            Value::Sequence(_) | Value::Mapping(_) | Value::Tagged(..) => 4,
+        }
     }
+
+    // A number's `f64` value, for cross-representation numeric ordering. Exact for
+    // the common `Int` vs `Int` case (handled before this); adequate for ordering
+    // elsewhere (a huge `BigInt` may tie, which the stable sort then leaves in
+    // input order). Underscores are stripped, since a YAML 1.1 big-int literal
+    // keeps its digit separators (`2_000`), which `parse` would otherwise reject.
+    fn num(v: &Value) -> f64 {
+        match v {
+            Value::Int(i) => *i as f64,
+            Value::Float(f) => *f,
+            Value::BigInt(s) => s.replace('_', "").parse::<f64>().unwrap_or(f64::NAN),
+            _ => f64::NAN,
+        }
+    }
+
+    rank(a).cmp(&rank(b)).then_with(|| match (a, b) {
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::String(x), Value::String(y)) => x.as_ref().cmp(y.as_ref()),
+        _ if rank(a) == 2 => num(a).total_cmp(&num(b)),
+        // Null, or two complex keys: keep the stable sort's input order.
+        _ => Ordering::Equal,
+    })
 }
 
 /// Whether the string contains a flow indicator (`,` `[` `]` `{` `}`) anywhere.
@@ -1220,6 +1260,69 @@ mod tests {
             (s("b"), Value::Int(3)),
         ]);
         assert_eq!(emit(&v, &opts), "a: 2\nb: 3\nc: 1\n");
+    }
+
+    #[test]
+    fn sort_keys_orders_non_string_keys() {
+        let opts = EmitOptions {
+            sort_keys: true,
+            ..EmitOptions::default()
+        };
+        // Integer keys sort numerically (not by insertion order, and not lexically
+        // where `10` would precede `2`).
+        let ints = Value::Mapping(vec![
+            (Value::Int(10), s("a")),
+            (Value::Int(2), s("b")),
+            (Value::Int(1), s("c")),
+        ]);
+        assert_eq!(emit(&ints, &opts), "1: c\n2: b\n10: a\n");
+        // Mixed types group by kind: null, bool (false < true), numbers, strings.
+        let mixed = Value::Mapping(vec![
+            (s("z"), Value::Int(1)),
+            (Value::Int(3), Value::Int(2)),
+            (Value::Bool(true), Value::Int(3)),
+            (Value::Null, Value::Int(4)),
+            (Value::Bool(false), Value::Int(5)),
+            (s("a"), Value::Int(6)),
+        ]);
+        assert_eq!(
+            emit(&mixed, &opts),
+            "null: 4\nfalse: 5\ntrue: 3\n3: 2\na: 6\nz: 1\n"
+        );
+    }
+
+    #[test]
+    fn sort_keys_orders_big_ints_and_keeps_complex_keys_stable() {
+        use std::borrow::Cow;
+        let opts = EmitOptions {
+            sort_keys: true,
+            ..EmitOptions::default()
+        };
+        // Big integers (past i64) sort by magnitude, interleaving with `Int`, and
+        // a big-int literal that kept its `_` digit separators still parses.
+        let bigints = Value::Mapping(vec![
+            (Value::BigInt(Cow::Borrowed("30000000000000000000")), s("c")),
+            (Value::Int(5), s("small")),
+            (
+                Value::BigInt(Cow::Borrowed("2_0000000000000000000")),
+                s("b"),
+            ),
+        ]);
+        // The `_` separators are kept verbatim in the emitted key text (the
+        // emitter writes the big-int lexeme as-is); only the *ordering* strips
+        // them, so `2_0…` (= 2e19) still sorts before `3…` (= 3e19).
+        assert_eq!(
+            emit(&bigints, &opts),
+            "5: small\n2_0000000000000000000: b\n30000000000000000000: c\n"
+        );
+        // Every complex key shares one rank, so a sequence and a mapping key keep
+        // their input order rather than being grouped by variant.
+        let complex = Value::Mapping(vec![
+            (Value::Sequence(vec![Value::Int(2)]), s("seq2")),
+            (Value::Mapping(vec![(s("m"), Value::Int(1))]), s("map")),
+            (Value::Sequence(vec![Value::Int(1)]), s("seq1")),
+        ]);
+        assert_eq!(emit(&complex, &opts), "[2]: seq2\n{m: 1}: map\n[1]: seq1\n");
     }
 
     #[test]

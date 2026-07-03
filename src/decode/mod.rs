@@ -86,6 +86,17 @@ pub fn is_custom_tag(tag: &str) -> bool {
     !(tag.starts_with("!!") || tag.starts_with("tag:yaml.org,2002:"))
 }
 
+/// Canonicalize a verbatim tag `!<uri>` to the bare `uri` it names, so a tag
+/// handler or the passthrough `YAMLRocksTag` sees the resolved URI
+/// (`tag:example.com,2020:foo`) rather than the `!<...>` wrapper. This matches
+/// how a `%TAG`-shorthand tag is already expanded, so the two spellings of the
+/// same tag reach the caller identically. Any non-verbatim tag is unchanged.
+pub(crate) fn canonical_tag(tag: &str) -> &str {
+    tag.strip_prefix("!<")
+        .and_then(|inner| inner.strip_suffix('>'))
+        .unwrap_or(tag)
+}
+
 /// Move ownership of the scalar text out of the `Scalar` event at `pos`, leaving
 /// the event's text empty. The decoder calls this exactly once as it consumes a
 /// scalar, handing the string straight to a `Value::String` without a copy.

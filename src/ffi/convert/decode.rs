@@ -15,13 +15,19 @@ pub(super) fn resolve_tagged(
     inner: Py<PyAny>,
     tags: TagPolicy<'_, '_>,
 ) -> PyResult<Py<PyAny>> {
+    // Canonicalize a verbatim `!<uri>` to its bare URI for a registry lookup and
+    // the handler callback, so both see the resolved tag (`tag:example.com,2020:foo`),
+    // matching `%TAG`-shorthand expansion. A passthrough `YAMLRocksTag` keeps the
+    // original `!<...>` spelling: `dumps`/`validate_tag` require a leading `!`, so a
+    // bare URI could not be re-emitted and a load/dump round-trip would break.
+    let canonical = crate::decode::canonical_tag(tag);
     if let Some(registry) = tags.registry {
-        if let Some(func) = registry.get_item(tag)? {
+        if let Some(func) = registry.get_item(canonical)? {
             return Ok(func.call1((inner,))?.unbind());
         }
     }
     if let Some(handler) = tags.handler {
-        return Ok(handler.call1((tag, inner))?.unbind());
+        return Ok(handler.call1((canonical, inner))?.unbind());
     }
     if tags.passthrough {
         return Ok(YAMLRocksTag {

@@ -167,6 +167,8 @@ pub(crate) fn mapping_has_merge_key(pairs: &[(YamlNode, YamlNode)]) -> bool {
 /// - A sequence merges each element and returns only the elements that could not
 ///   be merged, as a list (`None` if all merged), so a mergeable element is not
 ///   also duplicated under `<<`. Mirrors the fast path's `merge_into`.
+/// - A null value contributes nothing and returns `None` (dropped), so an empty
+///   `<<:` leaves no key.
 /// - Anything else (a scalar or custom-tagged node) is returned as-is to
 ///   preserve under `<<`, exactly as the fast path does.
 ///
@@ -176,7 +178,13 @@ pub(crate) fn merge_converted_into<'py>(
     dict: &Bound<'py, PyDict>,
     source: &Bound<'py, PyAny>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    if let Ok(src) = source.cast::<PyDict>() {
+    if source.is_none() {
+        // A null merge value (`<<: ~`, an empty `<<:`, or a `null` element of a
+        // merge list) contributes nothing and leaves no `<<` key, matching the
+        // fast path (`Value::Null => None` in `decode::merge`). Without this it
+        // fell through to the preserve arm below and kept a literal `<<: None`.
+        Ok(None)
+    } else if let Ok(src) = source.cast::<PyDict>() {
         for (k, v) in src.iter() {
             if !dict.contains(&k)? {
                 dict.set_item(k, v)?;

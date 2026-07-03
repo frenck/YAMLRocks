@@ -20,7 +20,9 @@ These behaviors are treated as core. Regressions here are bugs.
 - **YAML 1.2 by default**: `yes`, `no`, `on`, and `off` are strings unless YAML
   1.1 mode is explicitly requested.
 - **Round-trip preservation**: a document loaded with `OPT_ROUND_TRIP` preserves
-  comments, anchors, and formatting; an unmodified document re-emits byte-for-byte.
+  comments, anchors, and formatting; an unmodified UTF-8 document re-emits
+  byte-for-byte. (UTF-16 and UTF-32 are read per the spec but re-emit as UTF-8,
+  so byte fidelity is a UTF-8 guarantee.)
 - **Real-world verification**: standalone YAML files in the public compatibility
   corpus parse and round-trip without loss.
 - **Structured errors**: YAMLRocks errors carry machine-readable location

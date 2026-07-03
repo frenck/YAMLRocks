@@ -504,6 +504,11 @@ impl<'input> Decoder<'input> {
                     }
                     directives_allowed = false;
                     self.tag_handles.clear();
+                    // Anchors do not span documents (same as the explicit `---`
+                    // arm above): an `&a` in this implicit document must not be
+                    // resolvable by an `*a` in the next, or a cross-document
+                    // reference silently resolves instead of raising.
+                    self.anchors.clear();
                     // `decode_node` returns `None` without consuming on a bare
                     // terminator (e.g. a leading `...`); force progress so the
                     // stream loop always terminates.

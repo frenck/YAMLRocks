@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="556.138125pt" height="251.466352pt" viewBox="0 0 556.138125 251.466352" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-07-04T10:47:56.872240</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.0, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 251.466352
+L 556.138125 251.466352
+L 556.138125 0
+L 0 0
+z
+" style="fill: #13151c"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 91.378125 202.941969
+L 548.938125 202.941969
+L 548.938125 31.077969
+L 91.378125 31.077969
+z
+" style="fill: #13151c"/>
+   </g>
+   <g id="matplotlib.axis_1"/>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_1"/>
+     <g id="text_1">
+      <text style="font-size: 10px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #e6edf3" x="87.878125" y="76.488298" transform="rotate(-0 87.878125 76.488298)">Reading (loads)</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_2"/>
+     <g id="text_2">
+      <text style="font-size: 10px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #e6edf3" x="87.878125" y="165.130077" transform="rotate(-0 87.878125 165.130077)">Writing (dumps)</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 91.378125 202.941969
+L 548.938125 202.941969
+" style="fill: none; stroke: #2a2e38; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 91.378125 38.889969
+L 180.170376 38.889969
+L 180.170376 70.14506
+L 91.378125 70.14506
+z
+" clip-path="url(#pdd2bba842d)" style="fill: #24fefd"/>
+   </g>
+   <g id="text_3">
+    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="183.060229" y="56.725854" transform="rotate(-0 183.060229 56.725854)">2.7x faster · 1.5 ms</text>
+   </g>
+   <g id="patch_5">
+    <path d="M 91.378125 75.233098
+L 332.199178 75.233098
+L 332.199178 106.48819
+L 91.378125 106.48819
+z
+" clip-path="url(#pdd2bba842d)" style="fill: #5b626d"/>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="335.08903" y="92.938769" transform="rotate(-0 335.08903 92.938769)">4.1 ms</text>
+   </g>
+   <g id="patch_6">
+    <path d="M 91.378125 127.531748
+L 139.034677 127.531748
+L 139.034677 158.786839
+L 91.378125 158.786839
+z
+" clip-path="url(#pdd2bba842d)" style="fill: #24fefd"/>
+   </g>
+   <g id="text_5">
+    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="141.92453" y="145.367633" transform="rotate(-0 141.92453 145.367633)">3.5x faster · 815 µs</text>
+   </g>
+   <g id="patch_7">
+    <path d="M 91.378125 163.874877
+L 258.778382 163.874877
+L 258.778382 195.129969
+L 91.378125 195.129969
+z
+" clip-path="url(#pdd2bba842d)" style="fill: #5b626d"/>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="261.668235" y="181.580548" transform="rotate(-0 261.668235 181.580548)">2.9 ms</text>
+   </g>
+   <g id="text_7">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="91.378125" y="17.077969" transform="rotate(-0 91.378125 17.077969)">YAMLRocks vs ryaml</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_8">
+     <path d="M 235.20375 238.504243
+L 253.20375 238.504243
+L 253.20375 232.204242
+L 235.20375 232.204242
+z
+" style="fill: #24fefd; stroke: #24fefd; stroke-linejoin: miter"/>
+    </g>
+    <g id="text_8">
+     <text style="font-size: 9px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="260.40375" y="238.504243" transform="rotate(-0 260.40375 238.504243)">YAMLRocks</text>
+    </g>
+    <g id="patch_9">
+     <path d="M 328.343906 238.504243
+L 346.343906 238.504243
+L 346.343906 232.204242
+L 328.343906 232.204242
+z
+" style="fill: #5b626d; stroke: #5b626d; stroke-linejoin: miter"/>
+    </g>
+    <g id="text_9">
+     <text style="font-size: 9px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="353.543906" y="238.504243" transform="rotate(-0 353.543906 238.504243)">ryaml 0.5.1</text>
+    </g>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pdd2bba842d">
+   <rect x="91.378125" y="31.077969" width="457.56" height="171.864"/>
+  </clipPath>
+ </defs>
+</svg>

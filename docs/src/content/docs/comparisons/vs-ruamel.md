@@ -32,6 +32,8 @@ exhaustive comment surgery, covered honestly below.
 
 ## Speed: Rust vs pure Python
 
+![YAMLRocks vs ruamel.yaml on reading and writing: YAMLRocks is one to two orders of magnitude faster on both.](/benchmarks/vs-ruamel.svg)
+
 ruamel.yaml is implemented entirely in Python, which makes it flexible but slow.
 YAMLRocks does the same work in Rust and materializes results across the PyO3
 boundary, so the same parse or dump is one to two orders of magnitude faster.

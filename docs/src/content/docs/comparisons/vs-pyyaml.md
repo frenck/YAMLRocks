@@ -148,6 +148,8 @@ to be [yamllint](https://yamllint.readthedocs.io/)-clean by default.
 
 ## Performance
 
+![YAMLRocks vs PyYAML's C loader on reading and writing: YAMLRocks is about ten times faster on both.](/benchmarks/vs-pyyaml.svg)
+
 Indicative figures from `python bench/bench.py` (release build), showing how many
 times **faster YAMLRocks is** than PyYAML. The C loader (`libyaml`) is the harder
 target; the pure-Python loader is what most environments fall back to.

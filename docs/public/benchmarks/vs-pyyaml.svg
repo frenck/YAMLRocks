@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="556.138125pt" height="310.454512pt" viewBox="0 0 556.138125 310.454512" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-07-04T10:47:56.730493</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.0, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 310.454512
+L 556.138125 310.454512
+L 556.138125 0
+L 0 0
+z
+" style="fill: #13151c"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 91.378125 255.609969
+L 548.938125 255.609969
+L 548.938125 31.077969
+L 91.378125 31.077969
+z
+" style="fill: #13151c"/>
+   </g>
+   <g id="matplotlib.axis_1"/>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_1"/>
+     <g id="text_1">
+      <text style="font-size: 10px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #e6edf3" x="87.878125" y="89.861888" transform="rotate(-0 87.878125 89.861888)">Reading (loads)</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_2"/>
+     <g id="text_2">
+      <text style="font-size: 10px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #e6edf3" x="87.878125" y="204.424487" transform="rotate(-0 87.878125 204.424487)">Writing (dumps)</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 91.378125 255.609969
+L 548.938125 255.609969
+" style="fill: none; stroke: #2a2e38; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 91.378125 41.283969
+L 93.811018 41.283969
+L 93.811018 68.213817
+L 91.378125 68.213817
+z
+" clip-path="url(#pf583515795)" style="fill: #24fefd"/>
+   </g>
+   <g id="text_3">
+    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="96.70087" y="56.956901" transform="rotate(-0 96.70087 56.956901)">1.5 ms</text>
+   </g>
+   <g id="patch_5">
+    <path d="M 91.378125 72.597746
+L 117.282554 72.597746
+L 117.282554 99.527594
+L 91.378125 99.527594
+z
+" clip-path="url(#pf583515795)" style="fill: #5b626d"/>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="120.172407" y="88.141107" transform="rotate(-0 120.172407 88.141107)">16.2 ms · 11x slower</text>
+   </g>
+   <g id="patch_6">
+    <path d="M 91.378125 103.911522
+L 332.199178 103.911522
+L 332.199178 130.841371
+L 91.378125 130.841371
+z
+" clip-path="url(#pf583515795)" style="fill: #41464f"/>
+   </g>
+   <g id="text_5">
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="335.08903" y="119.454884" transform="rotate(-0 335.08903 119.454884)">150.3 ms · 99x slower</text>
+   </g>
+   <g id="patch_7">
+    <path d="M 91.378125 155.846567
+L 92.683907 155.846567
+L 92.683907 182.776415
+L 91.378125 182.776415
+z
+" clip-path="url(#pf583515795)" style="fill: #24fefd"/>
+   </g>
+   <g id="text_6">
+    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="95.573759" y="171.519499" transform="rotate(-0 95.573759 171.519499)">815 µs</text>
+   </g>
+   <g id="patch_8">
+    <path d="M 91.378125 187.160344
+L 115.308489 187.160344
+L 115.308489 214.090192
+L 91.378125 214.090192
+z
+" clip-path="url(#pf583515795)" style="fill: #5b626d"/>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="118.198342" y="202.703705" transform="rotate(-0 118.198342 202.703705)">14.9 ms · 18x slower</text>
+   </g>
+   <g id="patch_9">
+    <path d="M 91.378125 218.474121
+L 230.830332 218.474121
+L 230.830332 245.403969
+L 91.378125 245.403969
+z
+" clip-path="url(#pf583515795)" style="fill: #41464f"/>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="233.720184" y="234.017482" transform="rotate(-0 233.720184 234.017482)">87.0 ms · 107x slower</text>
+   </g>
+   <g id="text_9">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="91.378125" y="17.077969" transform="rotate(-0 91.378125 17.077969)">YAMLRocks vs PyYAML</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_10">
+     <path d="M 140.219297 297.492402
+L 158.219297 297.492402
+L 158.219297 291.192402
+L 140.219297 291.192402
+z
+" style="fill: #24fefd; stroke: #24fefd; stroke-linejoin: miter"/>
+    </g>
+    <g id="text_10">
+     <text style="font-size: 9px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="165.419297" y="297.492402" transform="rotate(-0 165.419297 297.492402)">YAMLRocks</text>
+    </g>
+    <g id="patch_11">
+     <path d="M 233.359453 297.492402
+L 251.359453 297.492402
+L 251.359453 291.192402
+L 233.359453 291.192402
+z
+" style="fill: #5b626d; stroke: #5b626d; stroke-linejoin: miter"/>
+    </g>
+    <g id="text_11">
+     <text style="font-size: 9px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="258.559453" y="297.492402" transform="rotate(-0 258.559453 297.492402)">PyYAML (C loader) 6.0.3</text>
+    </g>
+    <g id="patch_12">
+     <path d="M 384.309141 297.492402
+L 402.309141 297.492402
+L 402.309141 291.192402
+L 384.309141 291.192402
+z
+" style="fill: #41464f; stroke: #41464f; stroke-linejoin: miter"/>
+    </g>
+    <g id="text_12">
+     <text style="font-size: 9px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="409.509141" y="297.492402" transform="rotate(-0 409.509141 297.492402)">PyYAML (pure) 6.0.3</text>
+    </g>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pf583515795">
+   <rect x="91.378125" y="31.077969" width="457.56" height="224.532"/>
+  </clipPath>
+ </defs>
+</svg>

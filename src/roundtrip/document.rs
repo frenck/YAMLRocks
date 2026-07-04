@@ -881,6 +881,44 @@ impl YAMLRocksNode {
         Ok(())
     }
 
+    /// The trailing comment line(s) after this node, joined by newlines, or
+    /// `None`. For a block collection this is the comment block at the end of the
+    /// mapping or sequence, indented with its contents; for the document root it
+    /// is the comment block at the end of the file.
+    #[getter]
+    fn comment_after(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        let doc = self.root.borrow(py);
+        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+        Ok(join_comment_lines(&node.comments.foot))
+    }
+
+    /// Set or clear the trailing comment after this node. A multi-line string
+    /// becomes one comment line per line; `None` removes it. On a block mapping or
+    /// sequence the block is emitted at the collection's own indent, after its
+    /// last entry; on the document root it is a comment at the end of the file.
+    ///
+    /// A foot comment only has a well-defined rendered position after a block
+    /// collection or at the document root. Setting one on a scalar or a flow
+    /// collection (anywhere but the root) has nowhere to emit, so it is rejected
+    /// with `ValueError` rather than stored and silently dropped on re-emit.
+    /// Clearing (`None`) is always allowed.
+    #[setter]
+    fn set_comment_after(&self, py: Python<'_>, text: Option<String>) -> PyResult<()> {
+        let mut doc = self.root.borrow_mut(py);
+        let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
+        // The root (an empty path) renders a foot for any node kind; elsewhere
+        // only a non-empty block mapping or sequence does.
+        if text.is_some() && !self.path.is_empty() && !renders_foot(node) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "comment_after is only supported on a block mapping, a block \
+                 sequence, or the document root",
+            ));
+        }
+        node.comments.foot = split_comment_lines(text);
+        node.mark_modified();
+        Ok(())
+    }
+
     /// The presentation style: a scalar's quoting (`plain`, `single`, `double`,
     /// `literal`, `folded`), a collection's layout (`block`, `flow`), `alias`,
     /// or `null`.
@@ -1185,6 +1223,21 @@ fn split_comment_lines(text: Option<String>) -> Vec<String> {
     match text {
         None => Vec::new(),
         Some(s) => s.split('\n').map(|line| line.to_owned()).collect(),
+    }
+}
+
+/// Whether the emitter renders a node's foot comment in place: only after a
+/// non-empty block mapping or sequence (an empty or flow collection emits inline
+/// with no foot position). The document root is handled separately by its caller,
+/// since its foot renders for any node kind.
+fn renders_foot(node: &YamlNode) -> bool {
+    if node.style != NodeStyle::Block {
+        return false;
+    }
+    match &node.kind {
+        YamlNodeKind::Mapping(pairs) => !pairs.is_empty(),
+        YamlNodeKind::Sequence(items) => !items.is_empty(),
+        _ => false,
     }
 }
 

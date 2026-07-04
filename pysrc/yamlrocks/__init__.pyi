@@ -144,6 +144,7 @@ class YAMLRocksNode:
     value: Any
     comment: str | None
     comment_before: str | None
+    comment_after: str | None
     anchor: str | None
     @property
     def line(self) -> int: ...

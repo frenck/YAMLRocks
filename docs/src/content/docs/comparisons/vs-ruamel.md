@@ -27,7 +27,7 @@ exhaustive comment surgery, covered honestly below.
 | Source line/column             |         partial         |      Yes (annotated mode)       |
 | JSON Schema validation         |           No            |               Yes               |
 | Save only changed files        |           No            |               Yes               |
-| Per-node comment editing API   | Yes (`.ca`, exhaustive) | Yes (inline + leading comments) |
+| Per-node comment editing API   | Yes (`.ca`, exhaustive) | Yes (inline, leading, trailing) |
 | Output type                    |   `str` (to a stream)   |             `bytes`             |
 
 ## Speed: Rust vs pure Python
@@ -123,8 +123,9 @@ editing one automation and saving only `automations.yaml`.
 ## Scripting comments
 
 YAMLRocks does more than _preserve_ comments through a round-trip: every
-`YAMLRocksNode` exposes a writable `comment` (the inline `# ...` after a value) and
-`comment_before` (the standalone line(s) above a key). A tool can read, add, edit,
+`YAMLRocksNode` exposes a writable `comment` (the inline `# ...` after a value),
+`comment_before` (the standalone line(s) above a key), and `comment_after` (the
+trailing block at the foot of a mapping or sequence). A tool can read, add, edit,
 remove, or move a comment (read it from one node, set it on another) and re-emit.
 This works on mapping values, keys, and sequence items alike, and on keys you add
 to a loaded document.
@@ -136,19 +137,17 @@ doc = yamlrocks.loads(b"name: app\nport: 8080\n", option=yamlrocks.OPT_ROUND_TRI
 
 doc.node["port"].comment = "the listen port"          # inline, no '#'
 doc.node["name"].comment_before = "service identity"  # standalone line above
+doc.node.comment_after = "end of config"              # trailing block (foot)
 doc.to_yaml()
-# b'# service identity\nname: app\nport: 8080 # the listen port\n'
+# b'# service identity\nname: app\nport: 8080 # the listen port\n# end of config\n'
 ```
 
 ## Where ruamel.yaml is still richer
 
-Two cases remain ruamel's. **Foot comments**, a trailing comment block at the end
-of a mapping or sequence, are preserved through a YAMLRocks round-trip but are not
-yet writable through the node API (only inline and leading comments are). And
-**building a fully commented document from nothing** needs ruamel: YAMLRocks edits
+**Building a fully commented document from nothing** needs ruamel: YAMLRocks edits
 comments on a loaded document rather than assembling one with no parsed source.
-ruamel's `.ca` API also reaches a few unusual placements that `comment` /
-`comment_before` do not.
+ruamel's `.ca` API also reaches a few unusual placements that `comment`,
+`comment_before`, and `comment_after` do not.
 
 On emitter configuration the two are closer than they once were: YAMLRocks's
 `dumps` takes an explicit `width`, indentation options (`OPT_INDENT_2` / `_4`,
@@ -159,11 +158,11 @@ intricate document transformations.
 
 ## When to stick with ruamel.yaml
 
-Reach for ruamel.yaml when you need foot comments or build a fully commented
-document from scratch, lean on its class-based representer/constructor extension
-points for deeply custom types, or perform intricate document surgery where its
-maturity matters more than throughput. For high-throughput loading and dumping,
-native includes, schema validation, scripting inline and leading comments, or
+Reach for ruamel.yaml when you need to build a fully commented document from
+scratch, lean on its class-based representer/constructor extension points for
+deeply custom types, or perform intricate document surgery where its maturity
+matters more than throughput. For high-throughput loading and dumping, native
+includes, schema validation, scripting inline, leading, and trailing comments, or
 byte-for-byte round-trip with file-aware saving, YAMLRocks is the faster,
 batteries-included choice.
 

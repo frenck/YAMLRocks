@@ -242,6 +242,9 @@ impl RoundTripEmitter {
                 self.buf.push(b'\n');
                 self.emit_head(&val.comments, child);
                 self.emit_block_mapping(m, child);
+                // A trailing comment block at the end of the mapping, indented
+                // with its keys.
+                self.emit_foot(&val.comments, child);
             }
             YamlNodeKind::Sequence(s) if val.style == NodeStyle::Block && !s.is_empty() => {
                 self.emit_anchor_tag_compact(val);
@@ -260,6 +263,9 @@ impl RoundTripEmitter {
                 };
                 self.emit_head(&val.comments, seq_indent);
                 self.emit_block_sequence(s, seq_indent);
+                // A trailing comment block at the end of the sequence, aligned
+                // with its dashes.
+                self.emit_foot(&val.comments, seq_indent);
             }
             // A `key:` with no value: emitted empty for a loaded null (preserving
             // it) and for a synthetic null whose style is `empty`. A synthetic
@@ -361,6 +367,8 @@ impl RoundTripEmitter {
                 self.buf.push(b' ');
                 self.emit_anchor_tag(item);
                 self.emit_block_mapping_after_dash(m, child);
+                // A trailing comment block at the end of this item's mapping.
+                self.emit_foot(&item.comments, child);
             }
             YamlNodeKind::Sequence(s) if item.style == NodeStyle::Block && !s.is_empty() => {
                 // A compact nested sequence (`- - 1`) keeps its first item on
@@ -372,6 +380,8 @@ impl RoundTripEmitter {
                     self.buf.push(b'\n');
                     self.emit_block_sequence(s, child);
                 }
+                // A trailing comment block at the end of this item's sequence.
+                self.emit_foot(&item.comments, child);
             }
             _ => {
                 // Restore the padding between the `-` and an inline item

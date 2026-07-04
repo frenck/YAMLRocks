@@ -189,6 +189,82 @@ def test_comment_before_on_first_key_replaces_leading_comment():
     assert doc.to_yaml().decode() == "# new leading\nkey: value\nother: 2\n"
 
 
+# -- Foot comments (comment_after) -------------------------------------------
+
+
+def test_set_comment_after_on_nested_mapping_indents_with_contents():
+    """comment_after on a block mapping trails its last entry, at the key indent."""
+    doc = load(b"parent:\n  a: 1\n  b: 2\nnext: 3\n")
+    doc.node["parent"].comment_after = "end of parent"
+    assert doc.to_yaml().decode() == (
+        "parent:\n  a: 1\n  b: 2\n  # end of parent\nnext: 3\n"
+    )
+
+
+def test_set_comment_after_on_sequence_aligns_with_dashes():
+    """comment_after on a block sequence trails its last item, multi-line aware."""
+    doc = load(b"items:\n  - x\n  - y\n")
+    doc.node["items"].comment_after = "line one\nline two"
+    assert doc.to_yaml().decode() == (
+        "items:\n  - x\n  - y\n  # line one\n  # line two\n"
+    )
+
+
+def test_set_comment_after_on_root_is_a_file_footer():
+    """comment_after on the document root emits a trailing comment at column 0."""
+    doc = load(b"a: 1\nb: 2\n")
+    doc.node.comment_after = "end of file"
+    assert doc.to_yaml().decode() == "a: 1\nb: 2\n# end of file\n"
+
+
+def test_read_document_trailing_comment_as_root_comment_after():
+    """A comment block at the end of the file reads back as the root's comment_after."""
+    doc = load(b"a: 1\n# footer\n")
+    assert doc.node.comment_after == "footer"
+
+
+def test_comment_after_absent_is_none():
+    """A node with no trailing comment reports comment_after as None."""
+    assert load(b"a: 1\n").node.comment_after is None
+
+
+def test_clear_comment_after():
+    """Setting comment_after to None removes the trailing comment block."""
+    doc = load(b"a: 1\n# footer\n")
+    doc.node.comment_after = None
+    assert doc.to_yaml().decode() == "a: 1\n"
+
+
+def test_comment_after_on_mapping_that_is_a_sequence_item():
+    """comment_after renders on a block mapping nested as a sequence item."""
+    doc = load(b"items:\n  - a: 1\n    b: 2\n")
+    doc.node["items"][0].comment_after = "end of item"
+    assert doc.to_yaml().decode() == ("items:\n  - a: 1\n    b: 2\n    # end of item\n")
+
+
+def test_comment_after_on_sequence_that_is_a_sequence_item():
+    """comment_after renders on a block sequence nested as a sequence item."""
+    doc = load(b"outer:\n  - - 1\n    - 2\n")
+    doc.node["outer"][0].comment_after = "end of inner"
+    assert doc.to_yaml().decode() == ("outer:\n  - - 1\n    - 2\n    # end of inner\n")
+
+
+def test_comment_after_on_scalar_is_rejected():
+    """A foot comment has no rendered position on a scalar, so setting it raises."""
+    doc = load(b"a: 1\nb: 2\n")
+    with pytest.raises(ValueError, match="comment_after"):
+        doc.node["a"].comment_after = "nowhere to go"
+    # Clearing is always allowed, even on a scalar.
+    doc.node["a"].comment_after = None
+
+
+def test_comment_after_on_flow_collection_is_rejected():
+    """A flow collection emits inline with no foot position, so setting it raises."""
+    doc = load(b"tags: [web, edge]\n")
+    with pytest.raises(ValueError, match="comment_after"):
+        doc.node["tags"].comment_after = "no foot in flow"
+
+
 # -- Value editing -----------------------------------------------------------
 
 

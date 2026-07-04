@@ -161,6 +161,48 @@ pub mod fuzz {
         }
     }
 
+    /// Resolve `!include`, `!include_dir_*`, `!secret`, and `!env_var` over a
+    /// caller-provided directory tree, driving the include engine the `parse`,
+    /// `decode`, and `roundtrip` targets never reach: tag-argument parsing, path
+    /// confinement, cycle detection, the diamond-lattice expansion budget, the
+    /// recursive directory walk, and `secrets.yaml` lookup. All three tag families
+    /// are enabled at once so their interaction is exercised too.
+    ///
+    /// The fuzz target (`fuzz/fuzz_targets/include.rs`) materializes the tree in a
+    /// temp directory and passes its canonical path here; this must be the
+    /// canonical (symlink-resolved) base so the confinement assertion below is
+    /// exact. The contract is the usual never-panic/never-hang/never-UB one *plus*
+    /// a hard security invariant: no file the resolver reads may escape the base
+    /// directory. A traversal (`!include ../../etc/passwd`) or a symlink swap must
+    /// surface as a confinement error, never as a path outside the tree.
+    pub fn include(canonical_base: &std::path::Path, root: &str) {
+        use crate::include::{IncludeResolver, ResolveTags};
+
+        let tags = ResolveTags {
+            includes: true,
+            secrets: true,
+            env_var: true,
+        };
+        let mut resolver = IncludeResolver::new(canonical_base, tags).with_dir_recursive(true);
+
+        // Resolution may fail (a missing file, a cycle, a traversal attempt, a
+        // blown expansion budget); those are clean errors, not crashes. The
+        // property is that it returns rather than panics or hangs.
+        let _ = resolver.load_str(root, None);
+
+        // Security invariant: every file the resolver registered (read, or the
+        // in-memory root placeholder) must live under the canonical base. A path
+        // outside it means confinement was bypassed, the one include bug that is
+        // silent rather than a crash.
+        let (files, _sources) = resolver.into_parts();
+        for path in &files {
+            assert!(
+                path.starts_with(canonical_base),
+                "include escaped the base directory\n  base: {canonical_base:?}\n  path: {path:?}"
+            );
+        }
+    }
+
     /// Emit `document` with `options`, re-decode the output, and assert the data
     /// survived unchanged. Shared by both differential targets so a divergence is
     /// reported identically (the panic message names the options that triggered

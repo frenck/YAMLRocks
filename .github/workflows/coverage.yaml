@@ -44,8 +44,9 @@ jobs:
         with:
           components: llvm-tools-preview
       - name: 🏗 Install dependencies
-        # numpy keeps the OPT_SERIALIZE_NUMPY path inside the coverage numbers.
-        run: uv sync --locked --no-install-project --no-default-groups --group build --group test --group numpy
+        # numpy keeps the OPT_SERIALIZE_NUMPY path inside the coverage numbers;
+        # proptest adds Hypothesis so the property tests run (and count) here.
+        run: uv sync --locked --no-install-project --no-default-groups --group build --group test --group numpy --group proptest
       - name: 🏗 Install cargo-llvm-cov
         # Pin the tool version (not just its locked deps) so coverage runs are
         # reproducible across CI. Bump this deliberately.

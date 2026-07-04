@@ -17,6 +17,11 @@ pyexe="$(python -c 'import sys; print(sys.executable)')"
 uv pip install --python "${pyexe}" --group test
 uv pip install --python "${pyexe}" --group numpy \
   || echo "::notice::numpy has no wheel on this target; its tests will skip"
+# Hypothesis ships ABI-specific wheels and has none for some targets here
+# (prerelease CPython, 32-bit/ARM Windows); best-effort, and the property tests
+# skip when it is absent, exactly like numpy above.
+uv pip install --python "${pyexe}" --group proptest \
+  || echo "::notice::hypothesis has no wheel on this target; property tests will skip"
 
 # Install the just-built wheel, offline (never PyPI), no deps (yamlrocks has
 # none of its own).

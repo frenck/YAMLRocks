@@ -111,9 +111,16 @@ export default defineConfig({
           label: "Comparisons",
           items: [
             { label: "How YAMLRocks compares", slug: "comparisons" },
+            { label: "Performance", slug: "guides/performance" },
             { label: "vs PyYAML", slug: "comparisons/vs-pyyaml" },
             { label: "vs ruamel.yaml", slug: "comparisons/vs-ruamel" },
-            { label: "Performance", slug: "guides/performance" },
+            { label: "vs yaml-rs", slug: "comparisons/vs-yaml-rs" },
+            { label: "vs fast-yaml", slug: "comparisons/vs-fast-yaml" },
+            { label: "vs ryaml", slug: "comparisons/vs-ryaml" },
+            { label: "vs py-yaml12", slug: "comparisons/vs-py-yaml12" },
+            { label: "vs yamlium", slug: "comparisons/vs-yamlium" },
+            { label: "vs strictyaml", slug: "comparisons/vs-strictyaml" },
+            { label: "vs oyaml", slug: "comparisons/vs-oyaml" },
           ],
         },
         {

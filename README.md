@@ -41,6 +41,16 @@ many times faster YAMLRocks is:
 | Serialize (`dumps`)                          |       ~15-19x faster | ~155-210x faster |
 | Split config (`!include`, hundreds of files) |          ~18x faster |              n/a |
 
+Across the wider field of Python YAML libraries, on both reading and writing:
+
+![Parsing throughput across Python YAML libraries: YAMLRocks is the fastest, ahead of yaml-rs, fast-yaml, py-yaml12, ryaml, PyYAML's C loader, and far ahead of the pure-Python libraries.](docs/public/benchmarks/load.svg)
+
+![Serializing throughput across Python YAML libraries: YAMLRocks is the fastest, ahead of yaml-rs, fast-yaml, py-yaml12, ryaml, PyYAML's C dumper, and the pure-Python libraries.](docs/public/benchmarks/dump.svg)
+
+See the [comparisons][comparisons] for head-to-head benchmarks and feature
+tables against each library. Numbers are machine-dependent; reproduce them with
+`python bench/compare.py`.
+
 It is safe against the common YAML attack classes, free-threaded (nogil) ready,
 and ships with JSON Schema validation, a PyYAML-compatible shim, rich standard-library
 type support, and the `!secret` and `!env_var` config tags.
@@ -298,5 +308,6 @@ SOFTWARE.
 [scorecard-shield]: https://api.scorecard.dev/projects/github.com/frenck/YAMLRocks/badge
 [scorecard]: https://scorecard.dev/viewer/?uri=github.com/frenck/YAMLRocks
 [semver]: http://semver.org/spec/v2.0.0.html
+[comparisons]: https://yaml.rocks/comparisons/
 [stability-roadmap]: https://yaml.rocks/stability-roadmap/
 [uv]: https://docs.astral.sh/uv/

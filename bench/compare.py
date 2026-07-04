@@ -138,6 +138,15 @@ def _contenders() -> list[Contender]:
         pass
 
     try:
+        import fast_yaml  # the "fastyaml-rs" distribution
+
+        out.append(
+            Contender("fast-yaml", "rust", fast_yaml.safe_load, fast_yaml.safe_dump)
+        )
+    except Exception:
+        pass
+
+    try:
         import yaml12  # the "py-yaml12" distribution
 
         out.append(

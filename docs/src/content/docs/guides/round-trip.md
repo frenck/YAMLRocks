@@ -295,25 +295,26 @@ doc.node["server"]["tags"].style   # 'flow'
 
 Every `YAMLRocksNode` exposes the same attributes, whatever it points at:
 
-| Attribute         | Meaning                                                              |
-| ----------------- | -------------------------------------------------------------------- |
-| `value`           | the resolved Python value (scalar, `dict`, or `list`)                |
-| `comment`         | the inline comment trailing the value, or `None`                     |
-| `comment_before`  | the standalone comment line(s) above the node, or `None`             |
-| `line` / `column` | 1-based source position                                              |
-| `file`            | the source file the node came from, or `None` without includes       |
-| `style`           | `plain`, `single`, `double`, `literal`, `folded`, `block`, or `flow` |
-| `anchor`          | the node's anchor name (`&name`), or `None`                          |
-| `tag`             | the node's explicit tag (`!!str`, `!custom`), or `None`              |
+| Attribute         | Meaning                                                               |
+| ----------------- | --------------------------------------------------------------------- |
+| `value`           | the resolved Python value (scalar, `dict`, or `list`)                 |
+| `comment`         | the inline comment trailing the value, or `None`                      |
+| `comment_before`  | the standalone comment line(s) above the node, or `None`              |
+| `comment_after`   | the trailing comment block after the node (a block's foot), or `None` |
+| `line` / `column` | 1-based source position                                               |
+| `file`            | the source file the node came from, or `None` without includes        |
+| `style`           | `plain`, `single`, `double`, `literal`, `folded`, `block`, or `flow`  |
+| `anchor`          | the node's anchor name (`&name`), or `None`                           |
+| `tag`             | the node's explicit tag (`!!str`, `!custom`), or `None`               |
 
 Comment text is always bare (no leading `#`, no surrounding whitespace), so you
-read and write the words, not the punctuation. A multi-line `comment_before` is
-returned as one string with `\n` between the lines.
+read and write the words, not the punctuation. A multi-line `comment_before` or
+`comment_after` is returned as one string with `\n` between the lines.
 
 ### Writing metadata
 
-`value`, `comment`, and `comment_before` are writable, and the change re-emits in
-the right place:
+`value`, `comment`, `comment_before`, and `comment_after` are writable, and the
+change re-emits in the right place:
 
 ```python
 import yamlrocks
@@ -327,12 +328,22 @@ port = doc.node["server"]["port"]
 port.value = 8443
 port.comment = "now uses TLS"
 doc.node["server"].comment_before = "HTTP front end (TLS)"
+doc.node["server"].comment_after = "end of server block"
 
 print(doc.to_yaml().decode())
 # # HTTP front end (TLS)
 # server:
 #   port: 8443 # now uses TLS
+#   # end of server block
 ```
+
+`comment_after` is the counterpart to `comment_before`: it writes a trailing
+comment block after a node. On a block mapping or sequence it lands at the
+collection's own indent, after its last entry; on the document root it becomes a
+comment at the end of the file. Set it to `None` to remove the block. It applies
+only to block collections and the root: a scalar or a flow collection has nowhere
+to place a foot, so setting one there raises `ValueError` instead of silently
+dropping it.
 
 Setting `value` keeps the node's comments, anchor, and tag, so editing a value
 never silently drops the comment beside it. Set `comment` or `comment_before` to

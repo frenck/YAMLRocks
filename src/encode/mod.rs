@@ -301,9 +301,13 @@ impl<'a> Emitter<'a> {
         if !value.contains('\n') {
             return false;
         }
+        // A block scalar carries its content raw, so it cannot hold a carriage
+        // return (block line breaks are normalized) nor any non-printable
+        // character (a C0/C1 control, DEL, or a non-character); such a string
+        // falls back to a double-quoted scalar that can escape them.
         if value
-            .bytes()
-            .any(|b| (b < 0x20 && b != b'\n' && b != b'\t') || b == 0x7f)
+            .chars()
+            .any(|c| c == '\r' || crate::emit_util::is_non_printable(c))
         {
             return false;
         }
@@ -500,7 +504,11 @@ impl<'a> Emitter<'a> {
             && !value.contains('\'')
             && !value.contains('\n')
             && !value.contains('\r')
-            && !value.bytes().any(|b| b < 0x20 || b == 0x7f);
+            && !value.bytes().any(|b| b < 0x20 || b == 0x7f)
+            // A single-quoted scalar cannot escape anything, so a C1 control or a
+            // non-character (which the byte check above misses) forces double
+            // quotes, where it can be escaped.
+            && !value.chars().any(crate::emit_util::is_non_printable);
         if self.options.width > 0 && !self.emitting_key {
             // Fold the (already-escaped) body between the quotes. A space in the
             // body folds the same way as in a plain scalar; the surrounding
@@ -861,17 +869,28 @@ pub(crate) fn needs_quoting(value: &str, schema: Schema) -> bool {
         return true;
     }
 
-    // Sequences that introduce structure or comments inside the scalar, plus any
-    // control character (C0 or DEL): a raw control byte in a plain scalar makes
-    // YAML a spec-compliant reader rejects, so force quoting (and, in the quoted
-    // path, escaping).
+    // Sequences that introduce structure or comments inside the scalar force
+    // quoting: a `:` before a space (or at end) is a mapping indicator, and a `#`
+    // after a space starts a comment.
     for i in 0..bytes.len() {
         match bytes[i] {
             b':' if i + 1 == bytes.len() || bytes[i + 1] == b' ' => return true,
             b'#' if i > 0 && bytes[i - 1] == b' ' => return true,
-            0x00..=0x1f | 0x7f => return true,
             _ => {}
         }
+    }
+
+    // A control character unsafe in a plain scalar forces quoting (and, in the
+    // quoted path, escaping): every C0 control (`\t`/`\n`/`\r` included, since a
+    // raw break or tab corrupts a plain scalar), plus everything
+    // [`is_non_printable`] rejects, DEL, the C1 controls, and the non-characters.
+    // Checked over `chars` because the C1 controls and non-characters are
+    // multi-byte in UTF-8.
+    if value
+        .chars()
+        .any(|c| (c as u32) < 0x20 || crate::emit_util::is_non_printable(c))
+    {
+        return true;
     }
 
     // Quote iff the value would resolve back to a *number* under the YAML 1.2 or

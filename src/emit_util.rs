@@ -61,6 +61,24 @@ pub(crate) fn single_quoted_body(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+/// Whether `c` falls outside YAML 1.2's `c-printable` set and so cannot appear
+/// raw in a scalar: it forces a plain scalar to be quoted and must be escaped
+/// inside a double-quoted one. This is the emitter's mirror of the scanner's
+/// `check_printable` rejection set (see `scanner::reader`), so `dumps` never
+/// emits a control character that `loads` would refuse: the C0 controls except
+/// tab, line feed, and carriage return; DEL; the C1 controls except NEL
+/// (`U+0085`, which is printable); and the non-characters `U+FFFE`/`U+FFFF`.
+pub(crate) fn is_non_printable(c: char) -> bool {
+    match c as u32 {
+        0x09 | 0x0a | 0x0d => false, // tab, LF, CR are allowed
+        0x00..=0x1f | 0x7f => true,  // other C0 controls and DEL
+        0x85 => false,               // NEL is printable in YAML 1.2
+        0x80..=0x9f => true,         // the other C1 controls
+        0xfffe | 0xffff => true,     // the two non-characters
+        _ => false,
+    }
+}
+
 /// The body of a double-quoted scalar (no surrounding quotes), with the escapes
 /// YAML requires inside double quotes applied.
 pub(crate) fn double_quoted_body(value: &str) -> String {
@@ -73,11 +91,17 @@ pub(crate) fn double_quoted_body(value: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             '\0' => out.push_str("\\0"),
-            // Any other control character (C0 or DEL) must be escaped: a raw
-            // control byte makes YAML a spec-compliant reader rejects. `\xNN` is
-            // the YAML double-quote escape for a code point below U+0100.
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                out.push_str(&format!("\\x{:02x}", c as u32));
+            // Any other non-printable character must be escaped: emitting it raw
+            // makes YAML a spec-compliant reader rejects. `\xNN` is the escape for
+            // a code point below U+0100 (the C0/C1 controls and DEL); `\uNNNN`
+            // covers the wider non-characters `U+FFFE`/`U+FFFF`.
+            c if is_non_printable(c) => {
+                let n = c as u32;
+                if n <= 0xff {
+                    out.push_str(&format!("\\x{n:02x}"));
+                } else {
+                    out.push_str(&format!("\\u{n:04x}"));
+                }
             }
             _ => out.push(ch),
         }
@@ -166,12 +190,32 @@ mod tests {
             ("a\rb", b"\"a\\rb\""),
             ("a\tb", b"\"a\\tb\""),
             ("a\0b", b"\"a\\0b\""),
+            // DEL and a C0 control escape as `\xNN`.
+            ("a\x7fb", b"\"a\\x7fb\""),
+            ("a\x01b", b"\"a\\x01b\""),
+            // The C1 controls escape as `\xNN` too (a raw one is not printable and
+            // would make YAML `loads` rejects), except NEL (`U+0085`).
+            ("a\u{80}b", b"\"a\\x80b\""),
+            ("a\u{9f}b", b"\"a\\x9fb\""),
+            // The non-characters need the wider `\uNNNN` form.
+            ("a\u{fffe}b", b"\"a\\ufffeb\""),
+            ("a\u{ffff}b", b"\"a\\uffffb\""),
         ];
         for (input, expected) in cases {
             let mut buf = Vec::new();
             push_double_quoted(&mut buf, input);
             assert_eq!(&buf, expected, "input {input:?}");
         }
+    }
+
+    #[test]
+    fn printable_high_controls_pass_through_double_quoted() {
+        // NEL (`U+0085`) and NBSP (`U+00A0`) are printable in YAML 1.2, so they
+        // stay raw rather than being escaped; this pins that they are not swept up
+        // with the neighboring C1 controls.
+        let mut buf = Vec::new();
+        push_double_quoted(&mut buf, "a\u{85}\u{a0}b");
+        assert_eq!(buf, "\"a\u{85}\u{a0}b\"".as_bytes());
     }
 
     #[test]

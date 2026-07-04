@@ -26,6 +26,7 @@ pub fn decode_with(
         schema,
         duplicate_keys_error,
         reject_complex_keys,
+        false,
         WarnOptions::default(),
     )
     .map(|(documents, _)| documents)
@@ -51,6 +52,7 @@ pub fn decode_collecting(
     schema: Schema,
     duplicate_keys_error: bool,
     reject_complex_keys: bool,
+    resolve_timestamps: bool,
     warn: WarnOptions,
 ) -> Result<(Vec<Value<'_>>, Vec<String>), DecodeError> {
     let mut parser = Parser::new(input);
@@ -63,6 +65,7 @@ pub fn decode_collecting(
     let mut decoder = Decoder::new(schema);
     decoder.duplicate_keys_error = duplicate_keys_error;
     decoder.reject_complex_keys = reject_complex_keys;
+    decoder.resolve_timestamps = resolve_timestamps;
     decoder.duplicate_keys_warn = warn.duplicate_keys;
     decoder.yaml_11_warn = warn.yaml_1_1;
     // The decoder moves each scalar's text straight out of its event into the
@@ -146,6 +149,9 @@ pub enum Value<'input> {
     BigInt(Cow<'input, str>),
     Float(f64),
     String(Cow<'input, str>),
+    /// A PyYAML-style date/datetime, produced only on the fast path when
+    /// timestamp resolution is enabled (`OPT_TIMESTAMPS` or `OPT_PYYAML_COMPAT`).
+    Timestamp(crate::resolver::timestamp::Timestamp),
     Sequence(Vec<Value<'input>>),
     Mapping(Vec<(Value<'input>, Value<'input>)>),
     Tagged(String, Box<Value<'input>>),
@@ -275,6 +281,10 @@ struct Decoder<'input> {
     /// Reject a collection (mapping or sequence) used as a mapping key, rather
     /// than converting it to a hashable Python value (`OPT_REJECT_COMPLEX_KEYS`).
     reject_complex_keys: bool,
+    /// Resolve a plain, untagged scalar matching a timestamp shape to a
+    /// date/datetime (`OPT_TIMESTAMPS` or `OPT_PYYAML_COMPAT`), rather than a
+    /// string. Off by default (YAML 1.2 has no implicit timestamp type).
+    resolve_timestamps: bool,
     /// Collect a non-fatal diagnostic for each repeated key (last value still
     /// wins), for the caller to log. Mutually meaningful only when
     /// `duplicate_keys_error` is off.
@@ -308,6 +318,7 @@ impl<'input> Decoder<'input> {
             anchors: HashMap::new(),
             duplicate_keys_error: false,
             reject_complex_keys: false,
+            resolve_timestamps: false,
             duplicate_keys_warn: false,
             yaml_11_warn: false,
             warnings: Vec::new(),
@@ -335,6 +346,10 @@ impl<'input> Decoder<'input> {
             Value::BigInt(s) => format!("n:{s}"),
             Value::Float(f) => Self::float_dup_sig(*f),
             Value::String(s) => format!("s:{}:{s}", s.len()),
+            // A `date` and a `datetime` are distinct Python values (and unequal),
+            // and their ISO renderings differ, so the ISO text is a faithful
+            // equality key.
+            Value::Timestamp(ts) => format!("ts:{}", ts.to_iso()),
             Value::Tagged(tag, inner) => {
                 format!("t:{tag}:{}", Self::python_dup_key_sig(inner))
             }
@@ -781,6 +796,20 @@ impl<'input> Decoder<'input> {
                         None => Value::BigInt(text),
                     },
                     ScalarKind::Float(f) => Value::Float(f),
+                    // A plain, untagged string resolves to a date/datetime when
+                    // timestamp resolution is on (PyYAML compat, or the explicit
+                    // opt-in). A quoted scalar or a tagged one keeps its string
+                    // form, matching PyYAML (quoting means "explicitly a string").
+                    ScalarKind::Str
+                        if self.resolve_timestamps
+                            && style == ScalarStyle::Plain
+                            && current_tag.is_none() =>
+                    {
+                        match crate::resolver::timestamp::parse(&text) {
+                            Some(ts) => Value::Timestamp(ts),
+                            None => Value::String(text),
+                        }
+                    }
                     ScalarKind::Str => Value::String(text),
                     ScalarKind::Merge => {
                         self.saw_merge = true;
@@ -1286,9 +1315,15 @@ mod tests {
             duplicate_keys: true,
             ..Default::default()
         };
-        let (documents, warnings) =
-            super::decode_collecting("a: 1\nb: 2\na: 3\n", Schema::Yaml12, false, false, warn)
-                .unwrap();
+        let (documents, warnings) = super::decode_collecting(
+            "a: 1\nb: 2\na: 3\n",
+            Schema::Yaml12,
+            false,
+            false,
+            false,
+            warn,
+        )
+        .unwrap();
         assert_eq!(
             documents[0],
             Value::Mapping(vec![
@@ -1311,6 +1346,7 @@ mod tests {
             Schema::Yaml12,
             false,
             false,
+            false,
             super::WarnOptions::default(),
         )
         .unwrap();
@@ -1327,6 +1363,7 @@ mod tests {
         let (documents, warnings) = super::decode_collecting(
             "a: yes\nb: 0777\nc: 42\nd: hello\n",
             Schema::Yaml11,
+            false,
             false,
             false,
             warn,

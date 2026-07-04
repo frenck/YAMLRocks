@@ -1,4 +1,4 @@
-mod convert;
+pub(crate) mod convert;
 mod errors;
 mod types;
 
@@ -239,6 +239,13 @@ pub const OPT_OMIT_MICROSECONDS: u64 = 1 << 30;
 pub const OPT_NAIVE_UTC: u64 = 1 << 31;
 pub const OPT_UTC_Z: u64 = 1 << 32;
 
+/// Resolve a plain, untagged scalar matching a timestamp shape (`2024-01-15`,
+/// `2024-01-15T13:30:45Z`) to a Python `date`/`datetime`, the way PyYAML does.
+/// Off by default (YAML 1.2's core schema has no implicit timestamp type, so a
+/// timestamp is a string). `OPT_PYYAML_COMPAT` implies this. Only plain scalars
+/// resolve: a quoted `"2024-01-15"` stays a string.
+pub const OPT_TIMESTAMPS: u64 = 1 << 33;
+
 // -- Core functions --
 
 #[pyfunction]
@@ -299,6 +306,9 @@ pub fn loads(
     let dir_recursive = opts & OPT_INCLUDE_DIR_RECURSIVE != 0;
     // Reject a collection used as a mapping key instead of converting it.
     let reject_complex_keys = opts & OPT_REJECT_COMPLEX_KEYS != 0;
+    // PyYAML compat implies timestamp resolution; `OPT_TIMESTAMPS` opts in under
+    // any schema. Strict YAML 1.1 alone does not resolve timestamps.
+    let resolve_timestamps = pyyaml_compat || opts & OPT_TIMESTAMPS != 0;
     // How to handle an undefined `!secret`/`!env_var` (default: raise).
     let missing = MissingPolicies {
         secret: MissingRefPolicy {
@@ -374,7 +384,14 @@ pub fn loads(
     };
     let (documents, warnings) = py
         .detach(|| {
-            decode::decode_collecting(&input, yaml_schema, dup_error, reject_complex_keys, warn)
+            decode::decode_collecting(
+                &input,
+                yaml_schema,
+                dup_error,
+                reject_complex_keys,
+                resolve_timestamps,
+                warn,
+            )
         })
         .map_err(|e| errors::decode_error(py, &e, None))?;
     for warning in &warnings {
@@ -440,6 +457,9 @@ pub fn loads_all(
     let dup_warn = !dup_error && opts & OPT_DUPLICATE_KEYS_WARN != 0;
     let yaml_11_warn = yaml_11 && opts & OPT_YAML_1_1_WARN != 0;
     let reject_complex_keys = opts & OPT_REJECT_COMPLEX_KEYS != 0;
+    // PyYAML compat implies timestamp resolution; `OPT_TIMESTAMPS` opts in under
+    // any schema. Strict YAML 1.1 alone does not resolve timestamps.
+    let resolve_timestamps = pyyaml_compat || opts & OPT_TIMESTAMPS != 0;
 
     let registry = bind_registry(py, tags.as_ref())?;
     let handler = tag_handler.as_ref().map(|h| h.bind(py));
@@ -507,7 +527,14 @@ pub fn loads_all(
     // GIL-free scan/parse/resolve (see `loads`); materialization below re-takes it.
     let (documents, warnings) = py
         .detach(|| {
-            decode::decode_collecting(&input, yaml_schema, dup_error, reject_complex_keys, warn)
+            decode::decode_collecting(
+                &input,
+                yaml_schema,
+                dup_error,
+                reject_complex_keys,
+                resolve_timestamps,
+                warn,
+            )
         })
         .map_err(|e| errors::decode_error(py, &e, None))?;
     for warning in &warnings {

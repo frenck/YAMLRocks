@@ -20,6 +20,7 @@ mod decode;
 mod encode;
 
 pub use annotate::{annotate_node, node_to_python_with_tags};
+pub(crate) use decode::timestamp_to_py;
 pub use decode::value_to_python_with;
 pub use encode::python_to_value;
 

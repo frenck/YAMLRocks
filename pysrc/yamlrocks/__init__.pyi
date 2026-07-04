@@ -110,6 +110,7 @@ OPT_PASSTHROUGH_DATACLASS: int
 OPT_OMIT_MICROSECONDS: int
 OPT_NAIVE_UTC: int
 OPT_UTC_Z: int
+OPT_TIMESTAMPS: int
 
 class YAMLRocksDocumentView:
     """A live proxy onto a nested mapping/sequence of a ``YAMLRocksDocument``.

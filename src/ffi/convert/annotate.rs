@@ -11,6 +11,7 @@ use crate::roundtrip::value::{
     node_to_python_cached, node_to_python_key, ObjectCache,
 };
 use crate::roundtrip::{YamlNode, YamlNodeKind};
+use crate::scanner::ScalarStyle;
 
 use super::decode::resolve_tagged;
 use super::TagPolicy;
@@ -326,6 +327,16 @@ fn annotate_node_cached_inner(
         // (YAMLRocksAnnotatedInt/Float); otherwise, and for bool/null, they resolve
         // to plain Python values.
         YamlNodeKind::Scalar(value, style) => {
+            // Under PyYAML compat, a plain untagged timestamp resolves to a plain
+            // `date`/`datetime`. It is deliberately not annotated: `date`/
+            // `datetime` cannot carry `__line__`, and the value matters more than
+            // the location here (documented behavior).
+            if schema == Schema::Yaml11PyYaml && *style == ScalarStyle::Plain && node.tag.is_none()
+            {
+                if let Some(ts) = crate::resolver::timestamp::parse(value) {
+                    return crate::ffi::convert::timestamp_to_py(py, &ts);
+                }
+            }
             let resolved = schema.resolve(value, *style, node.tag.as_deref());
             match resolved {
                 ResolvedValue::String(s) => annotated_str(

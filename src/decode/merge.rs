@@ -60,6 +60,9 @@ fn write_key_sig(out: &mut String, value: &Value<'_>) {
         Value::String(s) => {
             let _ = write!(out, "5:{}:{s}", s.len());
         }
+        Value::Timestamp(ts) => {
+            let _ = write!(out, "9:{};", ts.to_iso());
+        }
         Value::Tagged(tag, inner) => {
             let _ = write!(out, "6:{}:{tag}", tag.len());
             write_key_sig(out, inner);

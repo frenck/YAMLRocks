@@ -153,12 +153,14 @@ structures and arbitrary bytes). For deeper, coverage-guided fuzzing of the Rust
 parser, there are [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) targets
 under `fuzz/`:
 
-| Target         | What it drives                                                      | Contract                    |
-| -------------- | ------------------------------------------------------------------- | --------------------------- |
-| `parse`        | scanner → parser → composer (the round-trip AST)                    | never panic/hang            |
-| `decode`       | fast `loads` path → `Value` tree → fast `dumps`, under both schemas | never panic/hang            |
-| `roundtrip`    | compose → emit → re-compose (the round-trip emitter)                | never panic/hang            |
-| `differential` | `loads(dumps(loads(x)))` must equal `loads(x)`                      | never silently corrupt data |
+| Target                 | What it drives                                                      | Contract                                       |
+| ---------------------- | ------------------------------------------------------------------- | ---------------------------------------------- |
+| `parse`                | scanner → parser → composer (the round-trip AST)                    | never panic/hang                               |
+| `decode`               | fast `loads` path → `Value` tree → fast `dumps`, under both schemas | never panic/hang                               |
+| `roundtrip`            | compose → emit → re-compose (the round-trip emitter)                | never panic/hang                               |
+| `differential`         | `loads(dumps(loads(x)))` must equal `loads(x)`                      | never silently corrupt data                    |
+| `differential_options` | the same, under a matrix of non-default emit options                | never silently corrupt data                    |
+| `include`              | `!include`/`!include_dir_*`/`!secret`/`!env_var` over a temp tree   | never panic/hang; no read escapes the base dir |
 
 ```bash
 cargo install cargo-fuzz             # once; needs a nightly toolchain
@@ -167,18 +169,24 @@ just fuzz 60 differential            # fuzz any target by name
 cargo +nightly fuzz run parse        # or invoke cargo-fuzz directly, until a crash or Ctrl-C
 ```
 
-The first three targets check that no input _crashes_ the parser. `differential`
-checks something a crash-only target cannot: that `dumps` never emits YAML which
+The crash-only targets (`parse`, `decode`, `roundtrip`, `include`) check that no
+input _crashes_ or hangs the engine. `differential` and `differential_options`
+check something a crash-only target cannot: that `dumps` never emits YAML which
 `loads` reads back as _different data_ (a mis-quoted string re-resolving to a
 bool, a float losing precision). Such a bug produces wrong values, not a panic,
-so only comparing the two trees surfaces it.
+so only comparing the two trees surfaces it. `include` adds a security assertion
+on top of never crashing: a resolved `!include` or `!secret` path can never
+escape the configured base directory, so a traversal or a symlink swap is caught
+as a confinement error rather than a read outside the tree.
 
 [ClusterFuzzLite](https://google.github.io/clusterfuzzlite/) builds and runs
 every target for a short batch on each pull request (see
-`.github/workflows/clusterfuzzlite.yaml` and `.clusterfuzzlite/`). A `parse`,
-`decode`, or `roundtrip` crash is a parser bug (the parser may reject malformed
-input with an error, but must never panic or hang); a `differential` failure is a
-correctness bug (a document that does not survive a `dumps`/`loads` round-trip).
+`.github/workflows/clusterfuzzlite.yaml` and `.clusterfuzzlite/`; the build
+compiles every `fuzz/fuzz_targets/*.rs`, so a new target is picked up
+automatically). A `parse`, `decode`, `roundtrip`, or `include` crash is an engine
+bug (it may reject malformed input with an error, but must never panic or hang);
+a `differential` or `differential_options` failure is a correctness bug (a
+document that does not survive a `dumps`/`loads` round-trip).
 
 ## Code quality
 

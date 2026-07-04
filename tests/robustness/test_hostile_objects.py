@@ -17,6 +17,13 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
+# Hypothesis ships ABI-specific wheels and is unavailable on some targets the
+# wheel smoke test runs on (prerelease CPython, 32-bit/ARM Windows), so it is a
+# best-effort dependency (the `proptest` group). Skip the whole module cleanly
+# where it is absent rather than fail to import.
+pytest.importorskip("hypothesis")
+
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 

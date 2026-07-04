@@ -1219,7 +1219,6 @@ charts = [
     { name = "yamlium" },
 ]
 codspeed = [
-    { name = "hypothesis" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-codspeed" },
@@ -1249,8 +1248,10 @@ lint = [
 numpy = [
     { name = "numpy" },
 ]
-test = [
+proptest = [
     { name = "hypothesis" },
+]
+test = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pyyaml" },
@@ -1283,7 +1284,6 @@ charts = [
     { name = "yamlium", specifier = "==0.2.5" },
 ]
 codspeed = [
-    { name = "hypothesis", specifier = "==6.156.1" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-asyncio", specifier = "==1.4.0" },
     { name = "pytest-codspeed", specifier = "==5.0.3" },
@@ -1311,8 +1311,8 @@ lint = [
     { name = "zizmor", specifier = "==1.26.1" },
 ]
 numpy = [{ name = "numpy", specifier = "==2.5.0" }]
+proptest = [{ name = "hypothesis", specifier = "==6.156.1" }]
 test = [
-    { name = "hypothesis", specifier = "==6.156.1" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-asyncio", specifier = "==1.4.0" },
     { name = "pyyaml", specifier = "==6.0.3" },

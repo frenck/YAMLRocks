@@ -287,10 +287,61 @@ fn attach_comments(nodes: &mut [YamlNode], comments: &[Comment], input: &str) {
     if cursor < comments.len() {
         if let Some(last) = nodes.last_mut() {
             for comment in &comments[cursor..] {
-                last.comments.foot.push(comment.text.clone());
+                // Route each trailing comment to the deepest block it is indented
+                // into, so a comment at the end of a nested final block is owned
+                // by that block and re-emits at its indent instead of flattening
+                // to column 0 once the document is edited. A comment at the
+                // document's own indent stays on the outermost node.
+                let target = foot_target(&mut *last, comment.span.column);
+                target.comments.foot.push(comment.text.clone());
             }
         }
     }
+}
+
+/// The node a trailing comment at `column` belongs to: the deepest block
+/// collection reachable by descending through last children whose own column is
+/// no greater than the comment's. A comment aligned with a nested block's
+/// contents lands on that block; one at the document's indent stays on `node`.
+fn foot_target(node: &mut YamlNode, column: u32) -> &mut YamlNode {
+    // Descends the last-child spine only, so recursion is bounded by the
+    // document's nesting depth (the composer already caps that at `MAX_DEPTH`);
+    // the stack guard keeps a deeply nested document off a small thread stack.
+    crate::stack::guard(|| foot_target_inner(node, column))
+}
+
+fn foot_target_inner(node: &mut YamlNode, column: u32) -> &mut YamlNode {
+    let descend = match &node.kind {
+        YamlNodeKind::Mapping(pairs) => pairs
+            .last()
+            .is_some_and(|(_, val)| is_block_collection(val) && val.span.column <= column),
+        YamlNodeKind::Sequence(items) => items
+            .last()
+            .is_some_and(|item| is_block_collection(item) && item.span.column <= column),
+        _ => false,
+    };
+    if !descend {
+        return node;
+    }
+    // Recurse through the guarded `foot_target`, not `foot_target_inner`, so the
+    // stack guard fires at every nesting level (see `stack.rs`), matching the
+    // other per-level descents in this file.
+    match &mut node.kind {
+        YamlNodeKind::Mapping(pairs) => foot_target(&mut pairs.last_mut().unwrap().1, column),
+        YamlNodeKind::Sequence(items) => foot_target(items.last_mut().unwrap(), column),
+        _ => unreachable!("descend is only set for a non-empty block mapping or sequence"),
+    }
+}
+
+/// Whether `node` is a non-empty block mapping or sequence: a collection the
+/// emitter renders across multiple lines, so it can carry a foot comment.
+fn is_block_collection(node: &YamlNode) -> bool {
+    node.style == NodeStyle::Block
+        && match &node.kind {
+            YamlNodeKind::Mapping(pairs) => !pairs.is_empty(),
+            YamlNodeKind::Sequence(items) => !items.is_empty(),
+            _ => false,
+        }
 }
 
 /// Raise the running "last source line seen" to at least `line`.

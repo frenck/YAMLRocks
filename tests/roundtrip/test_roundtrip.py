@@ -66,6 +66,19 @@ def test_foot_comment_preserved():
     assert roundtrip(src) == src
 
 
+def test_nested_final_block_foot_keeps_indent_on_edit():
+    """A comment at the end of a nested final block keeps that block's indent
+    after an edit, instead of flattening to column 0.
+
+    Unmodified documents re-emit from the source cache, which hides the bug; an
+    edit forces the AST path, where the trailing comment must stay owned by the
+    nested block it sits in (not the document root, which emits at column 0).
+    """
+    doc = yamlrocks.loads(b"parent:\n  a: 1\n  b: 2\n  # end of parent\n", option=RT)
+    doc["parent"]["b"] = 9
+    assert doc.to_yaml() == b"parent:\n  a: 1\n  b: 9\n  # end of parent\n"
+
+
 def test_sequence_comments_preserved():
     """Round-trip preserves comments attached to sequence items."""
     src = "items:\n  # about list\n  - one # first\n  - two\n"

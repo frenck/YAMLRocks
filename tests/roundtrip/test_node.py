@@ -223,6 +223,25 @@ def test_read_document_trailing_comment_as_root_comment_after():
     assert doc.node.comment_after == "footer"
 
 
+def test_nested_final_block_comment_reads_as_that_blocks_comment_after():
+    """A trailing comment at the end of a nested final block is owned by that block,
+    not dumped on the document root."""
+    doc = load(b"parent:\n  a: 1\n  # end of parent\n")
+    assert doc.node["parent"].comment_after == "end of parent"
+    assert doc.node.comment_after is None
+
+
+def test_multi_level_trailing_comments_route_to_their_blocks():
+    """Trailing comments at different indents each attach to the block they sit in."""
+    doc = load(
+        b"parent:\n  child:\n    x: 1\n"
+        b"    # foot of child\n  # foot of parent\n# foot of doc\n"
+    )
+    assert doc.node["parent"]["child"].comment_after == "foot of child"
+    assert doc.node["parent"].comment_after == "foot of parent"
+    assert doc.node.comment_after == "foot of doc"
+
+
 def test_comment_after_absent_is_none():
     """A node with no trailing comment reports comment_after as None."""
     assert load(b"a: 1\n").node.comment_after is None

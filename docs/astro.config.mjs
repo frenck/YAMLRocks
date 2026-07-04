@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import starlightLlmsTxt from "starlight-llms-txt";
 
 import rehypeYamlrocks from "./src/plugins/rehype-yamlrocks.mjs";
 
@@ -14,6 +15,37 @@ export default defineConfig({
     starlight({
       title: "YAMLRocks",
       description: "Rock-solid YAML for Python, written in Rust.",
+      plugins: [
+        starlightLlmsTxt({
+          projectName: "YAMLRocks",
+          description:
+            "YAMLRocks is a fast, correct YAML library for Python, implemented in Rust with PyO3. It is safe by default (tags never construct arbitrary objects), defaults to the YAML 1.2 core schema, reads and writes bytes without an extra encode step, and adds a comment-preserving round-trip mode, native `!include` resolution, JSON Schema validation, and source-tracked annotated mode.",
+          details: [
+            "Important notes for working with YAMLRocks:",
+            "",
+            "- Install with `pip install yamlrocks`; the import name is `yamlrocks`. Prebuilt wheels ship for CPython (including free-threaded builds); no C toolchain is needed.",
+            "- The core API is `loads`/`load` (parse), `dumps`/`dump` (serialize), `to_json` (JSON output), and the `loads_all`/`load_all` multi-document variants. `async_loads`/`async_load`/`async_load_all` run the parse off the event loop.",
+            "- `loads` takes and `dumps` returns `bytes` (a `str` is also accepted on input). There is no `yamlrocks.load` that executes code; the safe behavior is the only behavior.",
+            "- Behavior is controlled by `option=` flags combined with `|`, such as `OPT_ROUND_TRIP`, `OPT_INCLUDES`, `OPT_SECRETS`, `OPT_ENV_VAR`, `OPT_ANNOTATED`, `OPT_YAML_1_1`, `OPT_SORT_KEYS`, and the `OPT_INDENT_2`/`OPT_INDENT_4` pair.",
+            "- Round-trip mode returns a `YAMLRocksDocument`: edit it like a `dict`/`list`, then `to_yaml()` re-emits with comments and layout intact, byte-for-byte for an unmodified document.",
+            "- For a near drop-in migration from PyYAML, `import yamlrocks.compat as yaml` exposes `safe_load`/`safe_dump` and friends returning `str` like PyYAML.",
+          ].join("\n"),
+          customSets: [
+            {
+              label: "Guides and recipes",
+              paths: ["guides/**", "recipes/**"],
+              description:
+                "Task-oriented documentation: loading, dumping, JSON, round-trip editing, includes, annotated mode, schema validation, custom tags, and worked recipes.",
+            },
+            {
+              label: "API reference",
+              paths: ["reference/**", "getting-started/**"],
+              description:
+                "The full function and option reference, exceptions, the security model, and migration guides.",
+            },
+          ],
+        }),
+      ],
       head: [
         {
           tag: "meta",
@@ -128,6 +160,7 @@ export default defineConfig({
           items: [
             { label: "Home Assistant", slug: "recipes/home-assistant" },
             { label: "Config editor", slug: "recipes/config-editor" },
+            { label: "YAML and JSON", slug: "recipes/yaml-to-json" },
           ],
         },
         {

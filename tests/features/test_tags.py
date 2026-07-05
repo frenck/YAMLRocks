@@ -204,6 +204,21 @@ def test_dumps_serializers_registry_is_exact_type():
         )
 
 
+def test_dump_side_tags_keyword_is_gone():
+    """The dump-side registry is `serializers=`, not `tags=`; the old name was
+    renamed with no deprecation alias, so it must raise (guards against a future
+    accidental re-introduction)."""
+    import pytest
+
+    class Marker:
+        pass
+
+    reg = {Marker: lambda o: yamlrocks.YAMLRocksTag("!m", "x")}
+    for fn in (yamlrocks.dumps, yamlrocks.dump, yamlrocks.async_dump):
+        with pytest.raises(TypeError):
+            fn({"x": Marker()}, tags=reg)
+
+
 def test_dumps_default_may_return_tag():
     """A `default` callback returning a YAMLRocksTag is emitted as a tag."""
 
@@ -218,7 +233,7 @@ def test_dumps_default_may_return_tag():
     assert out == b"x: !marker foo\n"
 
 
-def test_dumps_tags_callback_bad_return_raises():
+def test_dumps_serializers_callback_bad_return_raises():
     """A serializers callback that returns a non-tag, non-tuple value errors clearly."""
     import pytest
 

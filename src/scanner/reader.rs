@@ -300,6 +300,49 @@ impl<'input> Reader<'input> {
         (&self.input[start..i], content_end)
     }
 
+    /// Bulk-consume a run of ordinary single-quoted content, stopping before the
+    /// closing quote `'`, a line break, or any non-ASCII byte (and at EOF).
+    ///
+    /// Like [`take_plain_run`](Self::take_plain_run), the run is ASCII-only, so
+    /// `column` advances by the byte length exactly. The caller handles the
+    /// stopping byte: a `'` (close or `''` escape), a break (fold), or a non-ASCII
+    /// content character (advanced one at a time, keeping column tracking exact).
+    #[inline]
+    pub fn take_single_quoted_run(&mut self) {
+        let bytes = self.input.as_bytes();
+        let start = self.pos;
+        let mut i = self.pos;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'\'' || b == b'\n' || b == b'\r' || b >= 0x80 {
+                break;
+            }
+            i += 1;
+        }
+        self.column += (i - start) as u32;
+        self.pos = i;
+    }
+
+    /// Bulk-consume a run of ordinary double-quoted content, stopping before the
+    /// closing quote `"`, an escape `\`, a line break, or any non-ASCII byte (and
+    /// at EOF). ASCII-only, so `column` stays exact; see
+    /// [`take_single_quoted_run`](Self::take_single_quoted_run).
+    #[inline]
+    pub fn take_double_quoted_run(&mut self) {
+        let bytes = self.input.as_bytes();
+        let start = self.pos;
+        let mut i = self.pos;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'"' || b == b'\\' || b == b'\n' || b == b'\r' || b >= 0x80 {
+                break;
+            }
+            i += 1;
+        }
+        self.column += (i - start) as u32;
+        self.pos = i;
+    }
+
     /// Check if the next character is a line break or EOF.
     #[inline]
     pub fn check_next_is_break_or_eof(&self) -> bool {

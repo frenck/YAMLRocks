@@ -26,6 +26,10 @@ dunce = "1"
 # Fast integer-to-decimal formatting for the dumps hot path, avoiding the slower
 # generic `core::fmt` machinery (same digits, just a tighter specialized path).
 itoa = "1"
+# SIMD byte search for the single-quoted scalar scan: skipping a long content run
+# to the closing quote beats a per-byte comparison loop. Already in the tree
+# transitively (via regex), so promoting it to a direct dep adds no build cost.
+memchr = "2"
 pyo3 = { version = "0.29", features = ["extension-module", "py-clone"] }
 # JSON Schema `pattern`/`patternProperties` validation. The `regex` crate runs in
 # guaranteed linear time (no catastrophic backtracking), so an attacker-supplied

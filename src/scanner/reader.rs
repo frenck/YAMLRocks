@@ -301,26 +301,28 @@ impl<'input> Reader<'input> {
     }
 
     /// Bulk-consume a run of ordinary single-quoted content, stopping before the
-    /// closing quote `'`, a line break, or any non-ASCII byte (and at EOF).
+    /// closing quote `'`, a line break, or EOF. The caller handles the stopping
+    /// byte: a `'` (close or `''` escape) or a break (fold).
     ///
-    /// Like [`take_plain_run`](Self::take_plain_run), the run is ASCII-only, so
-    /// `column` advances by the byte length exactly. The caller handles the
-    /// stopping byte: a `'` (close or `''` escape), a break (fold), or a non-ASCII
-    /// content character (advanced one at a time, keeping column tracking exact).
+    /// The next stop byte is found with a SIMD [`memchr::memchr3`], so a long
+    /// scalar (a description, a base64 blob) is skipped in a few vector loads
+    /// rather than one comparison per byte. `column` is per character, so it
+    /// advances by the run's byte length when the run is pure ASCII (the common
+    /// case, checked with a SIMD `is_ascii`) and by an exact character count only
+    /// when the run carries multi-byte content.
     #[inline]
     pub fn take_single_quoted_run(&mut self) {
         let bytes = self.input.as_bytes();
         let start = self.pos;
-        let mut i = self.pos;
-        while i < bytes.len() {
-            let b = bytes[i];
-            if b == b'\'' || b == b'\n' || b == b'\r' || b >= 0x80 {
-                break;
-            }
-            i += 1;
-        }
-        self.column += (i - start) as u32;
-        self.pos = i;
+        let stop = memchr::memchr3(b'\'', b'\n', b'\r', &bytes[start..])
+            .map_or(bytes.len(), |i| start + i);
+        let run = &bytes[start..stop];
+        self.column += if run.is_ascii() {
+            run.len() as u32
+        } else {
+            self.input[start..stop].chars().count() as u32
+        };
+        self.pos = stop;
     }
 
     /// Bulk-consume a run of ordinary double-quoted content, stopping before the

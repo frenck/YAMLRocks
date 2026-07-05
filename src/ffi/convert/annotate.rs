@@ -277,7 +277,14 @@ fn annotate_node_cached_inner(
                 // A collection key cannot be an (unhashable) annotated container;
                 // render it as a hashable tuple (of tuples), matching the fast path.
                 let py_key = if key_is_collection(key, anchors) {
-                    node_to_python_key(py, key, schema, anchors, cache)
+                    node_to_python_key(
+                        py,
+                        key,
+                        schema,
+                        schema == Schema::Yaml11PyYaml,
+                        anchors,
+                        cache,
+                    )
                 } else {
                     annotate_node_cached(
                         py,
@@ -385,10 +392,24 @@ fn annotate_node_cached_inner(
                     offset,
                     end_offset,
                 ),
-                _ => Ok(node_to_python_cached(py, node, schema, anchors, cache)),
+                _ => Ok(node_to_python_cached(
+                    py,
+                    node,
+                    schema,
+                    schema == Schema::Yaml11PyYaml,
+                    anchors,
+                    cache,
+                )),
             }
         }
-        _ => Ok(node_to_python_cached(py, node, schema, anchors, cache)),
+        _ => Ok(node_to_python_cached(
+            py,
+            node,
+            schema,
+            schema == Schema::Yaml11PyYaml,
+            anchors,
+            cache,
+        )),
     }?;
 
     let obj = apply_tag_policy(py, node, obj, tags)?;
@@ -476,7 +497,14 @@ fn node_to_python_with_tags_cached_inner(
                     continue;
                 }
                 let py_key = if key_is_collection(key, anchors) {
-                    node_to_python_key(py, key, schema, anchors, cache)
+                    node_to_python_key(
+                        py,
+                        key,
+                        schema,
+                        schema == Schema::Yaml11PyYaml,
+                        anchors,
+                        cache,
+                    )
                 } else {
                     node_to_python_with_tags_cached(py, key, schema, tags, anchors, cache)?
                 };
@@ -484,7 +512,14 @@ fn node_to_python_with_tags_cached_inner(
             }
             dict.into_any().unbind()
         }
-        _ => node_to_python_cached(py, node, schema, anchors, cache),
+        _ => node_to_python_cached(
+            py,
+            node,
+            schema,
+            schema == Schema::Yaml11PyYaml,
+            anchors,
+            cache,
+        ),
     };
 
     let obj = apply_tag_policy(py, node, obj, tags)?;

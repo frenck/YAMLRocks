@@ -332,6 +332,7 @@ pub fn loads(
             upgrade,
             schema,
             yaml_schema,
+            resolve_timestamps,
             dup_error,
             dup_warn,
             yaml_11_warn,
@@ -1015,6 +1016,7 @@ fn loads_roundtrip(
     upgrade: bool,
     schema: Option<&Bound<'_, PyAny>>,
     yaml_schema: Schema,
+    resolve_timestamps: bool,
     dup_error: bool,
     dup_warn: bool,
     yaml_11_warn: bool,
@@ -1078,7 +1080,8 @@ fn loads_roundtrip(
         .with_null_style(null_style)
         .with_double_quotes(double_quotes)
         .with_upgraded(upgrade)
-        .with_schema(emit_schema);
+        .with_schema(emit_schema)
+        .with_resolve_timestamps(resolve_timestamps);
     Ok(Py::new(py, doc)?.into_any())
 }
 

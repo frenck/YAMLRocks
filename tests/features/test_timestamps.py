@@ -115,11 +115,15 @@ def test_round_trip_under_compat_resolves_and_stays_byte_identical():
     assert doc.to_yaml() == src
 
 
-def test_round_trip_with_standalone_flag_keeps_strings():
-    """The standalone OPT_TIMESTAMPS flag is a fast-path feature; in round-trip
-    mode typed timestamps follow the schema, so without compat they stay strings."""
-    doc = yamlrocks.loads(b"d: 2024-01-15\n", option=RT | TS)
-    assert doc.to_dict()["d"] == "2024-01-15"
+def test_round_trip_with_standalone_flag_resolves():
+    """The standalone OPT_TIMESTAMPS flag also resolves in round-trip mode, across
+    to_dict, indexing, and walk, while the source re-emits byte-for-byte."""
+    src = b"d: 2024-01-15\nt: 2024-01-15T13:30:45Z\n"
+    doc = yamlrocks.loads(src, option=RT | TS)
+    assert doc.to_dict()["d"] == dt.date(2024, 1, 15)
+    assert doc["d"] == dt.date(2024, 1, 15)
+    assert doc.walk()[0] == (("d",), dt.date(2024, 1, 15))
+    assert doc.to_yaml() == src
 
 
 def test_annotated_compat_gives_plain_date_without_line():

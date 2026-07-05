@@ -21,10 +21,11 @@ pub fn node_to_python_with(
     py: Python<'_>,
     node: &YamlNode,
     schema: Schema,
+    resolve_timestamps: bool,
     anchors: &HashMap<String, YamlNode>,
 ) -> Py<PyAny> {
     let mut cache = HashMap::new();
-    node_to_python_cached(py, node, schema, anchors, &mut cache)
+    node_to_python_cached(py, node, schema, resolve_timestamps, anchors, &mut cache)
 }
 
 /// A per-conversion cache from anchor name to the single Python object built for
@@ -33,20 +34,20 @@ pub fn node_to_python_with(
 /// PyYAML (so `d['base'] is d['ref']`), instead of an independent copy.
 pub(crate) type ObjectCache = HashMap<String, Py<PyAny>>;
 
-/// Resolve a scalar node to a Python object, honoring PyYAML-compat timestamp
-/// resolution. Under the PyYAML-compat schema a plain, untagged scalar matching
-/// a timestamp shape becomes a `date`/`datetime` (as on the fast path); every
-/// other case, and every other schema, falls through to the normal scalar
-/// resolution. The standalone `OPT_TIMESTAMPS` flag is a fast-path feature and
-/// does not reach here, so round-trip timestamp typing follows the schema.
+/// Resolve a scalar node to a Python object, honoring timestamp resolution. When
+/// `resolve_timestamps` is set (`OPT_TIMESTAMPS`, or `OPT_PYYAML_COMPAT` which
+/// implies it), a plain, untagged scalar matching a timestamp shape becomes a
+/// `date`/`datetime`, as on the fast path; every other case falls through to the
+/// normal scalar resolution.
 fn scalar_to_py(
     py: Python<'_>,
     value: &str,
     style: ScalarStyle,
     tag: Option<&str>,
     schema: Schema,
+    resolve_timestamps: bool,
 ) -> Py<PyAny> {
-    if schema == Schema::Yaml11PyYaml && style == ScalarStyle::Plain && tag.is_none() {
+    if resolve_timestamps && style == ScalarStyle::Plain && tag.is_none() {
         if let Some(ts) = crate::resolver::timestamp::parse(value) {
             if let Ok(obj) = crate::ffi::convert::timestamp_to_py(py, &ts) {
                 return obj;
@@ -78,19 +79,23 @@ pub(crate) fn node_to_python_cached(
     py: Python<'_>,
     node: &YamlNode,
     schema: Schema,
+    resolve_timestamps: bool,
     anchors: &HashMap<String, YamlNode>,
     cache: &mut ObjectCache,
 ) -> Py<PyAny> {
     // Grow the native stack on demand so converting a deeply nested document
     // (bounded by the composer's `MAX_DEPTH`) cannot overflow a small thread
     // stack; the recursion re-enters here at each level. See [`crate::stack`].
-    crate::stack::guard(|| node_to_python_cached_inner(py, node, schema, anchors, cache))
+    crate::stack::guard(|| {
+        node_to_python_cached_inner(py, node, schema, resolve_timestamps, anchors, cache)
+    })
 }
 
 fn node_to_python_cached_inner(
     py: Python<'_>,
     node: &YamlNode,
     schema: Schema,
+    resolve_timestamps: bool,
     anchors: &HashMap<String, YamlNode>,
     cache: &mut ObjectCache,
 ) -> Py<PyAny> {
@@ -101,7 +106,9 @@ fn node_to_python_cached_inner(
             return obj.clone_ref(py);
         }
         return match anchors.get(name) {
-            Some(target) => node_to_python_cached(py, target, schema, anchors, cache),
+            Some(target) => {
+                node_to_python_cached(py, target, schema, resolve_timestamps, anchors, cache)
+            }
             None => py.None(),
         };
     }
@@ -115,14 +122,26 @@ fn node_to_python_cached_inner(
             Some(tag) => resolved_to_py(py, schema.resolve("", ScalarStyle::Plain, Some(tag))),
             None => py.None(),
         },
-        YamlNodeKind::Scalar(value, style) => {
-            scalar_to_py(py, value, *style, node.tag.as_deref(), schema)
-        }
+        YamlNodeKind::Scalar(value, style) => scalar_to_py(
+            py,
+            value,
+            *style,
+            node.tag.as_deref(),
+            schema,
+            resolve_timestamps,
+        ),
         YamlNodeKind::Sequence(items) => {
             let list = PyList::empty(py);
             for item in items {
-                list.append(node_to_python_cached(py, item, schema, anchors, cache))
-                    .unwrap();
+                list.append(node_to_python_cached(
+                    py,
+                    item,
+                    schema,
+                    resolve_timestamps,
+                    anchors,
+                    cache,
+                ))
+                .unwrap();
             }
             list.into_any().unbind()
         }
@@ -130,7 +149,8 @@ fn node_to_python_cached_inner(
             let dict = PyDict::new(py);
             if mapping_has_merge_key(pairs) {
                 for (key, val) in pairs {
-                    let py_val = node_to_python_cached(py, val, schema, anchors, cache);
+                    let py_val =
+                        node_to_python_cached(py, val, schema, resolve_timestamps, anchors, cache);
                     if is_ast_merge_key(key) {
                         // Fold the merge value's keys in, keeping any explicit
                         // key already set. A non-mergeable value stays under the
@@ -138,22 +158,32 @@ fn node_to_python_cached_inner(
                         if let Some(preserve) =
                             merge_converted_into(&dict, py_val.bind(py)).unwrap()
                         {
-                            let py_key = node_to_python_key(py, key, schema, anchors, cache);
+                            let py_key = node_to_python_key(
+                                py,
+                                key,
+                                schema,
+                                resolve_timestamps,
+                                anchors,
+                                cache,
+                            );
                             if !dict.contains(&py_key).unwrap() {
                                 dict.set_item(py_key, preserve).unwrap();
                             }
                         }
                     } else {
                         // An explicit key wins over a merge, so it overwrites.
-                        dict.set_item(node_to_python_key(py, key, schema, anchors, cache), py_val)
-                            .unwrap();
+                        dict.set_item(
+                            node_to_python_key(py, key, schema, resolve_timestamps, anchors, cache),
+                            py_val,
+                        )
+                        .unwrap();
                     }
                 }
             } else {
                 for (key, val) in pairs {
                     dict.set_item(
-                        node_to_python_key(py, key, schema, anchors, cache),
-                        node_to_python_cached(py, val, schema, anchors, cache),
+                        node_to_python_key(py, key, schema, resolve_timestamps, anchors, cache),
+                        node_to_python_cached(py, val, schema, resolve_timestamps, anchors, cache),
                     )
                     .unwrap();
                 }
@@ -265,6 +295,7 @@ pub(crate) fn node_to_python_key(
     py: Python<'_>,
     node: &YamlNode,
     schema: Schema,
+    resolve_timestamps: bool,
     anchors: &HashMap<String, YamlNode>,
     cache: &mut ObjectCache,
 ) -> Py<PyAny> {
@@ -272,13 +303,17 @@ pub(crate) fn node_to_python_key(
         // A `*alias` key resolves to its target, then becomes hashable like any
         // other key. The anchor map holds alias-free clones, so this terminates.
         YamlNodeKind::Alias(name) => match anchors.get(name) {
-            Some(target) => node_to_python_key(py, target, schema, anchors, cache),
+            Some(target) => {
+                node_to_python_key(py, target, schema, resolve_timestamps, anchors, cache)
+            }
             None => py.None(),
         },
         YamlNodeKind::Sequence(items) => {
             let elems: Vec<Py<PyAny>> = items
                 .iter()
-                .map(|item| node_to_python_key(py, item, schema, anchors, cache))
+                .map(|item| {
+                    node_to_python_key(py, item, schema, resolve_timestamps, anchors, cache)
+                })
                 .collect();
             PyTuple::new(py, elems).unwrap().into_any().unbind()
         }
@@ -286,15 +321,15 @@ pub(crate) fn node_to_python_key(
             let entries: Vec<Py<PyAny>> = pairs
                 .iter()
                 .map(|(k, v)| {
-                    let key = node_to_python_key(py, k, schema, anchors, cache);
-                    let val = node_to_python_key(py, v, schema, anchors, cache);
+                    let key = node_to_python_key(py, k, schema, resolve_timestamps, anchors, cache);
+                    let val = node_to_python_key(py, v, schema, resolve_timestamps, anchors, cache);
                     PyTuple::new(py, [key, val]).unwrap().into_any().unbind()
                 })
                 .collect();
             PyTuple::new(py, entries).unwrap().into_any().unbind()
         }
         // A scalar (or null) key is hashable already.
-        _ => node_to_python_cached(py, node, schema, anchors, cache),
+        _ => node_to_python_cached(py, node, schema, resolve_timestamps, anchors, cache),
     }
 }
 

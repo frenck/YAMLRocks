@@ -85,6 +85,10 @@ pub struct YAMLRocksDocument {
     /// a string `y` keeps quotes under strict 1.1); loaded scalars keep their
     /// original text. Defaults to 1.2.
     pub schema: Schema,
+    /// Whether reads (`to_dict`, indexing, `walk`, `keys`) resolve a plain
+    /// timestamp scalar to a `date`/`datetime` (`OPT_TIMESTAMPS`, or
+    /// `OPT_PYYAML_COMPAT` which implies it). Off by default.
+    pub resolve_timestamps: bool,
 }
 
 /// Free the document's AST without unbounded native recursion. The derived drop
@@ -109,7 +113,13 @@ impl YAMLRocksDocument {
     fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
         if self.nodes.len() == 1 {
             let anchors = build_anchor_map(&self.nodes);
-            container_len(py, &self.nodes[0], self.schema, &anchors)
+            container_len(
+                py,
+                &self.nodes[0],
+                self.schema,
+                &anchors,
+                self.resolve_timestamps,
+            )
         } else {
             Ok(self.nodes.len())
         }
@@ -121,7 +131,16 @@ impl YAMLRocksDocument {
         let anchors = build_anchor_map(&this.nodes);
         let schema = this.schema;
         if this.nodes.len() == 1 {
-            access_child(py, slf, &[], &this.nodes[0], key, &anchors, schema)
+            access_child(
+                py,
+                slf,
+                &[],
+                &this.nodes[0],
+                key,
+                &anchors,
+                schema,
+                this.resolve_timestamps,
+            )
         } else {
             let idx: usize = key.extract().map_err(|_| {
                 pyo3::exceptions::PyKeyError::new_err(
@@ -132,7 +151,15 @@ impl YAMLRocksDocument {
                 .nodes
                 .get(idx)
                 .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
-            wrap_node(py, slf, vec![PathSeg::Index(idx)], node, &anchors, schema)
+            wrap_node(
+                py,
+                slf,
+                vec![PathSeg::Index(idx)],
+                node,
+                &anchors,
+                schema,
+                this.resolve_timestamps,
+            )
         }
     }
 
@@ -154,6 +181,7 @@ impl YAMLRocksDocument {
                 double_quotes,
                 schema,
                 &anchors,
+                self.resolve_timestamps,
             )
         } else {
             let idx: usize = key.extract()?;
@@ -176,7 +204,14 @@ impl YAMLRocksDocument {
             // roll back if the delete leaves a *newly* dangling `*alias`.
             let snapshot = document_has_aliases(&self.nodes)
                 .then(|| (self.nodes.clone(), dangling_alias_names(&self.nodes)));
-            del_child(py, &mut self.nodes[0], key, schema, &anchors)?;
+            del_child(
+                py,
+                &mut self.nodes[0],
+                key,
+                schema,
+                &anchors,
+                self.resolve_timestamps,
+            )?;
             if let Some((snapshot, before)) = snapshot {
                 let after = dangling_alias_names(&self.nodes);
                 if let Some(name) = after.difference(&before).next() {
@@ -220,7 +255,13 @@ impl YAMLRocksDocument {
     fn keys(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         if self.nodes.len() == 1 {
             let anchors = build_anchor_map(&self.nodes);
-            node_keys(py, &self.nodes[0], &anchors, self.schema)
+            node_keys(
+                py,
+                &self.nodes[0],
+                &anchors,
+                self.schema,
+                self.resolve_timestamps,
+            )
         } else {
             Err(pyo3::exceptions::PyTypeError::new_err(
                 "keys() is only available on a single mapping document",
@@ -344,11 +385,23 @@ impl YAMLRocksDocument {
     fn to_dict(&self, py: Python<'_>) -> Py<PyAny> {
         let anchors = build_anchor_map(&self.nodes);
         if self.nodes.len() == 1 {
-            node_to_python_with(py, &self.nodes[0], self.schema, &anchors)
+            node_to_python_with(
+                py,
+                &self.nodes[0],
+                self.schema,
+                self.resolve_timestamps,
+                &anchors,
+            )
         } else {
             let list = PyList::empty(py);
             for node in &self.nodes {
-                let _ = list.append(node_to_python_with(py, node, self.schema, &anchors));
+                let _ = list.append(node_to_python_with(
+                    py,
+                    node,
+                    self.schema,
+                    self.resolve_timestamps,
+                    &anchors,
+                ));
             }
             list.into_any().unbind()
         }
@@ -370,7 +423,15 @@ impl YAMLRocksDocument {
         let mut out: Vec<(Vec<Py<PyAny>>, Py<PyAny>)> = Vec::new();
         let anchors = build_anchor_map(&self.nodes);
         if let Some(root) = self.nodes.first() {
-            collect_leaves(py, root, &mut Vec::new(), &mut out, &anchors, self.schema)?;
+            collect_leaves(
+                py,
+                root,
+                &mut Vec::new(),
+                &mut out,
+                &anchors,
+                self.schema,
+                self.resolve_timestamps,
+            )?;
         }
         leaves_to_list(py, out)
     }
@@ -436,6 +497,7 @@ impl YAMLRocksDocument {
             double_quotes: true,
             upgraded: false,
             schema: Schema::Yaml12,
+            resolve_timestamps: false,
         }
     }
 
@@ -456,6 +518,7 @@ impl YAMLRocksDocument {
             double_quotes: true,
             upgraded: false,
             schema: Schema::Yaml12,
+            resolve_timestamps: false,
         }
     }
 
@@ -487,6 +550,13 @@ impl YAMLRocksDocument {
     /// an edit to a document loaded under YAML 1.1 stays 1.1-safe.
     pub fn with_schema(mut self, schema: Schema) -> Self {
         self.schema = schema;
+        self
+    }
+
+    /// Set whether reads resolve plain timestamp scalars to `date`/`datetime`
+    /// (`OPT_TIMESTAMPS` or `OPT_PYYAML_COMPAT`).
+    pub fn with_resolve_timestamps(mut self, resolve_timestamps: bool) -> Self {
+        self.resolve_timestamps = resolve_timestamps;
         self
     }
 
@@ -576,7 +646,7 @@ impl YAMLRocksDocumentView {
         let node = resolve_path(&doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         let anchors = build_anchor_map(&doc.nodes);
-        container_len(py, node, doc.schema, &anchors)
+        container_len(py, node, doc.schema, &anchors, doc.resolve_timestamps)
     }
 
     fn __getitem__(slf: &Bound<'_, Self>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -588,7 +658,16 @@ impl YAMLRocksDocumentView {
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         let anchors = build_anchor_map(&doc.nodes);
         let root_bound = root.bind(py);
-        access_child(py, root_bound, &this.path, node, key, &anchors, doc.schema)
+        access_child(
+            py,
+            root_bound,
+            &this.path,
+            node,
+            key,
+            &anchors,
+            doc.schema,
+            doc.resolve_timestamps,
+        )
     }
 
     fn __setitem__(
@@ -600,15 +679,26 @@ impl YAMLRocksDocumentView {
         let mut doc = self.root.borrow_mut(py);
         let double_quotes = doc.double_quotes;
         let schema = doc.schema;
+        let resolve_timestamps = doc.resolve_timestamps;
         let anchors = build_anchor_map(&doc.nodes);
         let node = resolve_path_mut(&mut doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        set_child(py, node, key, value, double_quotes, schema, &anchors)
+        set_child(
+            py,
+            node,
+            key,
+            value,
+            double_quotes,
+            schema,
+            &anchors,
+            resolve_timestamps,
+        )
     }
 
     fn __delitem__(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);
         let schema = doc.schema;
+        let resolve_timestamps = doc.resolve_timestamps;
         let anchors = build_anchor_map(&doc.nodes);
         // Guard against orphaning an alias elsewhere in the document (see the
         // top-level `__delitem__`): snapshot the tree and the already-dangling
@@ -617,7 +707,7 @@ impl YAMLRocksDocumentView {
             .then(|| (doc.nodes.clone(), dangling_alias_names(&doc.nodes)));
         let node = resolve_path_mut(&mut doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        del_child(py, node, key, schema, &anchors)?;
+        del_child(py, node, key, schema, &anchors, resolve_timestamps)?;
         if let Some((snapshot, before)) = snapshot {
             let after = dangling_alias_names(&doc.nodes);
             if let Some(name) = after.difference(&before).next() {
@@ -653,7 +743,7 @@ impl YAMLRocksDocumentView {
         let node = resolve_path(&doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         let anchors = build_anchor_map(&doc.nodes);
-        node_keys(py, node, &anchors, doc.schema)
+        node_keys(py, node, &anchors, doc.schema, doc.resolve_timestamps)
     }
 
     /// The [`YAMLRocksNode`] cursor for this view's node: a metadata-bearing handle
@@ -675,7 +765,13 @@ impl YAMLRocksDocumentView {
         let node = resolve_path(&doc.nodes, &self.path)
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         let anchors = build_anchor_map(&doc.nodes);
-        Ok(node_to_python_with(py, node, doc.schema, &anchors))
+        Ok(node_to_python_with(
+            py,
+            node,
+            doc.schema,
+            doc.resolve_timestamps,
+            &anchors,
+        ))
     }
 
     /// Alias for [`unwrap`](Self::unwrap): the resolved plain-Python value.
@@ -700,7 +796,15 @@ impl YAMLRocksDocumentView {
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
         let anchors = build_anchor_map(&doc.nodes);
         let mut out: Vec<(Vec<Py<PyAny>>, Py<PyAny>)> = Vec::new();
-        collect_leaves(py, node, &mut Vec::new(), &mut out, &anchors, doc.schema)?;
+        collect_leaves(
+            py,
+            node,
+            &mut Vec::new(),
+            &mut out,
+            &anchors,
+            doc.schema,
+            doc.resolve_timestamps,
+        )?;
         leaves_to_list(py, out)
     }
 
@@ -750,7 +854,13 @@ impl YAMLRocksNode {
         let doc = self.root.borrow(py);
         let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_node)?;
         let anchors = build_anchor_map(&doc.nodes);
-        Ok(node_to_python_with(py, node, doc.schema, &anchors))
+        Ok(node_to_python_with(
+            py,
+            node,
+            doc.schema,
+            doc.resolve_timestamps,
+            &anchors,
+        ))
     }
 
     /// Replace this node's value, preserving its comments, anchor, and tag.
@@ -1374,12 +1484,13 @@ fn key_node_matches(
     key_node: &YamlNode,
     key: &Bound<'_, PyAny>,
     schema: Schema,
+    resolve_timestamps: bool,
     anchors: &HashMap<String, YamlNode>,
 ) -> bool {
     if !matches!(key_node.kind, YamlNodeKind::Scalar(..)) {
         return false;
     }
-    node_to_python_with(py, key_node, schema, anchors)
+    node_to_python_with(py, key_node, schema, resolve_timestamps, anchors)
         .bind(py)
         .eq(key)
         .unwrap_or(false)
@@ -1389,6 +1500,7 @@ fn key_node_matches(
 
 /// Read a child of `node`: scalars resolve to plain Python; containers return a
 /// [`YAMLRocksDocumentView`] rooted at `root` with the child appended to `parent_path`.
+#[allow(clippy::too_many_arguments)]
 fn access_child(
     py: Python<'_>,
     root: &Bound<'_, YAMLRocksDocument>,
@@ -1397,6 +1509,7 @@ fn access_child(
     key: &Bound<'_, PyAny>,
     anchors: &HashMap<String, YamlNode>,
     schema: Schema,
+    resolve_timestamps: bool,
 ) -> PyResult<Py<PyAny>> {
     // For a mapping, match the looked-up key against each key resolved under the
     // schema (so `doc[True]` finds a `yes:` entry), recording the matched key's
@@ -1408,7 +1521,7 @@ fn access_child(
             let (k, _) = pairs
                 .iter()
                 .rev()
-                .find(|(k, _)| key_node_matches(py, k, key, schema, anchors))
+                .find(|(k, _)| key_node_matches(py, k, key, schema, resolve_timestamps, anchors))
                 .ok_or_else(|| key_error(node, key))?;
             let YamlNodeKind::Scalar(lexeme, _) = &k.kind else {
                 unreachable!("key_node_matches only matches scalar keys")
@@ -1421,7 +1534,7 @@ fn access_child(
 
     let mut path = parent_path.to_vec();
     path.push(seg);
-    wrap_node(py, root, path, child, anchors, schema)
+    wrap_node(py, root, path, child, anchors, schema, resolve_timestamps)
 }
 
 /// Wrap a node for return to Python: scalars as plain values, containers as
@@ -1433,6 +1546,7 @@ fn wrap_node(
     node: &YamlNode,
     anchors: &HashMap<String, YamlNode>,
     schema: Schema,
+    resolve_timestamps: bool,
 ) -> PyResult<Py<PyAny>> {
     match &node.kind {
         YamlNodeKind::Mapping(_) | YamlNodeKind::Sequence(_) => {
@@ -1445,13 +1559,20 @@ fn wrap_node(
         // An alias cannot resolve to a live view: it has no path of its own, so
         // we follow it to its anchor and return a plain snapshot instead.
         YamlNodeKind::Alias(name) => match anchors.get(name) {
-            Some(target) => wrap_node(py, root, path, target, anchors, schema),
+            Some(target) => wrap_node(py, root, path, target, anchors, schema, resolve_timestamps),
             None => Ok(py.None()),
         },
-        _ => Ok(node_to_python_with(py, node, schema, anchors)),
+        _ => Ok(node_to_python_with(
+            py,
+            node,
+            schema,
+            resolve_timestamps,
+            anchors,
+        )),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn set_child(
     py: Python<'_>,
     node: &mut YamlNode,
@@ -1460,6 +1581,7 @@ fn set_child(
     double_quotes: bool,
     schema: Schema,
     anchors: &HashMap<String, YamlNode>,
+    resolve_timestamps: bool,
 ) -> PyResult<()> {
     match &mut node.kind {
         YamlNodeKind::Mapping(pairs) => {
@@ -1469,9 +1591,9 @@ fn set_child(
             // updates a `yes:` entry under 1.1), mirroring read access. On a
             // duplicate key, update its last occurrence: that is the effective
             // entry the cursor reads and `loads()` keeps (see [`child_ref`]).
-            let existing = pairs
-                .iter()
-                .rposition(|(k, _)| key_node_matches(py, k, key, schema, anchors));
+            let existing = pairs.iter().rposition(|(k, _)| {
+                key_node_matches(py, k, key, schema, resolve_timestamps, anchors)
+            });
             if let Some(i) = existing {
                 let v = &mut pairs[i].1;
                 // Replacing a value keeps the metadata attached to it (its
@@ -1587,6 +1709,7 @@ fn del_child(
     key: &Bound<'_, PyAny>,
     schema: Schema,
     anchors: &HashMap<String, YamlNode>,
+    resolve_timestamps: bool,
 ) -> PyResult<()> {
     match &mut node.kind {
         YamlNodeKind::Mapping(pairs) => {
@@ -1596,7 +1719,9 @@ fn del_child(
             // shadowed one would re-surface as the new effective value). The removed
             // pairs carry their own comments away; the surrounding pairs keep theirs.
             let before = pairs.len();
-            pairs.retain(|(k, _)| !key_node_matches(py, k, key, schema, anchors));
+            pairs.retain(|(k, _)| {
+                !key_node_matches(py, k, key, schema, resolve_timestamps, anchors)
+            });
             if pairs.len() == before {
                 return Err(pyo3::exceptions::PyKeyError::new_err(key.clone().unbind()));
             }
@@ -1639,11 +1764,16 @@ fn node_keys(
     node: &YamlNode,
     anchors: &HashMap<String, YamlNode>,
     schema: Schema,
+    resolve_timestamps: bool,
 ) -> PyResult<Py<PyAny>> {
     match &node.kind {
-        YamlNodeKind::Mapping(pairs) => Ok(distinct_keys(py, pairs, schema, anchors)?
-            .into_any()
-            .unbind()),
+        YamlNodeKind::Mapping(pairs) => {
+            Ok(
+                distinct_keys(py, pairs, schema, anchors, resolve_timestamps)?
+                    .into_any()
+                    .unbind(),
+            )
+        }
         _ => Err(pyo3::exceptions::PyTypeError::new_err(
             "node is not a mapping",
         )),
@@ -1661,6 +1791,7 @@ fn distinct_keys<'py>(
     pairs: &[(YamlNode, YamlNode)],
     schema: Schema,
     anchors: &HashMap<String, YamlNode>,
+    resolve_timestamps: bool,
 ) -> PyResult<Bound<'py, PyList>> {
     let list = PyList::empty(py);
     // The hashable resolved keys already emitted (`node_to_python_key` is the same
@@ -1668,11 +1799,17 @@ fn distinct_keys<'py>(
     let seen = PyDict::new(py);
     let mut cache: ObjectCache = HashMap::new();
     for (k, _) in pairs {
-        let resolved = node_to_python_key(py, k, schema, anchors, &mut cache);
+        let resolved = node_to_python_key(py, k, schema, resolve_timestamps, anchors, &mut cache);
         let resolved = resolved.bind(py);
         if !seen.contains(resolved)? {
             seen.set_item(resolved, py.None())?;
-            list.append(node_to_python_with(py, k, schema, anchors))?;
+            list.append(node_to_python_with(
+                py,
+                k,
+                schema,
+                resolve_timestamps,
+                anchors,
+            ))?;
         }
     }
     Ok(list)
@@ -1683,12 +1820,15 @@ fn container_len(
     node: &YamlNode,
     schema: Schema,
     anchors: &HashMap<String, YamlNode>,
+    resolve_timestamps: bool,
 ) -> PyResult<usize> {
     Ok(match &node.kind {
         // Count distinct keys, matching the last-wins logical mapping (so
         // `len(doc) == len(doc.keys())` even with a duplicate key), by the same
         // resolved-key rule as `distinct_keys`/`to_dict`.
-        YamlNodeKind::Mapping(pairs) => distinct_keys(py, pairs, schema, anchors)?.len(),
+        YamlNodeKind::Mapping(pairs) => {
+            distinct_keys(py, pairs, schema, anchors, resolve_timestamps)?.len()
+        }
         YamlNodeKind::Sequence(items) => items.len(),
         _ => 1,
     })
@@ -1774,10 +1914,13 @@ fn collect_leaves(
     out: &mut Vec<(Vec<Py<PyAny>>, Py<PyAny>)>,
     anchors: &HashMap<String, YamlNode>,
     schema: Schema,
+    resolve_timestamps: bool,
 ) -> PyResult<()> {
     // Grow the native stack on demand so walking a deeply nested document cannot
     // overflow a small thread stack. See [`crate::stack`].
-    crate::stack::guard(|| collect_leaves_inner(py, node, path, out, anchors, schema))
+    crate::stack::guard(|| {
+        collect_leaves_inner(py, node, path, out, anchors, schema, resolve_timestamps)
+    })
 }
 
 fn collect_leaves_inner(
@@ -1787,6 +1930,7 @@ fn collect_leaves_inner(
     out: &mut Vec<(Vec<Py<PyAny>>, Py<PyAny>)>,
     anchors: &HashMap<String, YamlNode>,
     schema: Schema,
+    resolve_timestamps: bool,
 ) -> PyResult<()> {
     match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
@@ -1794,8 +1938,14 @@ fn collect_leaves_inner(
                 if let YamlNodeKind::Scalar(_, _) = &key.kind {
                     // Resolve the path key under the schema so `walk()` paths match
                     // `keys()` and indexed access (a `yes:` key is `True` under 1.1).
-                    path.push(node_to_python_with(py, key, schema, anchors));
-                    collect_leaves(py, val, path, out, anchors, schema)?;
+                    path.push(node_to_python_with(
+                        py,
+                        key,
+                        schema,
+                        resolve_timestamps,
+                        anchors,
+                    ));
+                    collect_leaves(py, val, path, out, anchors, schema, resolve_timestamps)?;
                     path.pop();
                 }
             }
@@ -1803,11 +1953,14 @@ fn collect_leaves_inner(
         YamlNodeKind::Sequence(items) => {
             for (i, item) in items.iter().enumerate() {
                 path.push(i.into_pyobject(py)?.into_any().unbind());
-                collect_leaves(py, item, path, out, anchors, schema)?;
+                collect_leaves(py, item, path, out, anchors, schema, resolve_timestamps)?;
                 path.pop();
             }
         }
-        _ => out.push((path.clone(), node_to_python_with(py, node, schema, anchors))),
+        _ => out.push((
+            path.clone(),
+            node_to_python_with(py, node, schema, resolve_timestamps, anchors),
+        )),
     }
     Ok(())
 }

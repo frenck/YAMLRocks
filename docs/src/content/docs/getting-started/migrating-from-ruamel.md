@@ -165,22 +165,23 @@ doc.to_yaml()
 
 ## What ruamel still does that YAMLRocks does not
 
-Be honest with yourself about these before migrating:
+Be honest with yourself about this before migrating:
 
-- **Foot comments.** YAMLRocks scripts inline and leading comments per node
-  (`comment` / `comment_before`), and these work on mapping values, keys, and
-  sequence items, but a trailing/foot comment block at the end of a collection is
-  preserved through a round-trip rather than writable through the node API.
 - **Building a commented document from nothing.** YAMLRocks edits comments on a
   loaded document (including keys you add to it), but there is no constructor for
   a fresh round-trip document with no parsed source, the way ruamel can assemble a
   fully commented `CommentedMap` in memory.
 
+YAMLRocks does write comments in every position, including the foot: inline
+(`comment`), leading (`comment_before`), and trailing (`comment_after`) comments
+are all editable, on mapping values, keys, and sequence items. A foot comment
+attaches to a block collection or the document root.
+
 :::caution[When to stick with ruamel]
-If your workflow depends on foot comments or on assembling a fully commented
-document from nothing, ruamel's `.ca` API still does things YAMLRocks does not. For
-loading, editing existing configuration in place (comments included, on values,
-keys, and sequence items), and high-volume parsing or emitting, YAMLRocks is the
+If your workflow depends on assembling a fully commented document from nothing,
+ruamel's `.ca` API still does that and YAMLRocks does not. For loading, editing
+existing configuration in place (comments included, on values, keys, and sequence
+items, in every position), and high-volume parsing or emitting, YAMLRocks is the
 faster and stricter choice.
 :::
 

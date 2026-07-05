@@ -120,6 +120,15 @@ STRINGS_ARRAY = b"lines:\n" + b"".join(
     for i in range(500)
 )
 
+# The same shape but single-quoted: stresses the quoted-scalar scanner, the
+# common shape of config exports and generated YAML. Paired with STRINGS_ARRAY
+# so the plain and quoted scalar paths are measured side by side.
+QUOTED_STRINGS = b"lines:\n" + b"".join(
+    b"  - 'this is a fairly long single-quoted scalar line number %d with several words in it'\n"
+    % i
+    for i in range(500)
+)
+
 PAYLOADS = {
     "small (10 lines)": SMALL,
     "medium (k8s, ~50 lines)": MEDIUM,
@@ -127,6 +136,7 @@ PAYLOADS = {
     "deep (30 levels)": DEEP,
     "small_objects (500 tiny maps)": SMALL_OBJECTS,
     "strings_array (500 long scalars)": STRINGS_ARRAY,
+    "quoted_strings (500 quoted scalars)": QUOTED_STRINGS,
 }
 
 

@@ -26,7 +26,18 @@ pub fn scan_single_quoted<'input>(
     let start_span = reader.span();
     reader.advance(); // skip opening '
 
-    let mut value = String::new();
+    // Scan by tracking offsets, not by pushing each char: a single-quoted scalar
+    // with no `''` escape and no line fold is exactly the input slice between the
+    // quotes, so it borrows with zero allocation (the common case). An owned
+    // buffer is materialized lazily the first time an escape or fold forces a
+    // transformation, and thereafter each clean run is bulk-copied with
+    // `push_str` rather than character by character. This mirrors `scan_plain`.
+    let content_start = reader.offset();
+    // `Some` once a `''` escape or a fold has forced an owned buffer; the start of
+    // the current clean run (into which nothing has been copied yet) is `run_start`.
+    let mut owned: Option<String> = None;
+    let mut run_start = content_start;
+
     loop {
         if reader.is_eof() {
             return Err(ScanError::new(
@@ -34,37 +45,53 @@ pub fn scan_single_quoted<'input>(
                 start_span,
             ));
         }
-        if at_document_marker(reader) {
-            return Err(ScanError::new(
-                "a document marker cannot appear inside a quoted scalar",
-                start_span,
-            ));
-        }
         match reader.peek() {
             '\'' => {
+                let quote_off = reader.offset();
                 reader.advance();
                 if reader.peek() == '\'' {
-                    // escaped single quote ''
-                    value.push('\'');
+                    // Escaped `''`: flush the clean run, emit one quote, continue.
+                    let buf = owned.get_or_insert_with(String::new);
+                    buf.push_str(reader.slice(run_start, quote_off));
+                    buf.push('\'');
                     reader.advance();
+                    run_start = reader.offset();
                 } else {
-                    break;
+                    // Closing quote at `quote_off`.
+                    return Ok(match owned {
+                        Some(mut buf) => {
+                            buf.push_str(reader.slice(run_start, quote_off));
+                            Cow::Owned(buf)
+                        }
+                        None => Cow::Borrowed(reader.slice(content_start, quote_off)),
+                    });
                 }
             }
             '\n' | '\r' => {
-                // A leading break folds the same way, so an empty buffer is no
-                // exception. Single-quoted scalars have no escapes, so every
-                // trailing blank is foldable whitespace.
-                trim_trailing_blanks(&mut value);
-                fold_quoted_break(reader, &mut value, parent_indent)?;
+                // A fold forces an owned buffer. Copy the clean run, drop its
+                // trailing blanks (single-quoted scalars have no escapes, so every
+                // trailing blank is foldable whitespace), then fold the break.
+                let here = reader.offset();
+                let buf = owned.get_or_insert_with(String::new);
+                buf.push_str(reader.slice(run_start, here));
+                trim_trailing_blanks(buf);
+                fold_quoted_break(reader, buf, parent_indent)?;
+                // A document marker (`---`/`...`) can only begin at column 0, so it
+                // is checked once here, after the fold lands on a continuation line,
+                // rather than on every character.
+                if at_document_marker(reader) {
+                    return Err(ScanError::new(
+                        "a document marker cannot appear inside a quoted scalar",
+                        start_span,
+                    ));
+                }
+                run_start = reader.offset();
             }
-            ch => {
-                value.push(ch);
+            _ => {
                 reader.advance();
             }
         }
     }
-    Ok(Cow::Owned(value))
 }
 
 /// After advancing to the content of a quoted-scalar continuation line (leading

@@ -19,8 +19,8 @@ use crate::roundtrip::{composer, YamlNode};
 
 pub(crate) use convert::py_int_from_decimal;
 use convert::{
-    annotate_node, node_to_python_with_tags, python_to_value, value_to_python_with, EncodeCtx,
-    TagPolicy,
+    annotate_node, node_to_python_with_tags, python_to_value, value_to_python_stream,
+    value_to_python_with, EncodeCtx, TagPolicy,
 };
 pub use types::{YAMLRocksAnnotatedDict, YAMLRocksAnnotatedList, YAMLRocksTag};
 
@@ -541,8 +541,8 @@ pub fn loads_all(
     }
 
     let list = PyList::empty(py);
-    for doc in &documents {
-        list.append(value_to_python_with(py, doc, tag_policy)?)?;
+    for obj in value_to_python_stream(py, &documents, tag_policy)? {
+        list.append(obj)?;
     }
     let result = list.into_any().unbind();
     // Drop the decoded value tree iteratively so a deeply nested document cannot

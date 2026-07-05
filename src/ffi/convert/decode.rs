@@ -110,6 +110,27 @@ pub fn value_to_python_with(
     value_to_python_cached(py, value, tags, &mut keys, 0)
 }
 
+/// Convert every document of a multi-document stream to Python, sharing one
+/// interned-key cache across all of them.
+///
+/// The same mapping keys recur in every document of a stream (config exports,
+/// log records, Kubernetes manifests), so interning each distinct key once for
+/// the whole stream, rather than once per document, turns every later occurrence
+/// into a cheap local cache hit instead of a fresh CPython intern (a hash plus an
+/// intern-table probe). The cache is keyed by string content, so a key at a
+/// different byte offset in a later document still hits. All documents borrow the
+/// same input for the call's duration, so the cached key slices stay valid.
+pub fn value_to_python_stream(
+    py: Python<'_>,
+    docs: &[Value<'_>],
+    tags: TagPolicy<'_, '_>,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let mut keys = KeyCache::with_capacity_and_hasher(32, ahash::RandomState::default());
+    docs.iter()
+        .map(|doc| value_to_python_cached(py, doc, tags, &mut keys, 0))
+        .collect()
+}
+
 fn value_to_python_cached<'tree>(
     py: Python<'_>,
     value: &'tree Value<'_>,

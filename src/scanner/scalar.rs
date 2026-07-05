@@ -340,6 +340,15 @@ pub fn scan_double_quoted<'input>(
                             reader.advance_line();
                             skip_spaces(reader);
                         }
+                        // Like the fold branch, a `---`/`...` document marker can
+                        // land at column 0 on the continuation line and must be
+                        // rejected rather than consumed as content.
+                        if at_document_marker(reader) {
+                            return Err(ScanError::new(
+                                "a document marker cannot appear inside a quoted scalar",
+                                start_span,
+                            ));
+                        }
                     }
                     other => {
                         return Err(ScanError::new(
@@ -1009,6 +1018,19 @@ mod tests {
     #[test]
     fn invalid_escape_is_an_error() {
         assert!(errors("\"bad \\q escape\"\n"));
+    }
+
+    #[test]
+    fn document_marker_after_escaped_continuation_is_rejected() {
+        // A `---`/`...` at column 0 is a structural boundary and cannot sit inside
+        // a quoted scalar, even after a double-quoted escaped line continuation
+        // (`\<newline>`), which lands the next line at column 0 without folding.
+        assert!(errors("\"foo\\\n--- bar\"\n"));
+        assert!(errors("\"foo\\\n... bar\"\n"));
+        // A genuine continuation, and indented dashes (column > 0, so not a
+        // marker) as ordinary content, still scan.
+        assert_eq!(first("\"foo\\\n  bar\"\n").0, "foobar");
+        assert_eq!(first("\"foo\\\n  --- bar\"\n").0, "foo--- bar");
     }
 
     #[test]

@@ -70,6 +70,12 @@ async def test_async_load_all_reads_multidoc(tmp_path):
     assert await yamlrocks.async_load_all(str(p)) == [{"a": 1}, {"b": 2}]
 
 
+async def test_async_loads_all_parses_multidoc_stream():
+    """async_loads_all returns every document from an in-memory stream."""
+    src = b"---\na: 1\n---\nb: 2\n"
+    assert await yamlrocks.async_loads_all(src) == yamlrocks.loads_all(src)
+
+
 async def test_async_dump_writes_file(tmp_path):
     """async_dump serializes and writes to a path."""
     p = tmp_path / "out.yaml"

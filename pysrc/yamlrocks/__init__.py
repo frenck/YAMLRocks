@@ -387,6 +387,7 @@ __all__ = [
     "async_load",
     "async_load_all",
     "async_loads",
+    "async_loads_all",
     "dump",
     "dump_includes",
     "dump_includes_map",
@@ -666,6 +667,26 @@ async def async_load_all(
     return await asyncio.to_thread(
         load_all,
         source,
+        option=option,
+        tag_handler=tag_handler,
+        tags=tags,
+    )
+
+
+async def async_loads_all(
+    data: bytes | bytearray | memoryview | str,
+    /,
+    *,
+    option: int | None = None,
+    tag_handler: Callable[[str, Any], Any] | None = None,
+    tags: dict[str, Callable[[Any], Any]] | None = None,
+) -> list[Any]:
+    """Parse a multi-document stream off the event loop thread; see :func:`loads_all`."""
+    import asyncio  # lazy; see async_loads (issue #52)
+
+    return await asyncio.to_thread(
+        loads_all,
+        data,
         option=option,
         tag_handler=tag_handler,
         tags=tags,

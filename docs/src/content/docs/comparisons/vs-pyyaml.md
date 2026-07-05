@@ -81,7 +81,22 @@ yamlrocks.upgrade(b"enabled: yes\nmode: on\n")
 # b'%YAML 1.2\n---\nenabled: true\nmode: true\n'
 ```
 
-See [YAML 1.1 vs 1.2](/guides/yaml-11-vs-12/) for the full list of differences.
+The same 1.1 heritage means PyYAML also resolves implicit timestamps and
+sexagesimals, so a plain `2024-01-15` becomes a `datetime.date` and a bare
+`13:30:45` becomes the integer `48645` (base-60), a config value silently turned
+into a large number. YAMLRocks stays clean by default and makes timestamp typing
+an explicit opt-in that never touches other 1.1 forms:
+
+```python
+import datetime
+import yamlrocks
+
+yamlrocks.loads(b"at: 13:30:45")                                 # {'at': '13:30:45'}
+yamlrocks.loads(b"on: 2024-01-15", option=yamlrocks.OPT_TIMESTAMPS)  # {'on': datetime.date(2024, 1, 15)}
+```
+
+See [YAML 1.1 vs 1.2](/guides/yaml-11-vs-12/) for the full list of differences,
+and [timestamps](/reference/options/#timestamps) for the opt-in.
 
 ## Comments and round-trip editing
 

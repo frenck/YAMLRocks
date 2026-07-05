@@ -13,20 +13,21 @@ on top.
 
 ## Feature comparison
 
-| Feature                       |       yaml-rs        |         YAMLRocks          |
-| ----------------------------- | :------------------: | :------------------------: |
-| YAML 1.2                      |         Yes          |            Yes             |
-| Comment-preserving round-trip |          No          |    Yes (byte-for-byte)     |
-| Native `!include` + writeback |          No          |            Yes             |
-| JSON Schema validation        |          No          |    Yes (line-numbered)     |
-| Source line/column            |          No          |    Yes (annotated mode)    |
-| Custom tag handling           |          No          |            Yes             |
-| Verified vs the YAML suite    |      Not stated      |        Yes, in full        |
-| Anchors/aliases resolved      |         Yes          |            Yes             |
-| Merge keys (`<<`)             |          No          |            Yes             |
-| Implementation                |  Rust (saphyr fork)  | Rust (own scanner/emitter) |
-| Speed (parse / dump)          |       baseline       |    ~1.2x / ~1.4x faster    |
-| Maturity                      | 0.1.x, public domain |    Battle-tested corpus    |
+| Feature                       |           yaml-rs           |         YAMLRocks          |
+| ----------------------------- | :-------------------------: | :------------------------: |
+| YAML 1.2                      |             Yes             |            Yes             |
+| Comment-preserving round-trip |             No              |    Yes (byte-for-byte)     |
+| Native `!include` + writeback |             No              |            Yes             |
+| JSON Schema validation        |             No              |    Yes (line-numbered)     |
+| Source line/column            |             No              |    Yes (annotated mode)    |
+| Custom tag handling           |             No              |            Yes             |
+| Verified vs the YAML suite    |         Not stated          |        Yes, in full        |
+| Anchors/aliases resolved      |             Yes             |            Yes             |
+| Merge keys (`<<`)             |             No              |            Yes             |
+| Timestamp resolution          | On by default, incl. quoted | Opt-in, plain scalars only |
+| Implementation                |     Rust (saphyr fork)      | Rust (own scanner/emitter) |
+| Speed (parse / dump)          |          baseline           |    ~1.2x / ~1.4x faster    |
+| Maturity                      |    0.1.x, public domain     |    Battle-tested corpus    |
 
 ## A parser, or a toolkit
 
@@ -91,6 +92,22 @@ yamlrocks.loads(b"base: &b\n  timeout: 30\nsvc:\n  <<: *b\n  name: api\n")
 # Leading-zero integers: `0777` is a string in YAML 1.2, not the number 777.
 yamlrocks.loads(b"mode: 0777")
 # {'mode': '0777'}
+```
+
+Timestamps are a sharper example. yaml-rs resolves a date/datetime scalar to a
+Python object by default, and it does so even for a **quoted** scalar. In YAML a
+quoted scalar is explicitly a string, so quoting is exactly how you say "keep
+this as text", and yaml-rs ignores that. YAMLRocks makes timestamp resolution
+opt-in ([`OPT_TIMESTAMPS`](/reference/options/#timestamps)) and only ever applies
+it to plain scalars, matching PyYAML and the spec:
+
+```python
+import yamlrocks
+
+# A quoted scalar is a string, even with timestamp resolution enabled.
+yamlrocks.loads(b'when: "2024-01-15"', option=yamlrocks.OPT_TIMESTAMPS)
+# {'when': '2024-01-15'}
+# yaml-rs returns {'when': datetime.date(2024, 1, 15)}, quoting ignored.
 ```
 
 These are not the reason to switch on their own; they are evidence that "verified

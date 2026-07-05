@@ -174,6 +174,19 @@ fn fold_quoted_break(
     Ok(())
 }
 
+/// Append a run of ordinary (unescaped, single-line) double-quoted content to
+/// `buf`, advancing `nonblank_len` to just past the run's last non-blank byte. A
+/// literal space or tab is foldable whitespace and does not move the boundary,
+/// so this reproduces exactly what the old per-character bookkeeping produced.
+fn push_dquoted_run(buf: &mut String, nonblank_len: &mut usize, run: &str) {
+    let base = buf.len();
+    buf.push_str(run);
+    if let Some(i) = run.rfind(|c: char| c != ' ' && c != '\t') {
+        let ch_len = run[i..].chars().next().unwrap().len_utf8();
+        *nonblank_len = base + i + ch_len;
+    }
+}
+
 /// Scan a double-quoted scalar: "value"
 ///
 /// `parent_indent` carries the same meaning as in [`scan_single_quoted`]:
@@ -185,12 +198,19 @@ pub fn scan_double_quoted<'input>(
     let start_span = reader.span();
     reader.advance(); // skip opening "
 
-    let mut value = String::new();
-    // Length of `value` up to the last non-blank (or escaped-blank) character.
-    // Folding a line break strips the line's trailing whitespace, but only the
-    // *literal* spaces and tabs from the source: an escaped `\t`/`\<TAB>` or
-    // escaped space is content and must survive. Tracking the boundary lets the
-    // fold truncate to it instead of blindly trimming the tail.
+    // Like `scan_single_quoted`, scan by offset and borrow the input slice when
+    // the scalar is clean: no `\` escape and no line fold means the content is
+    // exactly the bytes between the quotes. An owned buffer is materialized only
+    // once an escape or fold forces a transformation, and clean runs are then
+    // bulk-copied rather than pushed char by char.
+    let content_start = reader.offset();
+    let mut owned: Option<String> = None;
+    let mut run_start = content_start;
+    // Length of the owned buffer up to the last non-blank (or escaped-blank)
+    // character. Folding a line break strips the line's *literal* trailing spaces
+    // and tabs, but an escaped `\t`/`\<TAB>`/escaped space is content and must
+    // survive; tracking the boundary lets the fold truncate to it. Meaningful
+    // only once `owned` is set (a fold or escape cannot happen before that).
     let mut nonblank_len = 0usize;
     loop {
         if reader.is_eof() {
@@ -199,107 +219,116 @@ pub fn scan_double_quoted<'input>(
                 start_span,
             ));
         }
-        if at_document_marker(reader) {
-            return Err(ScanError::new(
-                "a document marker cannot appear inside a quoted scalar",
-                start_span,
-            ));
-        }
         match reader.peek() {
             '"' => {
+                let quote_off = reader.offset();
                 reader.advance();
-                break;
+                return Ok(match owned {
+                    Some(mut buf) => {
+                        push_dquoted_run(
+                            &mut buf,
+                            &mut nonblank_len,
+                            reader.slice(run_start, quote_off),
+                        );
+                        Cow::Owned(buf)
+                    }
+                    None => Cow::Borrowed(reader.slice(content_start, quote_off)),
+                });
             }
             '\\' => {
+                // An escape forces an owned buffer; flush the clean run first.
+                let esc_off = reader.offset();
+                let buf = owned.get_or_insert_with(String::new);
+                push_dquoted_run(buf, &mut nonblank_len, reader.slice(run_start, esc_off));
                 reader.advance();
                 if reader.is_eof() {
                     return Err(ScanError::new("unterminated escape sequence", start_span));
                 }
                 match reader.peek() {
                     '0' => {
-                        value.push('\0');
+                        buf.push('\0');
                         reader.advance();
                     }
                     'a' => {
-                        value.push('\x07');
+                        buf.push('\x07');
                         reader.advance();
                     }
                     'b' => {
-                        value.push('\x08');
+                        buf.push('\x08');
                         reader.advance();
                     }
                     't' | '\t' => {
                         // `\t` and a backslash before a literal tab are both the
                         // escaped horizontal tab (`ns-esc-horizontal-tab`, x09).
-                        value.push('\t');
+                        buf.push('\t');
                         reader.advance();
                     }
                     'n' => {
-                        value.push('\n');
+                        buf.push('\n');
                         reader.advance();
                     }
                     'v' => {
-                        value.push('\x0B');
+                        buf.push('\x0B');
                         reader.advance();
                     }
                     'f' => {
-                        value.push('\x0C');
+                        buf.push('\x0C');
                         reader.advance();
                     }
                     'r' => {
-                        value.push('\r');
+                        buf.push('\r');
                         reader.advance();
                     }
                     'e' => {
-                        value.push('\x1B');
+                        buf.push('\x1B');
                         reader.advance();
                     }
                     ' ' => {
-                        value.push(' ');
+                        buf.push(' ');
                         reader.advance();
                     }
                     '"' => {
-                        value.push('"');
+                        buf.push('"');
                         reader.advance();
                     }
                     '/' => {
-                        value.push('/');
+                        buf.push('/');
                         reader.advance();
                     }
                     '\\' => {
-                        value.push('\\');
+                        buf.push('\\');
                         reader.advance();
                     }
                     'N' => {
-                        value.push('\u{0085}');
+                        buf.push('\u{0085}');
                         reader.advance();
                     }
                     '_' => {
-                        value.push('\u{00A0}');
+                        buf.push('\u{00A0}');
                         reader.advance();
                     }
                     'L' => {
-                        value.push('\u{2028}');
+                        buf.push('\u{2028}');
                         reader.advance();
                     }
                     'P' => {
-                        value.push('\u{2029}');
+                        buf.push('\u{2029}');
                         reader.advance();
                     }
                     'x' => {
                         reader.advance();
                         let ch = scan_unicode_escape(reader, 2, start_span)?;
-                        value.push(ch);
+                        buf.push(ch);
                     }
                     'u' => {
                         reader.advance();
                         let ch = scan_unicode_escape(reader, 4, start_span)?;
-                        value.push(ch);
+                        buf.push(ch);
                     }
                     'U' => {
                         reader.advance();
                         let ch = scan_unicode_escape(reader, 8, start_span)?;
-                        value.push(ch);
+                        buf.push(ch);
                     }
                     '\n' | '\r' => {
                         // Line continuation
@@ -307,7 +336,7 @@ pub fn scan_double_quoted<'input>(
                         skip_spaces(reader);
                         // Skip blank lines
                         while !reader.is_eof() && (reader.peek() == '\n' || reader.peek() == '\r') {
-                            value.push('\n');
+                            buf.push('\n');
                             reader.advance_line();
                             skip_spaces(reader);
                         }
@@ -321,26 +350,34 @@ pub fn scan_double_quoted<'input>(
                 }
                 // Escaped output is content, never foldable whitespace, even
                 // when it is a tab or space: protect it from the next fold.
-                nonblank_len = value.len();
+                nonblank_len = buf.len();
+                run_start = reader.offset();
             }
             '\n' | '\r' => {
-                // Strip the line's literal trailing blanks (everything past the
-                // last non-blank boundary), keeping any escaped blanks, then fold.
-                value.truncate(nonblank_len);
-                fold_quoted_break(reader, &mut value, parent_indent)?;
-            }
-            ch => {
-                value.push(ch);
-                reader.advance();
-                // A literal space or tab is foldable whitespace; leave the
-                // boundary behind it so a trailing run is stripped on a fold.
-                if ch != ' ' && ch != '\t' {
-                    nonblank_len = value.len();
+                // A fold forces an owned buffer. Copy the clean run, strip the
+                // line's literal trailing blanks (everything past the last
+                // non-blank boundary, keeping any escaped blanks), then fold.
+                let here = reader.offset();
+                let buf = owned.get_or_insert_with(String::new);
+                push_dquoted_run(buf, &mut nonblank_len, reader.slice(run_start, here));
+                buf.truncate(nonblank_len);
+                fold_quoted_break(reader, buf, parent_indent)?;
+                // A document marker (`---`/`...`) can only begin at column 0, so
+                // it is checked once here, after the fold lands on a continuation
+                // line, rather than on every character.
+                if at_document_marker(reader) {
+                    return Err(ScanError::new(
+                        "a document marker cannot appear inside a quoted scalar",
+                        start_span,
+                    ));
                 }
+                run_start = reader.offset();
+            }
+            _ => {
+                reader.advance();
             }
         }
     }
-    Ok(Cow::Owned(value))
 }
 
 fn scan_unicode_escape(

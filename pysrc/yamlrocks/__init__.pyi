@@ -392,7 +392,6 @@ def dump(
     *,
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
-    null_style: str | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> None: ...
@@ -410,7 +409,6 @@ def dumps(
     *,
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
-    null_style: str | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> bytes: ...
@@ -474,7 +472,6 @@ async def async_dump(
     *,
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
-    null_style: str | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> None: ...

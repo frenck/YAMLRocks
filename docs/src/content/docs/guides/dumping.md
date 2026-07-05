@@ -167,9 +167,9 @@ yamlrocks.dumps({"b": 1, "a": 2}, option=yamlrocks.OPT_SORT_KEYS | yamlrocks.OPT
 `None` is left **blank** by default (`key:` with nothing after the colon), which
 is what hand-written configs and PyYAML-based tools overwhelmingly produce. Some
 formats prefer the explicit `null` keyword (data and spec formats such as
-OpenAPI), and some prefer the `~` indicator. Pass `null_style` to choose per call,
-or set `OPT_NULL_AS_KEYWORD` / `OPT_NULL_AS_TILDE` to make that style the default
-(the two flags are mutually exclusive):
+OpenAPI), and some prefer the `~` indicator. Set `OPT_NULL_AS_KEYWORD` or
+`OPT_NULL_AS_TILDE` to make that style the default (the two flags are mutually
+exclusive):
 
 ```python
 import yamlrocks
@@ -177,21 +177,17 @@ import yamlrocks
 yamlrocks.dumps({"a": None, "b": None})
 # b'a:\nb:\n'
 
-yamlrocks.dumps({"a": None, "b": None}, null_style="null")
+yamlrocks.dumps({"a": None, "b": None}, option=yamlrocks.OPT_NULL_AS_KEYWORD)
 # b'a: null\nb: null\n'
 
-yamlrocks.dumps({"a": None}, null_style="~")
+yamlrocks.dumps({"a": None}, option=yamlrocks.OPT_NULL_AS_TILDE)
 # b'a: ~\n'
-
-yamlrocks.dumps({"a": None}, option=yamlrocks.OPT_NULL_AS_KEYWORD)
-# b'a: null\n'
 ```
 
 The three styles all parse back to `None`, so the choice is cosmetic. The blank
 form is only used where it is unambiguous, a block mapping value or a block
 sequence entry; at the top level, inside a flow collection, or as a mapping key it
-falls back to `null` so the output stays valid YAML 1.2. The `null_style` argument
-overrides the flag for a single call.
+falls back to `null` so the output stays valid YAML 1.2.
 
 ### Line width: `width`
 

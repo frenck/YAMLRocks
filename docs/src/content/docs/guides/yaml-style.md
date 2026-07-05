@@ -112,7 +112,7 @@ yamlrocks.dumps({"nickname": None})
 
 Some formats prefer the explicit keyword, in particular data and specification
 formats such as OpenAPI, where `null` is idiomatic. Opt into it with
-`OPT_NULL_AS_KEYWORD` (or `null_style="null"` for a single call):
+`OPT_NULL_AS_KEYWORD`:
 
 ```python
 import yamlrocks

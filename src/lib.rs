@@ -333,6 +333,7 @@ fn _yamlrocks(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("OPT_OMIT_MICROSECONDS", ffi::OPT_OMIT_MICROSECONDS)?;
     m.add("OPT_NAIVE_UTC", ffi::OPT_NAIVE_UTC)?;
     m.add("OPT_UTC_Z", ffi::OPT_UTC_Z)?;
+    m.add("OPT_TIMESTAMPS", ffi::OPT_TIMESTAMPS)?;
 
     // The exception hierarchy is defined in pure Python (yamlrocks.exceptions) and
     // raised from Rust via pyo3::import_exception!; it is not registered here.

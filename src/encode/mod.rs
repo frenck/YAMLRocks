@@ -436,6 +436,10 @@ impl<'a> Emitter<'a> {
             Value::BigInt(s) => self.buf.extend_from_slice(s.as_bytes()),
             Value::Float(f) => self.emit_float(*f),
             Value::String(s) => self.emit_string_inline(s, in_flow),
+            // A resolved timestamp emits as its ISO scalar. The fast dump path
+            // builds a string from a Python date/datetime, so this is only
+            // reached for a decoded `Value` tree carrying a timestamp.
+            Value::Timestamp(ts) => self.emit_string_inline(&ts.to_iso(), in_flow),
             Value::Sequence(items) => self.emit_flow_sequence(items),
             Value::Mapping(pairs) => self.emit_flow_mapping(pairs),
             Value::Tagged(tag, inner) => {
@@ -693,7 +697,7 @@ fn compare_keys(a: &Value, b: &Value) -> std::cmp::Ordering {
             Value::Null => 0,
             Value::Bool(_) => 1,
             Value::Int(_) | Value::BigInt(_) | Value::Float(_) => 2,
-            Value::String(_) => 3,
+            Value::String(_) | Value::Timestamp(_) => 3,
             // All complex keys share a rank so the stable sort leaves them in
             // input order (there is no meaningful cross-type ordering for them).
             Value::Sequence(_) | Value::Mapping(_) | Value::Tagged(..) => 4,

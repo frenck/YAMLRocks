@@ -501,6 +501,9 @@ fn type_name(value: &Value) -> &'static str {
         Value::Int(_) | Value::BigInt(_) => "integer",
         Value::Float(_) => "number",
         Value::String(_) => "string",
+        // A resolved timestamp has no JSON Schema type of its own; treat it as a
+        // string (its ISO form), the JSON projection of a date/datetime.
+        Value::Timestamp(_) => "string",
         Value::Sequence(_) => "array",
         Value::Mapping(_) => "object",
         Value::Tagged(_, inner) => type_name(inner),

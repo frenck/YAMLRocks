@@ -1,12 +1,56 @@
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyFloat, PyString, PyTuple};
+use pyo3::types::{PyDate, PyDateTime, PyDelta, PyFloat, PyString, PyTuple, PyTzInfo};
 
 use crate::decode::Value;
 use crate::ffi::errors;
 use crate::ffi::types::YAMLRocksTag;
+use crate::resolver::timestamp::Timestamp;
 
 use super::TagPolicy;
+
+/// Build a Python `datetime.date`/`datetime.datetime` from a resolved timestamp.
+/// A date-only value becomes a `date`; a date-time becomes a `datetime`, naive
+/// when no zone was given and timezone-aware (a fixed `datetime.timezone`) when
+/// an offset or `Z` was. Shared by the fast path and the round-trip AST path.
+pub(crate) fn timestamp_to_py(py: Python<'_>, ts: &Timestamp) -> PyResult<Py<PyAny>> {
+    match ts {
+        Timestamp::Date { year, month, day } => {
+            Ok(PyDate::new(py, *year, *month, *day)?.into_any().unbind())
+        }
+        Timestamp::DateTime {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            microsecond,
+            offset_minutes,
+        } => {
+            let tz = match offset_minutes {
+                None => None,
+                Some(offset) => {
+                    let delta = PyDelta::new(py, 0, offset * 60, 0, true)?;
+                    let timezone = py.import("datetime")?.getattr("timezone")?;
+                    Some(timezone.call1((delta,))?.cast_into::<PyTzInfo>()?)
+                }
+            };
+            let dt = PyDateTime::new(
+                py,
+                *year,
+                *month,
+                *day,
+                *hour,
+                *minute,
+                *second,
+                *microsecond,
+                tz.as_ref(),
+            )?;
+            Ok(dt.into_any().unbind())
+        }
+    }
+}
 
 // -- Value -> Python (fast path) --
 pub(super) fn resolve_tagged(
@@ -97,6 +141,7 @@ fn value_to_python_inner<'tree>(
         Value::BigInt(s) => super::py_int_from_decimal(py, s),
         Value::Float(f) => PyFloat::new(py, *f).into_any().unbind(),
         Value::String(s) => PyString::new(py, s).into_any().unbind(),
+        Value::Timestamp(ts) => timestamp_to_py(py, ts)?,
         Value::Sequence(items) => {
             // Build the list with the exact final size up front, then fill the
             // slots with `PyList_SET_ITEM` (which steals the reference). This

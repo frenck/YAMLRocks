@@ -9,10 +9,10 @@ differently shows up as a mismatch instead of hiding behind "it parsed".
 
 To keep the signal clean, yamlrocks is loaded with ``OPT_PYYAML_COMPAT`` so the
 two share a scalar schema (PyYAML implements YAML 1.1; yamlrocks defaults to the
-1.2 core schema). Two intentional gaps remain and are triaged, not reported:
+1.2 core schema). ``OPT_PYYAML_COMPAT`` also resolves timestamps, so a
+``date``/``datetime`` now matches PyYAML directly rather than being triaged. One
+intentional gap remains:
 
-* Timestamps and dates. YAML 1.2 core does not resolve them, so yamlrocks
-  returns a string where PyYAML (1.1) returns ``datetime``/``date``/``time``.
 * ``NaN`` never equals itself, so two NaNs are treated as equal here.
 
 The module is both a library (``compare`` and the corpus walkers, used by
@@ -25,7 +25,6 @@ The module is both a library (``compare`` and the corpus walkers, used by
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import math
 import pathlib
 import random
@@ -74,10 +73,6 @@ def _values_equal(yr: object, py: object) -> bool:
     Leaf types must match exactly (so an int decoded as a bool, or a float that
     lost precision, is caught), except for the two intentional gaps above.
     """
-    # Timestamp gap: a yamlrocks string against a PyYAML datetime/date/time is
-    # the documented 1.2-core behaviour, not a disagreement.
-    if isinstance(py, (dt.datetime, dt.date, dt.time)) and isinstance(yr, str):
-        return True
     if isinstance(yr, bool) or isinstance(py, bool):
         # Guard the bool/int overlap (`True == 1` in Python) before the numeric
         # branch: a bool on one side and an int on the other is a real mismatch.

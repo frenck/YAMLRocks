@@ -61,6 +61,8 @@ fn write_value_inner(
         Value::BigInt(s) => out.push_str(s),
         Value::Float(f) => write_float(out, *f),
         Value::String(s) => write_string(out, s),
+        // A date/datetime has no JSON type; emit its ISO string.
+        Value::Timestamp(ts) => write_string(out, &ts.to_iso()),
         Value::Sequence(items) => write_array(out, items, options, depth)?,
         Value::Mapping(pairs) => write_object(out, pairs, options, depth)?,
         // JSON has no tags; emit the value the tag wraps.
@@ -159,6 +161,7 @@ fn key_string(key: &Value<'_>) -> Result<String, String> {
             Ok(s)
         }
         Value::String(s) => Ok(s.as_ref().to_owned()),
+        Value::Timestamp(ts) => Ok(ts.to_iso()),
         Value::Tagged(_, inner) => key_string(inner),
         Value::Sequence(_) | Value::Mapping(_) => {
             Err("a collection cannot be a JSON object key".to_owned())

@@ -33,6 +33,29 @@ pub fn node_to_python_with(
 /// PyYAML (so `d['base'] is d['ref']`), instead of an independent copy.
 pub(crate) type ObjectCache = HashMap<String, Py<PyAny>>;
 
+/// Resolve a scalar node to a Python object, honoring PyYAML-compat timestamp
+/// resolution. Under the PyYAML-compat schema a plain, untagged scalar matching
+/// a timestamp shape becomes a `date`/`datetime` (as on the fast path); every
+/// other case, and every other schema, falls through to the normal scalar
+/// resolution. The standalone `OPT_TIMESTAMPS` flag is a fast-path feature and
+/// does not reach here, so round-trip timestamp typing follows the schema.
+fn scalar_to_py(
+    py: Python<'_>,
+    value: &str,
+    style: ScalarStyle,
+    tag: Option<&str>,
+    schema: Schema,
+) -> Py<PyAny> {
+    if schema == Schema::Yaml11PyYaml && style == ScalarStyle::Plain && tag.is_none() {
+        if let Some(ts) = crate::resolver::timestamp::parse(value) {
+            if let Ok(obj) = crate::ffi::convert::timestamp_to_py(py, &ts) {
+                return obj;
+            }
+        }
+    }
+    resolved_to_py(py, schema.resolve(value, style, tag))
+}
+
 /// Convert a resolved scalar value into its Python object.
 fn resolved_to_py(py: Python<'_>, resolved: ResolvedValue) -> Py<PyAny> {
     match resolved {
@@ -93,7 +116,7 @@ fn node_to_python_cached_inner(
             None => py.None(),
         },
         YamlNodeKind::Scalar(value, style) => {
-            resolved_to_py(py, schema.resolve(value, *style, node.tag.as_deref()))
+            scalar_to_py(py, value, *style, node.tag.as_deref(), schema)
         }
         YamlNodeKind::Sequence(items) => {
             let list = PyList::empty(py);

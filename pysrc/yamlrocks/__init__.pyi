@@ -393,7 +393,7 @@ def dump(
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
     null_style: str | None = None,
-    tags: dict[type, Callable[[Any], Any]] | None = None,
+    serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> None: ...
 def loads_all(
@@ -411,7 +411,7 @@ def dumps(
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
     null_style: str | None = None,
-    tags: dict[type, Callable[[Any], Any]] | None = None,
+    serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> bytes: ...
 def to_json(
@@ -475,7 +475,7 @@ async def async_dump(
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
     null_style: str | None = None,
-    tags: dict[type, Callable[[Any], Any]] | None = None,
+    serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> None: ...
 def dump_includes(

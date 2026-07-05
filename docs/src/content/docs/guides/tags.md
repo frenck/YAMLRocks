@@ -183,9 +183,11 @@ yamlrocks.dumps({"opts": yamlrocks.YAMLRocksTag("!extend", {"a": 1, "b": 2})})
 ### Emitting your own types as tags
 
 When you hold your own objects (not `YAMLRocksTag` instances) and want them to
-emit as a tag, pass a `tags` registry to `dumps`. It maps a **Python type** to a
-callable that returns a `YAMLRocksTag` (or a `(tag, value)` tuple). This is the
-exact inverse of the load-side `tags={"!tag": func}` registry:
+emit as a tag, pass a `serializers` registry to `dumps`. It maps a **Python
+type** to a callable that returns a `YAMLRocksTag` (or a `(tag, value)` tuple).
+It is the write-side mirror of the load-side `tags={"!tag": func}` registry, but
+keyed the other way round: on load you dispatch on the YAML tag, on dump you
+dispatch on the Python type.
 
 ```python
 import yamlrocks
@@ -196,7 +198,7 @@ class Input:
 
 yamlrocks.dumps(
     {"brightness": Input("kitchen")},
-    tags={Input: lambda o: yamlrocks.YAMLRocksTag("!input", o.name)},
+    serializers={Input: lambda o: yamlrocks.YAMLRocksTag("!input", o.name)},
 )
 # b'brightness: !input kitchen\n'
 ```
@@ -217,7 +219,7 @@ class Input:
 
 out = yamlrocks.dumps(
     {"brightness": Input("kitchen")},
-    tags={Input: lambda o: yamlrocks.YAMLRocksTag("!input", o.name)},
+    serializers={Input: lambda o: yamlrocks.YAMLRocksTag("!input", o.name)},
 )
 yamlrocks.loads(out, tags={"!input": lambda v: Input(str(v))})
 # {'brightness': Input('kitchen')}

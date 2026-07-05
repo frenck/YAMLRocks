@@ -138,8 +138,8 @@ def test_dumps_passthrough_tag_round_trips():
     assert yamlrocks.dumps(data) == b"x: !input foo\n"
 
 
-def test_dumps_tags_registry_by_type():
-    """tags={type: func} emits a `!tag value` for a registered type."""
+def test_dumps_serializers_registry_by_type():
+    """serializers={type: func} emits a `!tag value` for a registered type."""
 
     class Marker:
         def __init__(self, name):
@@ -147,13 +147,13 @@ def test_dumps_tags_registry_by_type():
 
     out = yamlrocks.dumps(
         {"hello": Marker("world")},
-        tags={Marker: lambda o: yamlrocks.YAMLRocksTag("!marker", o.name)},
+        serializers={Marker: lambda o: yamlrocks.YAMLRocksTag("!marker", o.name)},
     )
     assert out == b"hello: !marker world\n"
 
 
-def test_dumps_tags_registry_tuple_return():
-    """A tags callback may return a (tag, value) tuple instead of a Tag."""
+def test_dumps_serializers_registry_tuple_return():
+    """A serializers callback may return a (tag, value) tuple instead of a Tag."""
 
     class Marker:
         def __init__(self, name):
@@ -161,12 +161,12 @@ def test_dumps_tags_registry_tuple_return():
 
     out = yamlrocks.dumps(
         {"x": Marker("z")},
-        tags={Marker: lambda o: ("!marker", o.name)},
+        serializers={Marker: lambda o: ("!marker", o.name)},
     )
     assert out == b"x: !marker z\n"
 
 
-def test_dumps_tags_registry_before_dataclass():
+def test_dumps_serializers_registry_before_dataclass():
     """A registered dataclass type emits a tag rather than auto-mapping."""
     from dataclasses import dataclass
 
@@ -176,7 +176,7 @@ def test_dumps_tags_registry_before_dataclass():
 
     out = yamlrocks.dumps(
         {"hello": Input("test_name")},
-        tags={Input: lambda o: yamlrocks.YAMLRocksTag("!input", o.name)},
+        serializers={Input: lambda o: yamlrocks.YAMLRocksTag("!input", o.name)},
     )
     assert out == b"hello: !input test_name\n"
     # Round-trip closes with the load-side tags registry.
@@ -184,7 +184,7 @@ def test_dumps_tags_registry_before_dataclass():
     assert back == {"hello": Input("test_name")}
 
 
-def test_dumps_tags_registry_is_exact_type():
+def test_dumps_serializers_registry_is_exact_type():
     """Matching is by exact type; a subclass is not caught by a base entry."""
 
     class Base:
@@ -200,7 +200,7 @@ def test_dumps_tags_registry_is_exact_type():
     with pytest.raises(yamlrocks.YAMLRocksUnserializableError):
         yamlrocks.dumps(
             {"x": Derived()},
-            tags={Base: lambda o: yamlrocks.YAMLRocksTag("!b", "x")},
+            serializers={Base: lambda o: yamlrocks.YAMLRocksTag("!b", "x")},
         )
 
 
@@ -219,14 +219,14 @@ def test_dumps_default_may_return_tag():
 
 
 def test_dumps_tags_callback_bad_return_raises():
-    """A tags callback that returns a non-tag, non-tuple value errors clearly."""
+    """A serializers callback that returns a non-tag, non-tuple value errors clearly."""
     import pytest
 
     class Marker:
         pass
 
     with pytest.raises(yamlrocks.YAMLRocksError):
-        yamlrocks.dumps({"x": Marker()}, tags={Marker: lambda o: 123})
+        yamlrocks.dumps({"x": Marker()}, serializers={Marker: lambda o: 123})
 
 
 def test_dumps_tag_with_whitespace_is_rejected():
@@ -258,7 +258,9 @@ def test_dumps_tuple_tag_with_whitespace_is_rejected():
         pass
 
     with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="invalid tag"):
-        yamlrocks.dumps({"x": Marker()}, tags={Marker: lambda o: ("!bad tag", "v")})
+        yamlrocks.dumps(
+            {"x": Marker()}, serializers={Marker: lambda o: ("!bad tag", "v")}
+        )
 
 
 def test_dumps_verbatim_tag_with_commas_is_allowed():

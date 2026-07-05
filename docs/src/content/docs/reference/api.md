@@ -231,7 +231,7 @@ def dumps(
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
     null_style: str | None = None,
-    tags: dict[type, Callable[[Any], Any]] | None = None,
+    serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> bytes: ...
 ```
@@ -246,8 +246,8 @@ not `str`; decode with `.decode()` if you need text.
 - `null_style`: how `None` is rendered, one of `"empty"` (default), `"null"`, or
   `"~"`. Overrides `OPT_NULL_AS_KEYWORD` / `OPT_NULL_AS_TILDE` for this call. See
   [Null style](/reference/options/#null-style).
-- `tags`: a `{type: func}` registry for emitting custom `!tag value` output;
-  `func` receives a value of that exact type and returns a
+- `serializers`: a `{type: func}` registry for emitting custom `!tag value`
+  output; `func` receives a value of that exact type and returns a
   [`YAMLRocksTag`](#yamlrockstag) (or `(tag, value)` tuple). The write-side mirror
   of the load-side `tags`. See [emitting custom tags](/guides/tags/#emitting-custom-tags).
 - `width`: a best-effort maximum line length. `None` (the default) leaves lines
@@ -279,7 +279,7 @@ def dump(
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
     null_style: str | None = None,
-    tags: dict[type, Callable[[Any], Any]] | None = None,
+    serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> None: ...
 ```

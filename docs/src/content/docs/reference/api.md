@@ -230,7 +230,6 @@ def dumps(
     *,
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
-    null_style: str | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> bytes: ...
@@ -242,9 +241,9 @@ not `str`; decode with `.decode()` if you need text.
 - `default`: a callable invoked for a value YAMLRocks cannot serialize on its own.
   It receives the value and returns something serializable, or raises to signal
   that the value is unsupported.
-- `option`: a bitwise-OR of [`OPT_*` flags](/reference/options/).
-- `null_style`: how `None` is rendered, one of `"empty"` (default), `"null"`, or
-  `"~"`. Overrides `OPT_NULL_AS_KEYWORD` / `OPT_NULL_AS_TILDE` for this call. See
+- `option`: a bitwise-OR of [`OPT_*` flags](/reference/options/). How `None` is
+  rendered is one of these: the default empty node (`key:`), `OPT_NULL_AS_KEYWORD`
+  (`key: null`), or `OPT_NULL_AS_TILDE` (`key: ~`). See
   [Null style](/reference/options/#null-style).
 - `serializers`: a `{type: func}` registry for emitting custom `!tag value`
   output; `func` receives a value of that exact type and returns a
@@ -278,7 +277,6 @@ def dump(
     *,
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
-    null_style: str | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> None: ...

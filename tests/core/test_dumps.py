@@ -257,30 +257,10 @@ def test_dumps_null_style_default_is_empty():
     assert yamlrocks.dumps({"a": None, "list": [1, None]}) == b"a:\nlist:\n  - 1\n  -\n"
 
 
-def test_dumps_null_style_empty_in_block_positions():
-    """``null_style='empty'`` (the default) emits a bare ``key:``/``-``."""
-    out = yamlrocks.dumps({"a": None, "list": [1, None]}, null_style="empty")
-    assert out == b"a:\nlist:\n  - 1\n  -\n"
-
-
-def test_dumps_null_style_tilde():
-    """``null_style='~'`` emits the tilde indicator everywhere."""
-    out = yamlrocks.dumps({"a": None, "list": [None]}, null_style="~")
-    assert out == b"a: ~\nlist:\n  - ~\n"
-
-
 def test_dumps_opt_null_as_keyword_flag():
     """``OPT_NULL_AS_KEYWORD`` selects the explicit ``null`` keyword."""
     out = yamlrocks.dumps({"a": None}, option=yamlrocks.OPT_NULL_AS_KEYWORD)
     assert out == b"a: null\n"
-
-
-def test_dumps_null_style_kwarg_overrides_flag():
-    """The per-call ``null_style=`` argument wins over the option flag."""
-    out = yamlrocks.dumps(
-        {"a": None}, option=yamlrocks.OPT_NULL_AS_KEYWORD, null_style="empty"
-    )
-    assert out == b"a:\n"
 
 
 @pytest.mark.parametrize(
@@ -291,30 +271,26 @@ def test_dumps_null_style_kwarg_overrides_flag():
     ],
 )
 def test_dumps_null_style_empty_falls_back_where_ambiguous(obj, expected):
-    """Empty null is only used where it reads back unambiguously; elsewhere
-    (top-level scalar, flow, a key) it falls back to the ``null`` keyword."""
-    assert yamlrocks.dumps(obj, null_style="empty") == expected
+    """The default empty null is only used where it reads back unambiguously;
+    elsewhere (top-level scalar, flow, a key) it falls back to the ``null``
+    keyword."""
+    assert yamlrocks.dumps(obj) == expected
 
 
 def test_dumps_null_style_empty_flow_falls_back():
     """In a flow collection an empty entry is invalid, so ``null`` is used."""
-    out = yamlrocks.dumps(
-        {"a": [None, 1]}, option=yamlrocks.OPT_FLOW_STYLE, null_style="empty"
-    )
+    out = yamlrocks.dumps({"a": [None, 1]}, option=yamlrocks.OPT_FLOW_STYLE)
     assert out == b"{a: [null, 1]}\n"
 
 
-@pytest.mark.parametrize("style", ["null", "empty", "~"])
-def test_dumps_null_style_always_round_trips_to_none(style):
+@pytest.mark.parametrize(
+    "option",
+    [None, yamlrocks.OPT_NULL_AS_KEYWORD, yamlrocks.OPT_NULL_AS_TILDE],
+)
+def test_dumps_null_style_always_round_trips_to_none(option):
     """Every null style parses back to None, so the choice is purely cosmetic."""
     data = {"a": None, "b": [None, {"c": None}]}
-    assert yamlrocks.loads(yamlrocks.dumps(data, null_style=style)) == data
-
-
-def test_dumps_invalid_null_style_raises():
-    """An unknown null_style is a ValueError naming the valid choices."""
-    with pytest.raises(ValueError, match="null_style"):
-        yamlrocks.dumps({"a": None}, null_style="nil")
+    assert yamlrocks.loads(yamlrocks.dumps(data, option=option)) == data
 
 
 def test_dumps_opt_null_as_tilde_flag():

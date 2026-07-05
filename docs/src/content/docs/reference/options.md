@@ -185,11 +185,10 @@ yamlrocks.dumps({"a": 1}, option=yamlrocks.OPT_EXPLICIT_START | yamlrocks.OPT_EX
 
 When `dumps` serializes `None`, it leaves the value **blank** by default
 (`key:`), matching the dominant real-world configuration style.
-`OPT_NULL_AS_KEYWORD` switches the default to the explicit `null` keyword and
+`OPT_NULL_AS_KEYWORD` switches to the explicit `null` keyword and
 `OPT_NULL_AS_TILDE` to `~`; the two flags are mutually exclusive (setting both
-raises `ValueError`). The per-call `null_style` argument of `dumps`/`dump`
-overrides the flag for one call. The accepted styles are `"null"`, `"empty"`, and
-`"~"`. All three parse back to `None`, so the choice is purely cosmetic.
+raises `ValueError`). All three forms parse back to `None`, so the choice is
+purely cosmetic.
 
 The blank form is used only where it reads back unambiguously as null: a block
 mapping value (`key:`) or a block sequence entry (`-`). At the top level, inside a
@@ -202,15 +201,11 @@ import yamlrocks
 yamlrocks.dumps({"a": None})
 # b'a:\n'
 
-yamlrocks.dumps({"a": None}, null_style="null")
+yamlrocks.dumps({"a": None}, option=yamlrocks.OPT_NULL_AS_KEYWORD)
 # b'a: null\n'
 
-yamlrocks.dumps({"a": None}, null_style="~")
+yamlrocks.dumps({"a": None}, option=yamlrocks.OPT_NULL_AS_TILDE)
 # b'a: ~\n'
-
-# The argument overrides the flag for one call.
-yamlrocks.dumps({"a": None}, option=yamlrocks.OPT_NULL_AS_KEYWORD, null_style="empty")
-# b'a:\n'
 ```
 
 :::note[Round-trip editing]

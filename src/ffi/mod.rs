@@ -220,13 +220,11 @@ pub const OPT_SINGLE_QUOTES: u64 = 1 << 24;
 /// node (`key:`). yamlrocks leaves nulls blank by default, matching the dominant
 /// real-world configuration style; this flag opts into the explicit spelling,
 /// which suits data/spec formats (OpenAPI, for instance) where `null` is idiomatic.
-/// Affects `dumps()` and the round-trip emitter's edited-in nulls; the per-call
-/// `null_style=` argument overrides it.
+/// Affects `dumps()` and the round-trip emitter's edited-in nulls.
 pub const OPT_NULL_AS_KEYWORD: u64 = 1 << 25;
 /// Emit null values as the `~` indicator instead of the default empty node. `~`
 /// is unambiguous in every position, so it is used verbatim everywhere. Affects
-/// `dumps()` and the round-trip emitter's edited-in nulls; the per-call
-/// `null_style=` argument overrides it. Mutually exclusive with
+/// `dumps()` and the round-trip emitter's edited-in nulls. Mutually exclusive with
 /// `OPT_NULL_AS_KEYWORD` (setting both is a `ValueError`).
 pub const OPT_NULL_AS_TILDE: u64 = 1 << 26;
 
@@ -583,20 +581,19 @@ pub fn yaml_version(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
 }
 
 #[pyfunction]
-#[pyo3(signature = (obj, /, *, default=None, option=None, null_style=None, serializers=None, width=None))]
+#[pyo3(signature = (obj, /, *, default=None, option=None, serializers=None, width=None))]
 pub fn dumps(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     default: Option<Py<PyAny>>,
     option: Option<u64>,
-    null_style: Option<&str>,
     serializers: Option<Py<PyDict>>,
     width: Option<usize>,
 ) -> PyResult<Py<PyAny>> {
     let opts = option.unwrap_or(0);
 
     // A round-trip document re-emits from its own preserved layout, so the
-    // emit-shaping arguments (option, null_style, width, serializers, default) do not
+    // emit-shaping arguments (option, width, serializers, default) do not
     // apply here and are intentionally ignored; round-trip styles win.
     if let Ok(doc) = obj.cast::<YAMLRocksDocument>() {
         return doc.borrow().to_yaml(py);
@@ -614,11 +611,8 @@ pub fn dumps(
     };
 
     let mut emit_options = build_emit_options(opts);
-    // The per-call `null_style=` argument overrides the option flags.
-    emit_options.null_style = match null_style {
-        Some(style) => parse_null_style(style)?,
-        None => null_style_from_opts(opts)?,
-    };
+    // The null style comes from the option flags (OPT_NULL_AS_KEYWORD / _TILDE).
+    emit_options.null_style = null_style_from_opts(opts)?;
     // Best-effort line wrapping; 0 (the default) leaves lines unwrapped.
     emit_options.width = width.unwrap_or(0);
     let ctx = EncodeCtx {
@@ -1278,18 +1272,5 @@ pub fn null_style_from_opts(opts: u64) -> PyResult<NullStyle> {
         (true, false) => Ok(NullStyle::Null),
         (false, true) => Ok(NullStyle::Tilde),
         (false, false) => Ok(NullStyle::Empty),
-    }
-}
-
-/// Map the `null_style=` argument to a [`NullStyle`]. Accepts `"null"`, `"empty"`,
-/// and `"~"`/`"tilde"`; anything else is a `ValueError`.
-fn parse_null_style(value: &str) -> PyResult<NullStyle> {
-    match value {
-        "null" => Ok(NullStyle::Null),
-        "empty" => Ok(NullStyle::Empty),
-        "~" | "tilde" => Ok(NullStyle::Tilde),
-        other => Err(PyValueError::new_err(format!(
-            "null_style must be 'null', 'empty', or '~', not {other:?}"
-        ))),
     }
 }

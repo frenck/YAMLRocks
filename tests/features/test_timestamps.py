@@ -117,7 +117,7 @@ def test_round_trip_under_compat_resolves_and_stays_byte_identical():
 
 def test_round_trip_with_standalone_flag_resolves():
     """The standalone OPT_TIMESTAMPS flag also resolves in round-trip mode, across
-    to_dict, indexing, walk, and keys, while the source re-emits byte-for-byte."""
+    to_dict, indexing, and walk, while the source re-emits byte-for-byte."""
     src = b"d: 2024-01-15\nt: 2024-01-15T13:30:45Z\n"
     doc = yamlrocks.loads(src, option=RT | TS)
     assert doc.to_dict()["d"] == dt.date(2024, 1, 15)

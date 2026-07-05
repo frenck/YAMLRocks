@@ -309,7 +309,9 @@ impl<'input> Reader<'input> {
     /// rather than one comparison per byte. `column` is per character, so it
     /// advances by the run's byte length when the run is pure ASCII (the common
     /// case, checked with a SIMD `is_ascii`) and by an exact character count only
-    /// when the run carries multi-byte content.
+    /// when the run carries multi-byte content. That count is the number of
+    /// non-continuation bytes (`0b10xxxxxx` bytes are UTF-8 tails): the input is
+    /// already valid UTF-8, so this counts code points without a second decode.
     #[inline]
     pub fn take_single_quoted_run(&mut self) {
         let bytes = self.input.as_bytes();
@@ -320,7 +322,7 @@ impl<'input> Reader<'input> {
         self.column += if run.is_ascii() {
             run.len() as u32
         } else {
-            self.input[start..stop].chars().count() as u32
+            run.iter().filter(|&&b| (b & 0xc0) != 0x80).count() as u32
         };
         self.pos = stop;
     }

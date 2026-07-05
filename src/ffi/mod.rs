@@ -583,20 +583,20 @@ pub fn yaml_version(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
 }
 
 #[pyfunction]
-#[pyo3(signature = (obj, /, *, default=None, option=None, null_style=None, tags=None, width=None))]
+#[pyo3(signature = (obj, /, *, default=None, option=None, null_style=None, serializers=None, width=None))]
 pub fn dumps(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     default: Option<Py<PyAny>>,
     option: Option<u64>,
     null_style: Option<&str>,
-    tags: Option<Py<PyDict>>,
+    serializers: Option<Py<PyDict>>,
     width: Option<usize>,
 ) -> PyResult<Py<PyAny>> {
     let opts = option.unwrap_or(0);
 
     // A round-trip document re-emits from its own preserved layout, so the
-    // emit-shaping arguments (option, null_style, width, tags, default) do not
+    // emit-shaping arguments (option, null_style, width, serializers, default) do not
     // apply here and are intentionally ignored; round-trip styles win.
     if let Ok(doc) = obj.cast::<YAMLRocksDocument>() {
         return doc.borrow().to_yaml(py);
@@ -629,7 +629,7 @@ pub fn dumps(
         utc_z: opts & OPT_UTC_Z != 0,
         passthrough_datetime: opts & OPT_PASSTHROUGH_DATETIME != 0,
         passthrough_dataclass: opts & OPT_PASSTHROUGH_DATACLASS != 0,
-        tags: tags.as_ref(),
+        tags: serializers.as_ref(),
         depth: 0,
     };
     let value = python_to_value(py, obj, ctx)?;

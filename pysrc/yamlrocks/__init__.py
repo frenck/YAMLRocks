@@ -531,7 +531,7 @@ def dump(
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
     null_style: str | None = None,
-    tags: dict[type, Callable[[Any], Any]] | None = None,
+    serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> None:
     """Serialize ``obj`` as YAML to a filesystem path or file-like object.
@@ -556,7 +556,7 @@ def dump(
         default=default,
         option=option,
         null_style=null_style,
-        tags=tags,
+        serializers=serializers,
         width=width,
     )
     if hasattr(target, "write"):
@@ -701,7 +701,7 @@ async def async_dump(
     default: Callable[[Any], Any] | None = None,
     option: int | None = None,
     null_style: str | None = None,
-    tags: dict[type, Callable[[Any], Any]] | None = None,
+    serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
 ) -> None:
     """Serialize and write YAML off the event loop thread; see :func:`dump`.
@@ -717,6 +717,6 @@ async def async_dump(
         default=default,
         option=option,
         null_style=null_style,
-        tags=tags,
+        serializers=serializers,
         width=width,
     )

@@ -348,12 +348,13 @@ object holds the GIL for the object traversal and only frees it for the final
 byte emit, so a thread offload buys little. Use `asyncio.to_thread(dumps, obj)`
 directly in the rare case it matters.
 
-| Coroutine                      | Wraps                   | Notes                                 |
-| ------------------------------ | ----------------------- | ------------------------------------- |
-| `async_loads(data, ...)`       | [`loads`](#loads)       | Same keyword arguments.               |
-| `async_load(source, ...)`      | [`load`](#load)         | Offloads the file read and the parse. |
-| `async_load_all(source, ...)`  | [`load_all`](#load_all) | Multi-document file.                  |
-| `async_dump(obj, target, ...)` | [`dump`](#dump)         | Offloads the serialize and the write. |
+| Coroutine                      | Wraps                     | Notes                                 |
+| ------------------------------ | ------------------------- | ------------------------------------- |
+| `async_loads(data, ...)`       | [`loads`](#loads)         | Same keyword arguments.               |
+| `async_load(source, ...)`      | [`load`](#load)           | Offloads the file read and the parse. |
+| `async_load_all(source, ...)`  | [`load_all`](#load_all)   | Multi-document file.                  |
+| `async_loads_all(data, ...)`   | [`loads_all`](#loads_all) | Multi-document in-memory stream.      |
+| `async_dump(obj, target, ...)` | [`dump`](#dump)           | Offloads the serialize and the write. |
 
 ```python
 import yamlrocks

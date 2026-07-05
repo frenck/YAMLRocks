@@ -459,6 +459,14 @@ async def async_load_all(
     tag_handler: Callable[[str, Any], Any] | None = None,
     tags: dict[str, Callable[[Any], Any]] | None = None,
 ) -> list[Any]: ...
+async def async_loads_all(
+    data: bytes | bytearray | memoryview | str,
+    /,
+    *,
+    option: int | None = None,
+    tag_handler: Callable[[str, Any], Any] | None = None,
+    tags: dict[str, Callable[[Any], Any]] | None = None,
+) -> list[Any]: ...
 async def async_dump(
     obj: Any,
     target: str | os.PathLike[str] | _Writable | None = None,

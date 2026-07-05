@@ -91,10 +91,12 @@ value (`2024-13-01`) falls back to a string rather than raising.
 
 Unlike the full 1.1 schema, `OPT_TIMESTAMPS` on its own keeps everything else 1.2
 clean, so `NO` stays `"NO"` and `0777` stays `"0777"`; you get typed dates without
-the other 1.1 footguns. Timestamp resolution applies to `loads`/`load`; in
-round-trip and annotated modes it follows the schema, so it is active under
-`OPT_PYYAML_COMPAT` there (and an annotated timestamp resolves to a plain
-`date`/`datetime`, which carries no source location).
+the other 1.1 footguns. It applies to `loads`/`load` and to round-trip mode, so
+`to_dict()`, indexing, `walk()`, and `keys()` on a `YAMLRocksDocument` all resolve
+timestamps too (the source still re-emits byte-for-byte). In annotated mode,
+timestamp typing follows the schema, so it is active under `OPT_PYYAML_COMPAT`
+there rather than the standalone flag, and an annotated timestamp resolves to a
+plain `date`/`datetime`, which carries no source location.
 
 `OPT_DUPLICATE_KEYS_ERROR` rejects a repeated key with the offending location in
 the message:

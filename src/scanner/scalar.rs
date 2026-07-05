@@ -39,6 +39,9 @@ pub fn scan_single_quoted<'input>(
     let mut run_start = content_start;
 
     loop {
+        // Skip the run of ordinary ASCII content in one pass; the loop below only
+        // has to handle the byte that stopped it.
+        reader.take_single_quoted_run();
         if reader.is_eof() {
             return Err(ScanError::new(
                 "unterminated single-quoted scalar",
@@ -213,6 +216,9 @@ pub fn scan_double_quoted<'input>(
     // only once `owned` is set (a fold or escape cannot happen before that).
     let mut nonblank_len = 0usize;
     loop {
+        // Skip the run of ordinary ASCII content in one pass; the loop below only
+        // has to handle the byte that stopped it.
+        reader.take_double_quoted_run();
         if reader.is_eof() {
             return Err(ScanError::new(
                 "unterminated double-quoted scalar",

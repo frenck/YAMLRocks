@@ -15,8 +15,8 @@ includes, schema validation, and source tracking on top.
 | ------------------------------------- | :--------------: | :----------: | :--------------------: |
 | YAML 1.2                              |        No        |     Yes      |        **Yes**         |
 | Implementation                        |    C + Python    | Pure Python  |        **Rust**        |
-| Parse speed                           |     C loader     |     slow     | **5-10x vs PyYAML C**  |
-| Dump speed                            |     C dumper     |     slow     | **15-19x vs PyYAML C** |
+| Parse speed                           |     C loader     |     slow     | **6-10x vs PyYAML C**  |
+| Dump speed                            |     C dumper     |     slow     | **17-19x vs PyYAML C** |
 | Comments preserved                    |        No        |     Yes      |        **Yes**         |
 | Byte-for-byte round-trip (unmodified) |        No        |    Close     |        **Yes**         |
 | Native `!include` (+ write-back)      |        No        |      No      |        **Yes**         |
@@ -31,10 +31,10 @@ includes, schema validation, and source tracking on top.
 Release-build benchmarks (`python bench/bench.py`), showing how many times
 faster YAMLRocks is:
 
-- **Parsing**: ~5-10x faster than PyYAML's C loader; ~85-135x faster than ruamel.
-- **Serializing**: ~15-19x faster than PyYAML's C dumper; ~155-210x faster than
+- **Parsing**: ~6-10x faster than PyYAML's C loader; ~105-141x faster than ruamel.
+- **Serializing**: ~17-19x faster than PyYAML's C dumper; ~160-208x faster than
   ruamel.
-- **Split configs with `!include`**: ~18x faster than a PyYAML `!include`
+- **Split configs with `!include`**: ~17x faster than a PyYAML `!include`
   constructor for hundreds of files.
 
 These are ratios, not absolute times, and they vary with payload shape and
@@ -51,17 +51,17 @@ both load and dump. Indicative wall-clock times from `python bench/compare.py`
 
 | Library       |  Impl  |     load |      dump |
 | ------------- | :----: | -------: | --------: |
-| **YAMLRocks** |  Rust  |  ~1.5 ms |   ~815 µs |
-| yaml-rs       |  Rust  |  ~1.8 ms |   ~1.1 ms |
-| fast-yaml     |  Rust  |  ~2.5 ms |   ~1.6 ms |
-| py-yaml12     |  Rust  |  ~3.5 ms |   ~1.2 ms |
-| ryaml         |  Rust  |  ~4.1 ms |   ~2.9 ms |
-| PyYAML (C)    |   C    | ~16.2 ms |  ~14.9 ms |
-| yamlium       | Python | ~59.6 ms |  ~10.1 ms |
-| PyYAML (pure) | Python |  ~150 ms |    ~87 ms |
-| oyaml         | Python |  ~151 ms |    ~87 ms |
-| ruamel.yaml   | Python |  ~234 ms |   ~177 ms |
-| strictyaml    | Python |  ~1.14 s | no dumper |
+| **YAMLRocks** |  Rust  |  ~1.7 ms |   ~1.0 ms |
+| yaml-rs       |  Rust  |  ~2.1 ms |   ~1.3 ms |
+| fast-yaml     |  Rust  |  ~2.9 ms |   ~1.7 ms |
+| py-yaml12     |  Rust  |  ~4.0 ms |   ~1.4 ms |
+| ryaml         |  Rust  |  ~4.7 ms |   ~3.4 ms |
+| PyYAML (C)    |   C    | ~17.1 ms |  ~16.1 ms |
+| yamlium       | Python |   ~71 ms |    ~11 ms |
+| PyYAML (pure) | Python |  ~177 ms |   ~106 ms |
+| oyaml         | Python |  ~177 ms |   ~106 ms |
+| ruamel.yaml   | Python |  ~260 ms |   ~199 ms |
+| strictyaml    | Python |  ~1.38 s | no dumper |
 
 Speed is only half of it. The Rust rivals differ in what they get right: yaml-rs,
 py-yaml12, and ryaml leave `<<` merge keys unresolved, and yaml-rs, py-yaml12, and

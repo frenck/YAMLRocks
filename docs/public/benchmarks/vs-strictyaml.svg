@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-07-04T10:47:56.968379</dc:date>
+    <dc:date>2026-07-06T11:56:45.670861</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -53,14 +53,14 @@ L 546.417812 150.273969
    </g>
    <g id="patch_4">
     <path d="M 88.857813 36.495969
-L 89.177875 36.495969
-L 89.177875 86.597904
+L 89.161178 36.495969
+L 89.161178 86.597904
 L 88.857813 86.597904
 z
-" clip-path="url(#p4c529ee2f1)" style="fill: #24fefd"/>
+" clip-path="url(#pcd44e1defc)" style="fill: #24fefd"/>
    </g>
    <g id="text_2">
-    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="92.067728" y="63.755276" transform="rotate(-0 92.067728 63.755276)">752x faster · 1.5 ms</text>
+    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="92.051031" y="63.755276" transform="rotate(-0 92.051031 63.755276)">794x faster · 1.7 ms</text>
    </g>
    <g id="patch_5">
     <path d="M 88.857813 94.754033
@@ -68,10 +68,10 @@ L 329.678865 94.754033
 L 329.678865 144.855969
 L 88.857813 144.855969
 z
-" clip-path="url(#p4c529ee2f1)" style="fill: #5b626d"/>
+" clip-path="url(#pcd44e1defc)" style="fill: #5b626d"/>
    </g>
    <g id="text_3">
-    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="332.568718" y="121.883126" transform="rotate(-0 332.568718 121.883126)">1.14 s</text>
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="332.568718" y="121.883126" transform="rotate(-0 332.568718 121.883126)">1.38 s</text>
    </g>
    <g id="text_4">
     <text style="font-weight: 700; font-size: 13px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="88.857813" y="17.077969" transform="rotate(-0 88.857813 17.077969)">YAMLRocks vs strictyaml</text>
@@ -103,7 +103,7 @@ z
   </g>
  </g>
  <defs>
-  <clipPath id="p4c529ee2f1">
+  <clipPath id="pcd44e1defc">
    <rect x="88.857813" y="31.077969" width="457.56" height="119.196"/>
   </clipPath>
  </defs>

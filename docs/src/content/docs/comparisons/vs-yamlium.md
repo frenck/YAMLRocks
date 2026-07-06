@@ -22,7 +22,7 @@ schema validation that yamlium has no equivalent for.
 | Declared YAML version         |  Undocumented   |  1.2 (1.1 optional)  |
 | Anchors / merge keys          | Preserved / yes |   Preserved / yes    |
 | Implementation                |   Pure Python   |    Rust extension    |
-| Speed (parse / dump)          |    baseline     |  ~40x / ~12x faster  |
+| Speed (parse / dump)          |    baseline     |  ~42x / ~11x faster  |
 
 ## Speed: Rust vs pure Python
 
@@ -31,10 +31,10 @@ work in Rust, one to two orders of magnitude faster on both directions.
 
 ![YAMLRocks vs yamlium on reading and writing: YAMLRocks is an order of magnitude faster on both loads and dumps.](/benchmarks/vs-yamlium.svg)
 
-| Operation |  yamlium | YAMLRocks | YAMLRocks is |
-| --------- | -------: | --------: | -----------: |
-| Reading   | ~59.6 ms |   ~1.5 ms |  ~40x faster |
-| Writing   | ~10.1 ms |   ~815 µs |  ~12x faster |
+| Operation | yamlium | YAMLRocks | YAMLRocks is |
+| --------- | ------: | --------: | -----------: |
+| Reading   |  ~71 ms |   ~1.7 ms |  ~42x faster |
+| Writing   |  ~11 ms |   ~1.0 ms |  ~11x faster |
 
 :::note[Reproduce it]
 Wall-clock times from one machine and payload set. Run `python bench/compare.py`

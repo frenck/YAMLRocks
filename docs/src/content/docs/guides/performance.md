@@ -18,9 +18,9 @@ Your hardware, payload, and Python version will move them around.
 Loading and dumping a representative set of payloads once, across ten YAML
 libraries. Lower is faster, and the scale is logarithmic, so each gridline is 10x.
 
-![Parsing throughput across libraries: YAMLRocks is fastest, ahead of yaml_rs, py-yaml12, ryaml, PyYAML's C loader, and far ahead of the pure-Python libraries.](/benchmarks/load.svg)
+![Parsing throughput across libraries: YAMLRocks is fastest, ahead of yaml_rs, fast-yaml, py-yaml12, ryaml, PyYAML's C loader, and far ahead of the pure-Python libraries.](/benchmarks/load.svg)
 
-![Serializing throughput across libraries: YAMLRocks is fastest, ahead of yaml_rs, py-yaml12, ryaml, yamlium, PyYAML's C dumper, and the pure-Python libraries.](/benchmarks/dump.svg)
+![Serializing throughput across libraries: YAMLRocks is fastest, ahead of yaml_rs, py-yaml12, fast-yaml, ryaml, yamlium, PyYAML's C dumper, and the pure-Python libraries.](/benchmarks/dump.svg)
 
 YAMLRocks leads on both. The closest contenders are the other Rust-backed parsers
 (`yaml_rs`, `ryaml`, `py-yaml12`), and the comparison is not quite like for like:
@@ -40,13 +40,13 @@ the other libraries' release wheels).
 
 Every figure below is how many times **faster YAMLRocks is** than the named library.
 
-- **Parsing**: YAMLRocks is **~5-10x faster than PyYAML's C `CSafeLoader`**, ~55-85x
-  faster than pure-Python PyYAML, ~85-135x faster than ruamel.yaml, and ~22-33x
+- **Parsing**: YAMLRocks is **~6-10x faster than PyYAML's C `CSafeLoader`**, ~64-87x
+  faster than pure-Python PyYAML, ~105-141x faster than ruamel.yaml, and ~27-34x
   faster than yamlium.
-- **Serializing**: YAMLRocks is **~15-19x faster than PyYAML's C `CSafeDumper`**,
-  ~70-90x faster than pure-Python PyYAML, ~155-210x faster than ruamel.yaml, and
-  ~8-14x faster than yamlium.
-- **Native includes**: YAMLRocks is **~18x faster** than a PyYAML `!include`
+- **Serializing**: YAMLRocks is **~17-19x faster than PyYAML's C `CSafeDumper`**,
+  ~75-94x faster than pure-Python PyYAML, ~160-208x faster than ruamel.yaml, and
+  ~8-12x faster than yamlium.
+- **Native includes**: YAMLRocks is **~17x faster** than a PyYAML `!include`
   constructor for configurations split across hundreds of files, exactly the
   Home Assistant startup and reload pattern.
 
@@ -59,10 +59,10 @@ How many times faster YAMLRocks is at parsing each payload:
 
 | Payload               | vs PyYAML (C) | vs PyYAML (pure) |    vs ruamel |  vs yamlium |
 | --------------------- | ------------: | ---------------: | -----------: | ----------: |
-| small (10 lines)      |    ~7x faster |      ~56x faster |  ~90x faster | ~25x faster |
-| medium (k8s manifest) |    ~8x faster |      ~70x faster | ~108x faster | ~27x faster |
-| large (500 items)     |   ~10x faster |      ~83x faster | ~133x faster | ~32x faster |
-| deep (30 levels)      |    ~5x faster |      ~56x faster |  ~85x faster | ~22x faster |
+| small (10 lines)      |    ~8x faster |      ~64x faster | ~105x faster | ~28x faster |
+| medium (k8s manifest) |    ~9x faster |      ~80x faster | ~124x faster | ~31x faster |
+| large (500 items)     |   ~10x faster |      ~87x faster | ~141x faster | ~34x faster |
+| deep (30 levels)      |    ~6x faster |      ~69x faster | ~105x faster | ~27x faster |
 
 ## Serializing (`dumps`)
 
@@ -70,10 +70,10 @@ How many times faster YAMLRocks is at serializing each payload:
 
 | Payload | vs PyYAML (C) | vs PyYAML (pure) |    vs ruamel |  vs yamlium |
 | ------- | ------------: | ---------------: | -----------: | ----------: |
-| small   |   ~17x faster |      ~86x faster | ~194x faster | ~11x faster |
-| medium  |   ~16x faster |      ~84x faster | ~185x faster | ~11x faster |
-| large   |   ~16x faster |      ~82x faster | ~191x faster | ~13x faster |
-| deep    |   ~17x faster |      ~71x faster | ~156x faster |  ~8x faster |
+| small   |   ~18x faster |      ~94x faster | ~208x faster | ~11x faster |
+| medium  |   ~18x faster |      ~92x faster | ~201x faster | ~12x faster |
+| large   |   ~17x faster |      ~86x faster | ~199x faster | ~12x faster |
+| deep    |   ~17x faster |      ~75x faster | ~163x faster |  ~8x faster |
 
 yamlium emits comparatively quickly, so its dump gap is the smallest of the four,
 but YAMLRocks still leads on every shape. The margin narrows as individual strings
@@ -88,9 +88,9 @@ How many times faster YAMLRocks's native include resolver is than a PyYAML
 
 | Files | YAMLRocks is |
 | ----- | -----------: |
-| 50    |  ~18x faster |
-| 200   |  ~18x faster |
-| 500   |  ~18x faster |
+| 50    |  ~17x faster |
+| 200   |  ~17x faster |
+| 500   |  ~17x faster |
 
 The constructor approach re-enters the Python parser once per file and rebuilds
 the loader machinery each time. YAMLRocks resolves the whole include graph in Rust

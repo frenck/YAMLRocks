@@ -14,8 +14,8 @@ operation, safe by default, and far more capable.
 | Feature                       |      PyYAML       |            YAMLRocks             |
 | ----------------------------- | :---------------: | :------------------------------: |
 | YAML 1.2                      |   No (1.1 only)   |   Yes (1.2 default, 1.1 mode)    |
-| Speed (parse)                 |     C loader      | ~5-10x faster than the C loader  |
-| Speed (dump)                  |     C dumper      | ~15-19x faster than the C dumper |
+| Speed (parse)                 |     C loader      | ~6-10x faster than the C loader  |
+| Speed (dump)                  |     C dumper      | ~17-19x faster than the C dumper |
 | Comment preservation          |        No         |               Yes                |
 | Round-trip (byte-for-byte)    |        No         |               Yes                |
 | Anchors/aliases preserved     |        No         |               Yes                |
@@ -173,28 +173,28 @@ target; the pure-Python loader is what most environments fall back to.
 
 | Payload               | vs PyYAML (C) | vs PyYAML (pure) |
 | --------------------- | ------------: | ---------------: |
-| small (10 lines)      |    ~7x faster |      ~56x faster |
-| medium (k8s manifest) |    ~8x faster |      ~70x faster |
-| large (500 items)     |   ~10x faster |      ~83x faster |
-| deep (30 levels)      |    ~5x faster |      ~56x faster |
+| small (10 lines)      |    ~8x faster |      ~64x faster |
+| medium (k8s manifest) |    ~9x faster |      ~80x faster |
+| large (500 items)     |   ~10x faster |      ~87x faster |
+| deep (30 levels)      |    ~6x faster |      ~69x faster |
 
 **Serializing (`dumps`)**
 
 | Payload | vs PyYAML (C) | vs PyYAML (pure) |
 | ------- | ------------: | ---------------: |
-| small   |   ~17x faster |      ~86x faster |
-| medium  |   ~16x faster |      ~84x faster |
-| large   |   ~16x faster |      ~82x faster |
-| deep    |   ~17x faster |      ~71x faster |
+| small   |   ~18x faster |      ~94x faster |
+| medium  |   ~18x faster |      ~92x faster |
+| large   |   ~17x faster |      ~86x faster |
+| deep    |   ~17x faster |      ~75x faster |
 
 **Split configuration with `!include`** (Home Assistant style): YAMLRocks's native
 resolver versus a PyYAML `!include` constructor.
 
 | Files | YAMLRocks is |
 | ----- | -----------: |
-| 50    |  ~20x faster |
-| 200   |  ~20x faster |
-| 500   |  ~20x faster |
+| 50    |  ~17x faster |
+| 200   |  ~17x faster |
+| 500   |  ~17x faster |
 
 :::note[These are ratios]
 The numbers above are speed ratios, not wall-clock times. They depend on payload

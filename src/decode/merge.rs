@@ -153,9 +153,21 @@ fn apply_merge_keys_inner(value: &mut Value<'_>) {
                         // dropping it, so the host can run its own merge pass. (The
                         // marker is internal; it must not escape into the data.)
                         let sig = key_sig(&literal_merge_key());
-                        if let Entry::Vacant(slot) = index.entry(sig) {
-                            slot.insert(result.len());
-                            result.push((literal_merge_key(), unmerged));
+                        match index.entry(sig) {
+                            Entry::Vacant(slot) => {
+                                slot.insert(result.len());
+                                result.push((literal_merge_key(), unmerged));
+                            }
+                            // A second preserved `<<` in the same mapping: a
+                            // mapping holds one `<<` slot, so collect into a
+                            // single `<<` sequence in document order rather than
+                            // dropping all but the first, matching the sequence
+                            // form and the annotated/round-trip paths. The host
+                            // applies its own merge semantics over the list.
+                            Entry::Occupied(slot) => {
+                                let idx = *slot.get();
+                                collect_preserved(&mut result[idx].1, unmerged);
+                            }
                         }
                     }
                 } else {
@@ -215,6 +227,25 @@ fn dedup_last_wins<'i>(pairs: Vec<(Value<'i>, Value<'i>)>) -> Vec<(Value<'i>, Va
         }
     }
     out
+}
+
+/// Collect a later preserved `<<` value into the one already under the literal
+/// merge key, building a single `<<` sequence in document order. Nothing is
+/// merged here: the values are deferred (a custom tag the host resolves), so we
+/// only gather them so the host can apply its own merge semantics over the list.
+/// A sequence value is flattened one level, so repeated deferred `<<`
+/// (`<<: a` / `<<: b`) and the sequence form (`<<: [a, b]`) produce the same
+/// shape, and the host sees every value instead of silently losing all but one.
+fn collect_preserved<'i>(existing: &mut Value<'i>, new: Value<'i>) {
+    let mut items = match std::mem::replace(existing, Value::Null) {
+        Value::Sequence(items) => items,
+        other => vec![other],
+    };
+    match new {
+        Value::Sequence(more) => items.extend(more),
+        other => items.push(other),
+    }
+    *existing = Value::Sequence(items);
 }
 
 /// Merge a `<<` value (a mapping, or a sequence of mappings) into `result`,
@@ -304,6 +335,34 @@ mod tests {
         assert_eq!(get(&doc, "c"), Some(&Value::Int(3)));
         // The `<<` key itself is consumed.
         assert_eq!(get(&doc, "<<"), None);
+    }
+
+    #[test]
+    fn repeated_unmergeable_merge_keys_collect_into_a_sequence() {
+        // Two `<<` whose values cannot be folded (a deferred tag, a scalar)
+        // collapse to one `<<` slot; keep both as a sequence in document order
+        // rather than dropping all but the first.
+        let mut doc = Value::Mapping(vec![(merge_key(), s("a")), (merge_key(), s("b"))]);
+        apply_merge_keys(&mut doc);
+        assert_eq!(
+            get(&doc, "<<"),
+            Some(&Value::Sequence(vec![s("a"), s("b")]))
+        );
+    }
+
+    #[test]
+    fn repeated_merge_flattens_a_preserved_sequence_one_level() {
+        // A `<<` sequence's leftovers meeting a later `<<` flatten into the same
+        // sequence, matching the shape the `<<: [a, b]` form already produces.
+        let mut doc = Value::Mapping(vec![
+            (merge_key(), Value::Sequence(vec![s("a"), s("b")])),
+            (merge_key(), s("c")),
+        ]);
+        apply_merge_keys(&mut doc);
+        assert_eq!(
+            get(&doc, "<<"),
+            Some(&Value::Sequence(vec![s("a"), s("b"), s("c")]))
+        );
     }
 
     #[test]

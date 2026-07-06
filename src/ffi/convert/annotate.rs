@@ -8,7 +8,7 @@ use crate::ffi::types::{YAMLRocksAnnotatedDict, YAMLRocksAnnotatedList};
 use crate::resolver::{ResolvedValue, Schema};
 use crate::roundtrip::value::{
     is_ast_merge_key, key_is_collection, mapping_has_merge_key, merge_converted_into,
-    node_to_python_cached, node_to_python_key, ObjectCache,
+    node_to_python_cached, node_to_python_key, store_preserved_merge, ObjectCache,
 };
 use crate::roundtrip::{YamlNode, YamlNodeKind};
 use crate::scanner::ScalarStyle;
@@ -263,9 +263,7 @@ fn annotate_node_cached_inner(
                             annotate_numbers,
                             cache,
                         )?;
-                        if !dict.contains(&py_key)? {
-                            dict.set_item(py_key, preserve)?;
-                        }
+                        store_preserved_merge(dict, py_key.into_bound(py), preserve)?;
                     }
                     continue;
                 }
@@ -490,9 +488,7 @@ fn node_to_python_with_tags_cached_inner(
                     if let Some(preserve) = merge_converted_into(&dict, py_val.bind(py))? {
                         let py_key =
                             node_to_python_with_tags_cached(py, key, schema, tags, anchors, cache)?;
-                        if !dict.contains(&py_key)? {
-                            dict.set_item(py_key, preserve)?;
-                        }
+                        store_preserved_merge(&dict, py_key.into_bound(py), preserve)?;
                     }
                     continue;
                 }

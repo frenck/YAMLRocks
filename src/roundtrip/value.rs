@@ -166,9 +166,7 @@ fn node_to_python_cached_inner(
                                 anchors,
                                 cache,
                             );
-                            if !dict.contains(&py_key).unwrap() {
-                                dict.set_item(py_key, preserve).unwrap();
-                            }
+                            store_preserved_merge(&dict, py_key.into_bound(py), preserve).unwrap();
                         }
                     } else {
                         // An explicit key wins over a merge, so it overwrites.
@@ -268,6 +266,46 @@ pub(crate) fn merge_converted_into<'py>(
     } else {
         Ok(Some(source.clone()))
     }
+}
+
+/// Store a preserved (deferred / unmergeable) `<<` value under the literal merge
+/// key. The first one is stored as-is; a later `<<` in the same mapping is
+/// collected with it into a single `<<` list in document order, matching the
+/// sequence form (`<<: [a, b]`), because a Python `dict` cannot hold two `<<`
+/// slots and the host must see both to run its own merge over them. Nothing is
+/// merged here: the values are deferred, so we only gather them and leave the
+/// merge semantics to the host. A preserved value that is already a list
+/// (leftovers from a `<<` sequence) is flattened one level rather than nested.
+/// Assigning an equal key leaves the original key object in place, so the first
+/// `<<` node's annotation is kept.
+pub(crate) fn store_preserved_merge<'py>(
+    dict: &Bound<'py, PyDict>,
+    key: Bound<'py, PyAny>,
+    preserve: Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let Some(existing) = dict.get_item(&key)? else {
+        dict.set_item(key, preserve)?;
+        return Ok(());
+    };
+    // A second preserved `<<`: collect into one list, in document order.
+    let list = if let Ok(list) = existing.cast::<PyList>() {
+        list.clone()
+    } else {
+        let list = PyList::empty(dict.py());
+        list.append(&existing)?;
+        dict.set_item(&key, &list)?;
+        list
+    };
+    // Flatten a preserved list (leftovers from a `<<` sequence) one level in,
+    // rather than nesting it, so the shape matches the sequence merge form.
+    if let Ok(items) = preserve.cast::<PyList>() {
+        for item in items.iter() {
+            list.append(item)?;
+        }
+    } else {
+        list.append(&preserve)?;
+    }
+    Ok(())
 }
 
 /// Whether a mapping-key node is (or, for an alias, resolves to) a collection.

@@ -23,7 +23,7 @@ it is several times faster.
 | Merge keys (`<<`)             |          No          |            Yes             |
 | Anchors/aliases resolved      |         Yes          |            Yes             |
 | Implementation                | Rust (libyaml-safer) | Rust (own scanner/emitter) |
-| Speed (parse / dump)          |       baseline       |    ~2.7x / ~3.6x faster    |
+| Speed (parse / dump)          |       baseline       |    ~2.8x / ~3.4x faster    |
 | Maturity                      |     0.5.x, alpha     |    Battle-tested corpus    |
 
 ## A parser, or a toolkit
@@ -52,8 +52,8 @@ Both are Rust extensions, so this is Rust vs Rust. YAMLRocks is well ahead on bo
 
 | Operation |   ryaml | YAMLRocks | YAMLRocks is |
 | --------- | ------: | --------: | -----------: |
-| Reading   | ~4.1 ms |   ~1.5 ms | ~2.7x faster |
-| Writing   | ~2.9 ms |   ~815 µs | ~3.6x faster |
+| Reading   | ~4.7 ms |   ~1.7 ms | ~2.8x faster |
+| Writing   | ~3.4 ms |   ~1.0 ms | ~3.4x faster |
 
 :::note[Reproduce it]
 Wall-clock times from one machine and payload set. Run `python bench/compare.py`

@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-07-04T10:47:56.872240</dc:date>
+    <dc:date>2026-07-06T11:56:45.571694</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -59,14 +59,14 @@ L 548.938125 202.941969
    </g>
    <g id="patch_4">
     <path d="M 91.378125 38.889969
-L 180.170376 38.889969
-L 180.170376 70.14506
+L 180.45837 38.889969
+L 180.45837 70.14506
 L 91.378125 70.14506
 z
-" clip-path="url(#pdd2bba842d)" style="fill: #24fefd"/>
+" clip-path="url(#p13115e513c)" style="fill: #24fefd"/>
    </g>
    <g id="text_3">
-    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="183.060229" y="56.725854" transform="rotate(-0 183.060229 56.725854)">2.7x faster · 1.5 ms</text>
+    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="183.348223" y="56.725854" transform="rotate(-0 183.348223 56.725854)">2.7x faster · 1.7 ms</text>
    </g>
    <g id="patch_5">
     <path d="M 91.378125 75.233098
@@ -74,32 +74,32 @@ L 332.199178 75.233098
 L 332.199178 106.48819
 L 91.378125 106.48819
 z
-" clip-path="url(#pdd2bba842d)" style="fill: #5b626d"/>
+" clip-path="url(#p13115e513c)" style="fill: #5b626d"/>
    </g>
    <g id="text_4">
-    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="335.08903" y="92.938769" transform="rotate(-0 335.08903 92.938769)">4.1 ms</text>
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="335.08903" y="92.938769" transform="rotate(-0 335.08903 92.938769)">4.7 ms</text>
    </g>
    <g id="patch_6">
     <path d="M 91.378125 127.531748
-L 139.034677 127.531748
-L 139.034677 158.786839
+L 143.008854 127.531748
+L 143.008854 158.786839
 L 91.378125 158.786839
 z
-" clip-path="url(#pdd2bba842d)" style="fill: #24fefd"/>
+" clip-path="url(#p13115e513c)" style="fill: #24fefd"/>
    </g>
    <g id="text_5">
-    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="141.92453" y="145.367633" transform="rotate(-0 141.92453 145.367633)">3.5x faster · 815 µs</text>
+    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="145.898707" y="145.367633" transform="rotate(-0 145.898707 145.367633)">3.4x faster · 1.0 ms</text>
    </g>
    <g id="patch_7">
     <path d="M 91.378125 163.874877
-L 258.778382 163.874877
-L 258.778382 195.129969
+L 264.791905 163.874877
+L 264.791905 195.129969
 L 91.378125 195.129969
 z
-" clip-path="url(#pdd2bba842d)" style="fill: #5b626d"/>
+" clip-path="url(#p13115e513c)" style="fill: #5b626d"/>
    </g>
    <g id="text_6">
-    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="261.668235" y="181.580548" transform="rotate(-0 261.668235 181.580548)">2.9 ms</text>
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="267.681758" y="181.580548" transform="rotate(-0 267.681758 181.580548)">3.4 ms</text>
    </g>
    <g id="text_7">
     <text style="font-weight: 700; font-size: 13px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="91.378125" y="17.077969" transform="rotate(-0 91.378125 17.077969)">YAMLRocks vs ryaml</text>
@@ -131,7 +131,7 @@ z
   </g>
  </g>
  <defs>
-  <clipPath id="pdd2bba842d">
+  <clipPath id="p13115e513c">
    <rect x="91.378125" y="31.077969" width="457.56" height="171.864"/>
   </clipPath>
  </defs>

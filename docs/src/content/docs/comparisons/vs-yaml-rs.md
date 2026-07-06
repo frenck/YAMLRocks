@@ -26,7 +26,7 @@ on top.
 | Merge keys (`<<`)             |             No              |            Yes             |
 | Timestamp resolution          | On by default, incl. quoted | Opt-in, plain scalars only |
 | Implementation                |     Rust (saphyr fork)      | Rust (own scanner/emitter) |
-| Speed (parse / dump)          |          baseline           |    ~1.2x / ~1.4x faster    |
+| Speed (parse / dump)          |          baseline           |    ~1.2x / ~1.3x faster    |
 | Maturity                      |    0.1.x, public domain     |    Battle-tested corpus    |
 
 ## A parser, or a toolkit
@@ -63,8 +63,8 @@ the nearest rival on the field, and YAMLRocks is still ahead on both directions.
 
 | Operation | yaml-rs | YAMLRocks | YAMLRocks is |
 | --------- | ------: | --------: | -----------: |
-| Reading   | ~1.8 ms |   ~1.5 ms | ~1.2x faster |
-| Writing   | ~1.1 ms |   ~815 µs | ~1.4x faster |
+| Reading   | ~2.1 ms |   ~1.7 ms | ~1.2x faster |
+| Writing   | ~1.3 ms |   ~1.0 ms | ~1.3x faster |
 
 The gap is smaller than against a pure-Python library, as you would expect from
 two native implementations. Speed is real, but it is not the reason to choose

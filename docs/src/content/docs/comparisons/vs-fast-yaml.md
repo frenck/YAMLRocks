@@ -24,7 +24,7 @@ and YAMLRocks is both more complete and faster.
 | Anchors/aliases resolved      |      Yes      |            Yes             |
 | Multi-document streams        |      Yes      |            Yes             |
 | Implementation                | Rust (saphyr) | Rust (own scanner/emitter) |
-| Speed (parse / dump)          |   baseline    |    ~1.6x / ~2.0x faster    |
+| Speed (parse / dump)          |   baseline    |    ~1.7x / ~1.7x faster    |
 
 ## A parser, or a toolkit
 
@@ -53,8 +53,8 @@ directions.
 
 | Operation | fast-yaml | YAMLRocks | YAMLRocks is |
 | --------- | --------: | --------: | -----------: |
-| Reading   |   ~2.5 ms |   ~1.5 ms | ~1.6x faster |
-| Writing   |   ~1.6 ms |   ~815 µs | ~2.0x faster |
+| Reading   |   ~2.9 ms |   ~1.7 ms | ~1.7x faster |
+| Writing   |   ~1.7 ms |   ~1.0 ms | ~1.7x faster |
 
 :::note[Reproduce it]
 Wall-clock times from one machine and payload set. Run `python bench/compare.py`

@@ -22,7 +22,7 @@ schema, and YAMLRocks is both more complete and faster.
 | Multi-document streams        |        Yes        |            Yes             |
 | Merge keys (`<<`)             |        No         |            Yes             |
 | Implementation                |   Rust (saphyr)   | Rust (own scanner/emitter) |
-| Speed (parse / dump)          |     baseline      |    ~2.3x / ~1.5x faster    |
+| Speed (parse / dump)          |     baseline      |    ~2.4x / ~1.4x faster    |
 
 ## A parser, or a toolkit
 
@@ -50,8 +50,8 @@ both directions.
 
 | Operation | py-yaml12 | YAMLRocks | YAMLRocks is |
 | --------- | --------: | --------: | -----------: |
-| Reading   |   ~3.5 ms |   ~1.5 ms | ~2.3x faster |
-| Writing   |   ~1.2 ms |   ~815 µs | ~1.5x faster |
+| Reading   |   ~4.0 ms |   ~1.7 ms | ~2.4x faster |
+| Writing   |   ~1.4 ms |   ~1.0 ms | ~1.4x faster |
 
 :::note[Reproduce it]
 Wall-clock times from one machine and payload set. Run `python bench/compare.py`

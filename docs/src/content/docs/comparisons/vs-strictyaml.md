@@ -44,7 +44,7 @@ giving up numbers, booleans, or a dumper.
 | Dumping arbitrary data    |  No general dumper   |          Yes          |
 | Comment preservation      |   Yes (via ruamel)   |          Yes          |
 | Implementation            | Pure Python (ruamel) |    Rust extension     |
-| Speed (parse)             |       baseline       |     ~760x faster      |
+| Speed (parse)             |       baseline       |     ~810x faster      |
 
 ## Speed
 
@@ -56,8 +56,8 @@ no general-purpose dumper to benchmark at all.
 
 | Operation | strictyaml | YAMLRocks | YAMLRocks is |
 | --------- | ---------: | --------: | -----------: |
-| load      |    ~1.14 s |   ~1.5 ms | ~760x faster |
-| dump      |  no dumper |   ~815 µs |            - |
+| load      |    ~1.38 s |   ~1.7 ms | ~810x faster |
+| dump      |  no dumper |   ~1.0 ms |            - |
 
 :::note[Reproduce it]
 Wall-clock times from one machine and payload set. Run `python bench/compare.py`

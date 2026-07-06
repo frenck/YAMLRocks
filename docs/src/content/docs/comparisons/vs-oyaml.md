@@ -26,8 +26,8 @@ and it applies here unchanged.
 | Round-trip (byte-for-byte) |        No        |         Yes          |
 | Native `!include`          |        No        |         Yes          |
 | JSON Schema validation     |        No        |         Yes          |
-| Speed (parse)              |     baseline     |     ~100x faster     |
-| Speed (dump)               |     baseline     |     ~105x faster     |
+| Speed (parse)              |     baseline     |     ~104x faster     |
+| Speed (dump)               |     baseline     |     ~107x faster     |
 
 ![YAMLRocks vs oyaml on reading and writing: YAMLRocks is about two orders of magnitude faster, because oyaml is PyYAML underneath.](/benchmarks/vs-oyaml.svg)
 

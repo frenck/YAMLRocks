@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-07-04T10:47:56.730493</dc:date>
+    <dc:date>2026-07-06T11:56:45.430022</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -59,25 +59,25 @@ L 548.938125 255.609969
    </g>
    <g id="patch_4">
     <path d="M 91.378125 41.283969
-L 93.811018 41.283969
-L 93.811018 68.213817
+L 93.737386 41.283969
+L 93.737386 68.213817
 L 91.378125 68.213817
 z
-" clip-path="url(#pf583515795)" style="fill: #24fefd"/>
+" clip-path="url(#p897639877e)" style="fill: #24fefd"/>
    </g>
    <g id="text_3">
-    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="96.70087" y="56.956901" transform="rotate(-0 96.70087 56.956901)">1.5 ms</text>
+    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="96.627239" y="56.956901" transform="rotate(-0 96.627239 56.956901)">1.7 ms</text>
    </g>
    <g id="patch_5">
     <path d="M 91.378125 72.597746
-L 117.282554 72.597746
-L 117.282554 99.527594
+L 114.590245 72.597746
+L 114.590245 99.527594
 L 91.378125 99.527594
 z
-" clip-path="url(#pf583515795)" style="fill: #5b626d"/>
+" clip-path="url(#p897639877e)" style="fill: #5b626d"/>
    </g>
    <g id="text_4">
-    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="120.172407" y="88.141107" transform="rotate(-0 120.172407 88.141107)">16.2 ms · 11x slower</text>
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="117.480098" y="88.141107" transform="rotate(-0 117.480098 88.141107)">17.1 ms · 9.8x slower</text>
    </g>
    <g id="patch_6">
     <path d="M 91.378125 103.911522
@@ -85,43 +85,43 @@ L 332.199178 103.911522
 L 332.199178 130.841371
 L 91.378125 130.841371
 z
-" clip-path="url(#pf583515795)" style="fill: #41464f"/>
+" clip-path="url(#p897639877e)" style="fill: #41464f"/>
    </g>
    <g id="text_5">
-    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="335.08903" y="119.454884" transform="rotate(-0 335.08903 119.454884)">150.3 ms · 99x slower</text>
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="335.08903" y="119.454884" transform="rotate(-0 335.08903 119.454884)">177.3 ms · 102x slower</text>
    </g>
    <g id="patch_7">
     <path d="M 91.378125 155.846567
-L 92.683907 155.846567
-L 92.683907 182.776415
+L 92.745548 155.846567
+L 92.745548 182.776415
 L 91.378125 182.776415
 z
-" clip-path="url(#pf583515795)" style="fill: #24fefd"/>
+" clip-path="url(#p897639877e)" style="fill: #24fefd"/>
    </g>
    <g id="text_6">
-    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="95.573759" y="171.519499" transform="rotate(-0 95.573759 171.519499)">815 µs</text>
+    <text style="font-weight: 700; font-size: 8.5px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #24fefd" x="95.635401" y="171.519499" transform="rotate(-0 95.635401 171.519499)">1.0 ms</text>
    </g>
    <g id="patch_8">
     <path d="M 91.378125 187.160344
-L 115.308489 187.160344
-L 115.308489 214.090192
+L 113.184245 187.160344
+L 113.184245 214.090192
 L 91.378125 214.090192
 z
-" clip-path="url(#pf583515795)" style="fill: #5b626d"/>
+" clip-path="url(#p897639877e)" style="fill: #5b626d"/>
    </g>
    <g id="text_7">
-    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="118.198342" y="202.703705" transform="rotate(-0 118.198342 202.703705)">14.9 ms · 18x slower</text>
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="116.074098" y="202.703705" transform="rotate(-0 116.074098 202.703705)">16.1 ms · 16x slower</text>
    </g>
    <g id="patch_9">
     <path d="M 91.378125 218.474121
-L 230.830332 218.474121
-L 230.830332 245.403969
+L 235.16974 218.474121
+L 235.16974 245.403969
 L 91.378125 245.403969
 z
-" clip-path="url(#pf583515795)" style="fill: #41464f"/>
+" clip-path="url(#p897639877e)" style="fill: #41464f"/>
    </g>
    <g id="text_8">
-    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="233.720184" y="234.017482" transform="rotate(-0 233.720184 234.017482)">87.0 ms · 107x slower</text>
+    <text style="font-size: 8px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #9aa3ad" x="238.059592" y="234.017482" transform="rotate(-0 238.059592 234.017482)">105.9 ms · 105x slower</text>
    </g>
    <g id="text_9">
     <text style="font-weight: 700; font-size: 13px; font-family: 'Inter', 'Inter Variable', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #e6edf3" x="91.378125" y="17.077969" transform="rotate(-0 91.378125 17.077969)">YAMLRocks vs PyYAML</text>
@@ -164,7 +164,7 @@ z
   </g>
  </g>
  <defs>
-  <clipPath id="pf583515795">
+  <clipPath id="p897639877e">
    <rect x="91.378125" y="31.077969" width="457.56" height="224.532"/>
   </clipPath>
  </defs>

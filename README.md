@@ -37,9 +37,9 @@ many times faster YAMLRocks is:
 
 | Operation                                    | vs PyYAML (C loader) |   vs ruamel.yaml |
 | -------------------------------------------- | -------------------: | ---------------: |
-| Parse (`loads`)                              |        ~5-10x faster |  ~85-135x faster |
-| Serialize (`dumps`)                          |       ~15-19x faster | ~155-210x faster |
-| Split config (`!include`, hundreds of files) |          ~18x faster |              n/a |
+| Parse (`loads`)                              |        ~6-10x faster | ~105-141x faster |
+| Serialize (`dumps`)                          |       ~17-19x faster | ~160-208x faster |
+| Split config (`!include`, hundreds of files) |          ~17x faster |              n/a |
 
 Across the wider field of Python YAML libraries, on both reading and writing:
 

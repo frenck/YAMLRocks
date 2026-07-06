@@ -42,9 +42,9 @@ feedback. See [stability and roadmap](/stability-roadmap/) for the 1.0 contract.
 
 <CardGrid>
   <Card title="Fast" icon="rocket">
-    Parsing runs about 5 to 10 times faster than PyYAML's C loader, and dumping
-    about 15 to 19 times faster. Native `!include` resolution over hundreds of
-    files is roughly 18 times faster than a PyYAML constructor.
+    Parsing runs about 6 to 10 times faster than PyYAML's C loader, and dumping
+    about 17 to 19 times faster. Native `!include` resolution over hundreds of
+    files is roughly 17 times faster than a PyYAML constructor.
   </Card>
   <Card title="Correct" icon="approve-check">
     A custom YAML 1.2 scanner and parser that passes the complete official YAML
@@ -162,21 +162,21 @@ behind. Release-build benchmarks, showing how many times faster YAMLRocks is:
       <td>
         Parse (<code>loads</code>)
       </td>
-      <td>~5-10x faster</td>
-      <td>~85-135x faster</td>
+      <td>~6-10x faster</td>
+      <td>~105-141x faster</td>
     </tr>
     <tr>
       <td>
         Serialize (<code>dumps</code>)
       </td>
-      <td>~15-19x faster</td>
-      <td>~155-210x faster</td>
+      <td>~17-19x faster</td>
+      <td>~160-208x faster</td>
     </tr>
     <tr>
       <td>
         Split config (<code>!include</code>)
       </td>
-      <td>~18x faster</td>
+      <td>~17x faster</td>
       <td>n/a</td>
     </tr>
   </tbody>

@@ -21,8 +21,8 @@ exhaustive comment surgery, covered honestly below.
 | Anchors/aliases preserved      |           Yes           |               Yes               |
 | Merge keys (`<<`)              |           Yes           |               Yes               |
 | Implementation                 |       Pure Python       |         Rust extension          |
-| Speed (parse)                  |        baseline         |         ~85-135x faster         |
-| Speed (dump)                   |        baseline         |        ~155-210x faster         |
+| Speed (parse)                  |        baseline         |        ~105-141x faster         |
+| Speed (dump)                   |        baseline         |        ~160-208x faster         |
 | Native `!include` + write-back |           No            |               Yes               |
 | Source line/column             |         partial         |      Yes (annotated mode)       |
 | JSON Schema validation         |           No            |               Yes               |
@@ -45,19 +45,19 @@ times **faster YAMLRocks is** than ruamel.yaml in `safe` mode.
 
 | Payload           | YAMLRocks is |
 | ----------------- | -----------: |
-| small             |  ~90x faster |
-| medium            | ~108x faster |
-| large (500 items) | ~133x faster |
-| deep              |  ~85x faster |
+| small             | ~105x faster |
+| medium            | ~124x faster |
+| large (500 items) | ~141x faster |
+| deep              | ~105x faster |
 
 **Serializing (`dumps`)**
 
 | Payload | YAMLRocks is |
 | ------- | -----------: |
-| small   | ~194x faster |
-| medium  | ~185x faster |
-| large   | ~191x faster |
-| deep    | ~156x faster |
+| small   | ~208x faster |
+| medium  | ~201x faster |
+| large   | ~199x faster |
+| deep    | ~163x faster |
 
 ruamel's round-trip mode is heavier still. YAMLRocks's round-trip path stays far
 faster while preserving comments, anchors, and formatting, with byte-for-byte

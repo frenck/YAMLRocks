@@ -569,10 +569,8 @@ pub fn scan_block<'input>(
             value.push('\n');
         }
         let leading_non_space = !matches!(reader.peek(), ' ' | '\t');
-        while !reader.is_eof() && reader.peek() != '\n' && reader.peek() != '\r' {
-            value.push(reader.peek());
-            reader.advance();
-        }
+        // Copy the whole content line in one pass instead of char by char.
+        value.push_str(reader.take_until_line_break());
         let had_break = !reader.is_eof();
         if had_break {
             reader.advance_line();

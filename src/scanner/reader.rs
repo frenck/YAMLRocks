@@ -347,6 +347,29 @@ impl<'input> Reader<'input> {
         self.pos = i;
     }
 
+    /// Bulk-consume the rest of the current line (to the next `\n`/`\r`, or EOF)
+    /// and return it. The block-scalar scanner copies whole content lines into
+    /// its owned buffer, so a per-character loop there is pure overhead; the line
+    /// end is found with a SIMD [`memchr::memchr2`]. `column` advances by the byte
+    /// length for a pure-ASCII line (the common case) and by a code-point count
+    /// (non-continuation bytes) otherwise; see
+    /// [`take_single_quoted_run`](Self::take_single_quoted_run).
+    #[inline]
+    pub fn take_until_line_break(&mut self) -> &'input str {
+        let bytes = self.input.as_bytes();
+        let start = self.pos;
+        let stop =
+            memchr::memchr2(b'\n', b'\r', &bytes[start..]).map_or(bytes.len(), |i| start + i);
+        let run = &self.input[start..stop];
+        self.column += if run.is_ascii() {
+            run.len() as u32
+        } else {
+            run.bytes().filter(|&b| (b & 0xc0) != 0x80).count() as u32
+        };
+        self.pos = stop;
+        run
+    }
+
     /// Check if the next character is a line break or EOF.
     #[inline]
     pub fn check_next_is_break_or_eof(&self) -> bool {

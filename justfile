@@ -108,6 +108,13 @@ bench *args:
     uv sync --inexact --no-install-project --group bench
     uv run --no-sync python bench/bench.py {{args}}
 
+# Throughput over the real-world config corpus (tests/data/realworld), the honest
+# signal for parser speed and profiling on the shapes real YAML has. Auto-skips
+# when the corpus submodule is absent.
+bench-corpus *args:
+    uv sync --inexact --no-install-project --group bench
+    uv run --no-sync python bench/corpus_bench.py {{args}}
+
 # Builds a release extension first (a debug build is several times slower, so it
 # would understate YAMLRocks against the other libraries' release wheels), then
 # renders the cross-library comparison charts into the docs assets.

@@ -105,7 +105,7 @@ charts = [
   { include-group = "bench" },
   "ryaml==0.5.1",
   "py-yaml12==0.1.0",
-  "yaml-rs==0.1.4",
+  "yaml-rs==0.1.6",
   "fastyaml-rs==0.6.3",
   "oyaml==1.0",
   "strictyaml==1.7.3",

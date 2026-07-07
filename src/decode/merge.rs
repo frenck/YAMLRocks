@@ -143,6 +143,10 @@ fn apply_merge_keys_inner(value: &mut Value<'_>) {
             // O(1) membership, so a `<<` over a large mapping stays linear.
             let mut result: Vec<(Value<'_>, Value<'_>)> = Vec::with_capacity(pairs.len());
             let mut index: HashMap<String, usize> = HashMap::new();
+            // The slot holding a preserved (deferred) `<<` value, tracked apart
+            // from `index` so a later preserved `<<` collects into it without a key
+            // signature lookup that a literal quoted `"<<"` key could occupy.
+            let mut preserved_slot: Option<usize> = None;
             for (key, val) in std::mem::take(pairs) {
                 if is_merge_key(&key) {
                     if let Some(unmerged) = merge_into(&mut result, &mut index, val) {
@@ -152,21 +156,27 @@ fn apply_merge_keys_inner(value: &mut Value<'_>) {
                         // the host). Keep it under the literal `<<` key rather than
                         // dropping it, so the host can run its own merge pass. (The
                         // marker is internal; it must not escape into the data.)
-                        let sig = key_sig(&literal_merge_key());
-                        match index.entry(sig) {
-                            Entry::Vacant(slot) => {
-                                slot.insert(result.len());
-                                result.push((literal_merge_key(), unmerged));
-                            }
-                            // A second preserved `<<` in the same mapping: a
-                            // mapping holds one `<<` slot, so collect into a
-                            // single `<<` sequence in document order rather than
-                            // dropping all but the first, matching the sequence
-                            // form and the annotated/round-trip paths. The host
-                            // applies its own merge semantics over the list.
-                            Entry::Occupied(slot) => {
-                                let idx = *slot.get();
-                                collect_preserved(&mut result[idx].1, unmerged);
+                        match preserved_slot {
+                            // A second preserved `<<` in the same mapping: a mapping
+                            // holds one `<<` slot, so collect into a single `<<`
+                            // sequence in document order rather than dropping all
+                            // but the first, matching the sequence form and the
+                            // annotated/round-trip paths. The host applies its own
+                            // merge semantics over the list.
+                            Some(idx) => collect_preserved(&mut result[idx].1, unmerged),
+                            // First preserved `<<`. Claim the literal slot only if
+                            // free: an explicit quoted `"<<"` key already there is
+                            // real data and wins (a mapping holds one `<<`), so keep
+                            // it and drop the merge rather than corrupting it.
+                            None => {
+                                if let Entry::Vacant(slot) =
+                                    index.entry(key_sig(&literal_merge_key()))
+                                {
+                                    let idx = result.len();
+                                    slot.insert(idx);
+                                    preserved_slot = Some(idx);
+                                    result.push((literal_merge_key(), unmerged));
+                                }
                             }
                         }
                     }
@@ -175,7 +185,15 @@ fn apply_merge_keys_inner(value: &mut Value<'_>) {
                     match index.get(&sig) {
                         // An explicit key already merged in: override its value in
                         // place, keeping the position it first appeared at.
-                        Some(&i) => result[i].1 = val,
+                        Some(&i) => {
+                            result[i].1 = val;
+                            // An explicit `"<<"` key overwrote the preserved slot; it
+                            // is plain data now, so later merges must not collect
+                            // into it.
+                            if preserved_slot == Some(i) {
+                                preserved_slot = None;
+                            }
+                        }
                         None => {
                             index.insert(sig, result.len());
                             result.push((key, val));
@@ -348,6 +366,23 @@ mod tests {
             get(&doc, "<<"),
             Some(&Value::Sequence(vec![s("a"), s("b")]))
         );
+    }
+
+    #[test]
+    fn explicit_quoted_merge_key_wins_over_a_preserved_merge() {
+        // A quoted `"<<"` is a literal string key, not a merge marker. It must
+        // never be rewritten into a preserved-merge sequence: the explicit data
+        // wins and the (unmergeable) merge is dropped, whichever order they
+        // appear in, so the literal value is never corrupted.
+        let tagged = || Value::Tagged("!t".to_owned(), Box::new(s("x")));
+        // Explicit first, then a deferred merge.
+        let mut doc = Value::Mapping(vec![(s("<<"), Value::Int(1)), (merge_key(), tagged())]);
+        apply_merge_keys(&mut doc);
+        assert_eq!(get(&doc, "<<"), Some(&Value::Int(1)));
+        // Deferred merge first, then the explicit key overwrites it.
+        let mut doc = Value::Mapping(vec![(merge_key(), tagged()), (s("<<"), Value::Int(1))]);
+        apply_merge_keys(&mut doc);
+        assert_eq!(get(&doc, "<<"), Some(&Value::Int(1)));
     }
 
     #[test]

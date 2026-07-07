@@ -7,8 +7,9 @@ use pyo3::types::{PyDict, PyFloat, PyList};
 use crate::ffi::types::{YAMLRocksAnnotatedDict, YAMLRocksAnnotatedList};
 use crate::resolver::{ResolvedValue, Schema};
 use crate::roundtrip::value::{
-    is_ast_merge_key, key_is_collection, mapping_has_merge_key, merge_converted_into,
-    node_to_python_cached, node_to_python_key, ObjectCache,
+    is_ast_merge_key, is_literal_merge_key_text, key_is_collection, mapping_has_merge_key,
+    merge_converted_into, node_to_python_cached, node_to_python_key, store_preserved_merge,
+    ObjectCache,
 };
 use crate::roundtrip::{YamlNode, YamlNodeKind};
 use crate::scanner::ScalarStyle;
@@ -237,6 +238,7 @@ fn annotate_node_cached_inner(
             let obj = Bound::new(py, init)?;
             let dict = obj.as_any().cast::<PyDict>()?;
             let has_merge = mapping_has_merge_key(pairs);
+            let mut preserved_merge = false;
             for (key, val) in pairs {
                 let py_val = annotate_node_cached(
                     py,
@@ -263,9 +265,12 @@ fn annotate_node_cached_inner(
                             annotate_numbers,
                             cache,
                         )?;
-                        if !dict.contains(&py_key)? {
-                            dict.set_item(py_key, preserve)?;
-                        }
+                        store_preserved_merge(
+                            dict,
+                            py_key.into_bound(py),
+                            preserve,
+                            &mut preserved_merge,
+                        )?;
                     }
                     continue;
                 }
@@ -298,6 +303,11 @@ fn annotate_node_cached_inner(
                     )?
                 };
                 dict.set_item(py_key, py_val)?;
+                // An explicit `"<<"` overwrote the preserved slot; it is plain
+                // data now, so later merges must not collect into it.
+                if preserved_merge && is_literal_merge_key_text(key) {
+                    preserved_merge = false;
+                }
             }
             Ok(obj.into_any().unbind())
         }
@@ -483,6 +493,7 @@ fn node_to_python_with_tags_cached_inner(
         YamlNodeKind::Mapping(pairs) => {
             let dict = PyDict::new(py);
             let has_merge = mapping_has_merge_key(pairs);
+            let mut preserved_merge = false;
             for (key, val) in pairs {
                 let py_val =
                     node_to_python_with_tags_cached(py, val, schema, tags, anchors, cache)?;
@@ -490,9 +501,12 @@ fn node_to_python_with_tags_cached_inner(
                     if let Some(preserve) = merge_converted_into(&dict, py_val.bind(py))? {
                         let py_key =
                             node_to_python_with_tags_cached(py, key, schema, tags, anchors, cache)?;
-                        if !dict.contains(&py_key)? {
-                            dict.set_item(py_key, preserve)?;
-                        }
+                        store_preserved_merge(
+                            &dict,
+                            py_key.into_bound(py),
+                            preserve,
+                            &mut preserved_merge,
+                        )?;
                     }
                     continue;
                 }
@@ -509,6 +523,11 @@ fn node_to_python_with_tags_cached_inner(
                     node_to_python_with_tags_cached(py, key, schema, tags, anchors, cache)?
                 };
                 dict.set_item(py_key, py_val)?;
+                // An explicit `"<<"` overwrote the preserved slot; it is plain
+                // data now, so later merges must not collect into it.
+                if preserved_merge && is_literal_merge_key_text(key) {
+                    preserved_merge = false;
+                }
             }
             dict.into_any().unbind()
         }

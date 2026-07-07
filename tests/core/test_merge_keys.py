@@ -239,3 +239,88 @@ def test_null_merge_value_is_dropped_on_every_path():
             yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_dict()["base"]
             == expected
         )
+
+
+def test_repeated_unmergeable_merge_keys_collect_into_a_list():
+    """A mapping may carry `<<` more than once (`<<: !include a` / `<<: !include
+    b`). When the values are deferred (resolved by the host, not mergeable here),
+    a Python dict cannot hold two `<<` slots, so both are kept under one `<<` as
+    a list in document order, matching the `<<: [a, b]` sequence form. This lets
+    a host like ESPHome run its own repeated-merge pass instead of silently
+    losing all but one `<<`."""
+    tags = {"!x": lambda v: f"<{v}>"}
+    src = b"<<: !x a\n<<: !x b\n"
+    expected = {"<<": ["<a>", "<b>"]}
+    # All three tag-resolving paths collect identically: fast, annotated, and
+    # the includes/tagged converter.
+    assert yamlrocks.loads(src, tags=tags) == expected
+    assert (
+        dict(yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED, tags=tags))
+        == expected
+    )
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_INCLUDES, tags=tags) == expected
+    # The round-trip `to_dict()` path does not run the tag callback, so the
+    # deferred values stay as their scalar text, but they still collect into one
+    # list in document order.
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_dict() == {
+        "<<": ["a", "b"]
+    }
+    # The sequence form already produced this shape and still does.
+    assert yamlrocks.loads(b"<<: [!x a, !x b]\n", tags=tags) == expected
+    # ESPHome's exact option combination (the reported case).
+    esphome = (
+        yamlrocks.OPT_ANNOTATED
+        | yamlrocks.OPT_PYYAML_COMPAT
+        | yamlrocks.OPT_ANNOTATE_NUMBERS
+        | yamlrocks.OPT_DUPLICATE_KEYS_ERROR
+    )
+    assert dict(yamlrocks.loads(src, option=esphome, tags=tags)) == expected
+
+
+def test_repeated_merge_flattens_a_preserved_sequence_one_level():
+    """A `<<` sequence value meeting a later `<<` flattens into one list rather
+    than nesting, so either order yields the same flat sequence, on every path."""
+    tags = {"!x": lambda v: f"<{v}>"}
+    flat = {"<<": ["<a>", "<b>", "<c>"]}
+    for src in (b"<<: [!x a, !x b]\n<<: !x c\n", b"<<: !x a\n<<: [!x b, !x c]\n"):
+        assert yamlrocks.loads(src, tags=tags) == flat
+        assert (
+            dict(yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED, tags=tags))
+            == flat
+        )
+        assert yamlrocks.loads(src, option=yamlrocks.OPT_INCLUDES, tags=tags) == flat
+
+
+def test_explicit_quoted_merge_key_is_not_corrupted_by_a_deferred_merge():
+    """A quoted `"<<"` is a literal string key, not a merge marker, so a deferred
+    `<<` must never rewrite it into a collected sequence. The explicit data wins
+    and the unmergeable merge is dropped (a dict holds one `<<`), whichever order
+    they appear in, on every path."""
+    tags = {"!x": lambda v: f"<{v}>"}
+    expected = {"<<": "explicit"}
+    for src in (b'"<<": explicit\n<<: !x a\n', b'<<: !x a\n"<<": explicit\n'):
+        assert yamlrocks.loads(src, tags=tags) == expected
+        assert (
+            dict(yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED, tags=tags))
+            == expected
+        )
+        assert (
+            yamlrocks.loads(src, option=yamlrocks.OPT_INCLUDES, tags=tags) == expected
+        )
+        assert (
+            yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_dict() == expected
+        )
+
+
+def test_repeated_merge_mixes_mergeable_and_deferred():
+    """A mergeable `<<` (a plain mapping) still folds into the dict; only the
+    deferred `<<` values are preserved, keeping document order."""
+    tags = {"!x": lambda v: f"<{v}>"}
+    assert yamlrocks.loads(b"<<: {p: 1}\n<<: !x b\n", tags=tags) == {
+        "p": 1,
+        "<<": "<b>",
+    }
+    assert yamlrocks.loads(b"<<: !x a\n<<: {p: 1}\n", tags=tags) == {
+        "<<": "<a>",
+        "p": 1,
+    }

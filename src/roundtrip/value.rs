@@ -148,6 +148,7 @@ fn node_to_python_cached_inner(
         YamlNodeKind::Mapping(pairs) => {
             let dict = PyDict::new(py);
             if mapping_has_merge_key(pairs) {
+                let mut preserved_merge = false;
                 for (key, val) in pairs {
                     let py_val =
                         node_to_python_cached(py, val, schema, resolve_timestamps, anchors, cache);
@@ -166,9 +167,13 @@ fn node_to_python_cached_inner(
                                 anchors,
                                 cache,
                             );
-                            if !dict.contains(&py_key).unwrap() {
-                                dict.set_item(py_key, preserve).unwrap();
-                            }
+                            store_preserved_merge(
+                                &dict,
+                                py_key.into_bound(py),
+                                preserve,
+                                &mut preserved_merge,
+                            )
+                            .unwrap();
                         }
                     } else {
                         // An explicit key wins over a merge, so it overwrites.
@@ -177,6 +182,11 @@ fn node_to_python_cached_inner(
                             py_val,
                         )
                         .unwrap();
+                        // An explicit `"<<"` overwrote the preserved slot; it is
+                        // plain data now, so later merges must not collect into it.
+                        if preserved_merge && is_literal_merge_key_text(key) {
+                            preserved_merge = false;
+                        }
                     }
                 }
             } else {
@@ -268,6 +278,71 @@ pub(crate) fn merge_converted_into<'py>(
     } else {
         Ok(Some(source.clone()))
     }
+}
+
+/// Store a preserved (deferred / unmergeable) `<<` value under the literal merge
+/// key. The first one is stored as-is; a later `<<` in the same mapping is
+/// collected with it into a single `<<` list in document order, matching the
+/// sequence form (`<<: [a, b]`), because a Python `dict` cannot hold two `<<`
+/// slots and the host must see both to run its own merge over them. Nothing is
+/// merged here: the values are deferred, so we only gather them and leave the
+/// merge semantics to the host. A preserved value that is already a list
+/// (leftovers from a `<<` sequence) is flattened one level rather than nested.
+/// Assigning an equal key leaves the original key object in place, so the first
+/// `<<` node's annotation is kept.
+///
+/// `preserved` tracks whether the `<<` slot already holds a preserved merge, so a
+/// later `<<` collects into it rather than into an explicit quoted `"<<"` key. On
+/// the first preserved `<<`, an explicit `"<<"` already in the dict is real data
+/// and wins (a dict holds one `<<`): keep it and drop the merge rather than
+/// corrupting it. The caller clears `preserved` when an explicit `"<<"` later
+/// overwrites the slot, so the paths agree with the fast path.
+pub(crate) fn store_preserved_merge<'py>(
+    dict: &Bound<'py, PyDict>,
+    key: Bound<'py, PyAny>,
+    preserve: Bound<'py, PyAny>,
+    preserved: &mut bool,
+) -> PyResult<()> {
+    if !*preserved {
+        // No preserved merge in the `<<` slot yet. Only claim it when free; an
+        // explicit `"<<"` key already there is real data and wins.
+        if !dict.contains(&key)? {
+            dict.set_item(key, preserve)?;
+            *preserved = true;
+        }
+        return Ok(());
+    }
+    // A second preserved `<<`: collect into one list, in document order.
+    let existing = dict
+        .get_item(&key)?
+        .expect("preserved `<<` slot is populated");
+    let list = if let Ok(list) = existing.cast::<PyList>() {
+        list.clone()
+    } else {
+        let list = PyList::empty(dict.py());
+        list.append(&existing)?;
+        dict.set_item(&key, &list)?;
+        list
+    };
+    // Flatten a preserved list (leftovers from a `<<` sequence) one level in,
+    // rather than nesting it, so the shape matches the sequence merge form.
+    if let Ok(items) = preserve.cast::<PyList>() {
+        for item in items.iter() {
+            list.append(item)?;
+        }
+    } else {
+        list.append(&preserve)?;
+    }
+    Ok(())
+}
+
+/// Whether a mapping-key node is a literal `"<<"` (a quoted scalar whose text is
+/// `<<`), as opposed to a plain `<<` merge directive (which [`is_ast_merge_key`]
+/// catches). Used to clear the preserved-merge slot flag when such an explicit
+/// key overwrites the `<<` slot, so a later preserved `<<` does not collect into
+/// real data.
+pub(crate) fn is_literal_merge_key_text(key: &YamlNode) -> bool {
+    matches!(&key.kind, YamlNodeKind::Scalar(text, _) if text == "<<") && !is_ast_merge_key(key)
 }
 
 /// Whether a mapping-key node is (or, for an alias, resolves to) a collection.

@@ -69,7 +69,7 @@ jobs:
           # 3.15 is still a prerelease (beta); without this, setup-python
           # cannot resolve it. Stable versions are unaffected.
           allow-prereleases: true
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
       - name: 🏗 Set package version from release tag
         if: inputs.release-tag != ''
         shell: bash
@@ -124,7 +124,7 @@ jobs:
           # cannot resolve it. Stable versions are unaffected.
           allow-prereleases: true
           architecture: ${{ matrix.platform.arch }}
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
       - name: 🏗 Set package version from release tag
         if: inputs.release-tag != ''
         shell: bash
@@ -176,7 +176,7 @@ jobs:
           # 3.15 is still a prerelease (beta); without this, setup-python
           # cannot resolve it. Stable versions are unaffected.
           allow-prereleases: true
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
       - name: 🏗 Set package version from release tag
         if: inputs.release-tag != ''
         shell: bash

@@ -491,6 +491,92 @@ fallback. If you enable a passthrough flag without a `default` that handles the
 diverted type, YAMLRocks raises `YAMLRocksEncodeError`.
 :::
 
+## Full control with `represent`
+
+`default` and `serializers` shape _unknown_ types. When you need to control how
+**any** value emits, builtins included, with a specific tag or scalar style, pass
+a `represent` callback. YAMLRocks calls it for every value it is about to emit.
+Return a node descriptor to say exactly how to render that value, or `None` to
+defer to the built-in rendering:
+
+```python
+import yamlrocks
+
+class Secret:
+    def __init__(self, name):
+        self.name = name
+
+def represent(value):
+    if isinstance(value, Secret):
+        return yamlrocks.YAMLRocksScalar(value.name, tag="!secret")
+    return None
+
+yamlrocks.dumps({"password": Secret("wifi"), "ssid": "home"}, represent=represent)
+# b"password: !secret 'wifi'\nssid: home\n"
+```
+
+The value that returned `None` (`"home"`) rendered exactly as a plain `dumps`
+would. The `Secret` became a `!secret` node. Note the single quotes: a scalar
+carrying a custom tag is quoted automatically, because a plain `!secret wifi`
+would reload as a plain string and lose the tag. This mirrors PyYAML, so a host's
+representers port across without hand-annotating quote styles.
+
+### The node descriptors
+
+`represent` returns one of three descriptors, or `None`:
+
+<!-- verify: skip -->
+
+```python
+yamlrocks.YAMLRocksScalar(value, *, tag=None, style="auto")
+yamlrocks.YAMLRocksSequence(items, *, tag=None, flow=None)
+yamlrocks.YAMLRocksMapping(pairs, *, tag=None, flow=None)
+```
+
+- `tag` writes an explicit tag. A standard tag the value already resolves to
+  (`!!bool` on `true`, `!!float` on `1.0e17`) is elided; a custom tag is kept.
+- `style` is one of `"auto"`, `"plain"`, `"single"`, `"double"`, `"literal"`
+  (a `|` block), or `"folded"` (a `>` block). `"auto"` lets the emitter quote as
+  needed; an explicit style is honored verbatim.
+- `items` and `pairs` hold your **original** objects, not pre-rendered nodes.
+  YAMLRocks re-dispatches each child through `represent`, so you only ever
+  describe one level. Indentation, flow, `sort_keys`, and shared-object anchoring
+  stay with the library.
+
+A forced block scalar, for example, is just a style:
+
+```python
+import yamlrocks
+
+def represent(value):
+    if isinstance(value, str) and value.startswith("return"):
+        return yamlrocks.YAMLRocksScalar(value, tag="!lambda", style="literal")
+    return None
+
+yamlrocks.dumps({"on_press": "return x + 1;"}, represent=represent)
+# b'on_press: !lambda |-\n  return x + 1;\n'
+```
+
+### Shared objects become anchors
+
+Because the emitter drives the recursion, it sees the whole object graph. A value
+that appears more than once emits once with an anchor and aliases the repeats,
+so the shared reference survives a dump and reload:
+
+```python
+import yamlrocks
+
+shared = {"host": "localhost", "port": 8080}
+yamlrocks.dumps({"primary": shared, "backup": shared}, represent=lambda v: None)
+# b'primary: &id001\n  host: localhost\n  port: 8080\nbackup: *id001\n'
+```
+
+`represent` composes with `OPT_SORT_KEYS`, the null-style flags, and the
+quote-style flag, applying them to what it returns and to deferred values alike,
+and it takes precedence over `default`/`serializers` when more than one matches.
+Block sequences are always indented two spaces on this path; `OPT_INDENT_4`,
+`OPT_INDENTLESS_SEQUENCES`, and `width` do not apply here.
+
 ## Writing to a file with `dump`
 
 `dump` is the file-oriented counterpart to `dumps`. Give it a path or an open

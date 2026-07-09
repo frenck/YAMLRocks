@@ -1,8 +1,8 @@
 """Type stubs for YAMLRocks."""
 
 import os
-from collections.abc import Callable, Sequence
-from typing import Any, Protocol
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any, Literal, Protocol
 
 # The exception hierarchy is defined (and typed) in yamlrocks.exceptions; re-export
 # it here so `yamlrocks.YAMLRocks*Error` resolves through the package.
@@ -325,6 +325,30 @@ class YAMLRocksTag:
     value: Any
     def __init__(self, tag: str, value: Any) -> None: ...
 
+# Node descriptors returned by a ``dumps(represent=...)`` callback.
+_Style = Literal["auto", "plain", "single", "double", "literal", "folded"]
+
+class YAMLRocksScalar:
+    def __init__(
+        self, value: str, *, tag: str | None = None, style: _Style = "auto"
+    ) -> None: ...
+
+class YAMLRocksSequence:
+    def __init__(
+        self, items: Iterable[Any], *, tag: str | None = None, flow: bool | None = None
+    ) -> None: ...
+
+class YAMLRocksMapping:
+    def __init__(
+        self,
+        pairs: Iterable[tuple[Any, Any]],
+        *,
+        tag: str | None = None,
+        flow: bool | None = None,
+    ) -> None: ...
+
+_Node = YAMLRocksScalar | YAMLRocksSequence | YAMLRocksMapping
+
 class YAMLRocksTags(dict[str, Callable[[Any], Any]]):
     def register(
         self,
@@ -411,6 +435,7 @@ def dumps(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], _Node | None] | None = None,
 ) -> bytes: ...
 def to_json(
     obj: Any,

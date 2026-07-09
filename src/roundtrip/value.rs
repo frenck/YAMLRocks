@@ -541,7 +541,11 @@ fn python_to_node_depth_inner(
 /// plain; otherwise the document's quote preference (double by default). A
 /// single-quoted scalar cannot hold a line break or a literal quote, so those
 /// fall back to double even in single-quote mode, mirroring the fast encoder.
-fn assigned_string_style(value: &str, double_quotes: bool, schema: Schema) -> ScalarStyle {
+pub(crate) fn assigned_string_style(
+    value: &str,
+    double_quotes: bool,
+    schema: Schema,
+) -> ScalarStyle {
     // Use the fast encoder's quoting rules verbatim rather than a second,
     // weaker check: a divergent copy let edited values (newlines, `...`, number
     // and bool/null look-alikes, leading indicators) emit unquoted and reparse

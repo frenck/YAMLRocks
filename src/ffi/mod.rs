@@ -1,5 +1,6 @@
 pub(crate) mod convert;
 mod errors;
+mod represent;
 mod types;
 
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ use convert::{
     annotate_node, node_to_python_with_tags, python_to_value, value_to_python_stream,
     value_to_python_with, EncodeCtx, TagPolicy,
 };
+pub use represent::{YAMLRocksMapping, YAMLRocksScalar, YAMLRocksSequence};
 pub use types::{YAMLRocksAnnotatedDict, YAMLRocksAnnotatedList, YAMLRocksTag};
 
 #[derive(Clone, Copy)]
@@ -581,7 +583,7 @@ pub fn yaml_version(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
 }
 
 #[pyfunction]
-#[pyo3(signature = (obj, /, *, default=None, option=None, serializers=None, width=None))]
+#[pyo3(signature = (obj, /, *, default=None, option=None, serializers=None, width=None, represent=None))]
 pub fn dumps(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
@@ -589,6 +591,7 @@ pub fn dumps(
     option: Option<u64>,
     serializers: Option<Py<PyDict>>,
     width: Option<usize>,
+    represent: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let opts = option.unwrap_or(0);
 
@@ -609,6 +612,28 @@ pub fn dumps(
     } else {
         obj
     };
+
+    // A `represent` callback shapes how the host's own objects emit, including
+    // builtins, with per-value style and tags. Lower the object into a synthetic
+    // round-trip node tree and emit it through the round-trip emitter, which
+    // speaks per-node style/tag/flow; the fast `Value` emitter does not. See
+    // ADR-021.
+    if let Some(represent) = represent {
+        let double_quotes = opts & OPT_SINGLE_QUOTES == 0;
+        let schema = Schema::new(opts & OPT_YAML_1_1 != 0, opts & OPT_PYYAML_COMPAT != 0);
+        let null_style = null_style_from_opts(opts)?;
+        let dump = crate::roundtrip::emit::DumpConfig {
+            sort_keys: opts & OPT_SORT_KEYS != 0,
+            // Synthetic sequences have no source column; indent them a step under
+            // their key (the PyYAML dump style) rather than flush.
+            indent_sequences: true,
+        };
+        let node =
+            represent::represent_to_node(py, obj, represent.bind(py), double_quotes, schema)?;
+        let bytes =
+            py.detach(|| crate::roundtrip::emit::emit_roundtrip_dump(&node, null_style, dump));
+        return Ok(PyBytes::new(py, &bytes).into_any().unbind());
+    }
 
     let mut emit_options = build_emit_options(opts);
     // The null style comes from the option flags (OPT_NULL_AS_KEYWORD / _TILDE).

@@ -288,31 +288,11 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// Whether a multi-line string can be emitted as a literal block scalar (`|`)
-    /// that reads back identically. A literal block is the dominant real-world
-    /// style for multi-line content, so it is the default; strings it cannot
-    /// represent faithfully fall back to a double-quoted scalar.
-    ///
-    /// It cannot represent: a single-line string; a carriage return or other C0
-    /// control character (only `\n` and `\t` are allowed in block content); or a
-    /// first content line that begins with whitespace (the block's indentation is
-    /// auto-detected from it, which would silently swallow the leading spaces).
+    /// Whether a multi-line string can be emitted as a literal block scalar.
+    /// Delegates to the shared [`crate::emit_util::use_literal_block`] so the fast
+    /// encoder and the round-trip `represent` path agree.
     fn use_literal_block(value: &str) -> bool {
-        if !value.contains('\n') {
-            return false;
-        }
-        // A block scalar carries its content raw, so it cannot hold a carriage
-        // return (block line breaks are normalized) nor any non-printable
-        // character (a C0/C1 control, DEL, or a non-character); such a string
-        // falls back to a double-quoted scalar that can escape them.
-        if value
-            .chars()
-            .any(|c| c == '\r' || crate::emit_util::is_non_printable(c))
-        {
-            return false;
-        }
-        let first_content = value.split('\n').find(|line| !line.is_empty());
-        !matches!(first_content, Some(line) if line.starts_with([' ', '\t']))
+        crate::emit_util::use_literal_block(value)
     }
 
     /// Emit a string as a literal block scalar (`|`), choosing the chomping

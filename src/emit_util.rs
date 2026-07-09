@@ -79,6 +79,29 @@ pub(crate) fn is_non_printable(c: char) -> bool {
     }
 }
 
+/// Whether a multi-line string can be emitted as a literal block scalar (`|`)
+/// that reads back identically. A literal block is the dominant real-world style
+/// for multi-line content, so it is the default; strings it cannot represent
+/// faithfully fall back to a double-quoted scalar.
+///
+/// It cannot represent: a single-line string; a carriage return or other C0
+/// control character (only `\n` and `\t` are allowed in block content); or a
+/// first content line that begins with whitespace (the block's indentation is
+/// auto-detected from it, which would silently swallow the leading spaces).
+///
+/// Shared by the fast encoder and the round-trip `represent` path so both choose
+/// a literal block under exactly the same conditions.
+pub(crate) fn use_literal_block(value: &str) -> bool {
+    if !value.contains('\n') {
+        return false;
+    }
+    if value.chars().any(|c| c == '\r' || is_non_printable(c)) {
+        return false;
+    }
+    let first_content = value.split('\n').find(|line| !line.is_empty());
+    !matches!(first_content, Some(line) if line.starts_with([' ', '\t']))
+}
+
 /// The body of a double-quoted scalar (no surrounding quotes), with the escapes
 /// YAML requires inside double quotes applied.
 pub(crate) fn double_quoted_body(value: &str) -> String {

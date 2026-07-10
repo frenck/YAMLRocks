@@ -84,6 +84,53 @@ def test_tagged_mapping_form():
     assert out == b"key: !include\n  file: f.yaml\n  vars:\n    k: v\n"
 
 
+def test_deferred_tagged_null_keeps_tag_without_null_token():
+    """A deferred tagged null keeps its tag as a bare ``!x`` in both mapping and
+    sequence position, matching plain ``dumps`` byte-for-byte. Expanding it to
+    ``!x null`` would reload as the string ``"null"`` instead of an empty value,
+    and dropping the tag would lose it entirely."""
+    tag = yamlrocks.YAMLRocksTag("!x", None)
+    for doc in ({"k": tag}, [tag], {"a": tag, "b": yamlrocks.YAMLRocksTag("!y", None)}):
+        deferred = yamlrocks.dumps(doc, represent=lambda _: None)
+        plain = yamlrocks.dumps(doc)
+        assert deferred == plain
+        assert yamlrocks.loads(deferred) == yamlrocks.loads(plain)
+    assert yamlrocks.dumps({"k": tag}, represent=lambda _: None) == b"k: !x\n"
+    assert yamlrocks.dumps([tag], represent=lambda _: None) == b"- !x\n"
+
+
+def test_deferred_non_first_tagged_key_uses_explicit_form():
+    """A non-first tagged key is emitted in the explicit ``? key`` form, matching
+    plain ``dumps``. An inline ``!tag key:`` after a previous entry binds its tag
+    to that entry's value (a reparse error after an empty value), so the ``?``
+    indicator opens a fresh key instead. A first/only tagged key stays inline."""
+    key = yamlrocks.YAMLRocksTag("!foo", "k")
+    for doc in ({"a": None, key: 2}, {"a": 1, key: 2}, {key: 1}):
+        deferred = yamlrocks.dumps(doc, represent=lambda _: None)
+        plain = yamlrocks.dumps(doc)
+        assert deferred == plain
+        assert yamlrocks.loads(deferred) == yamlrocks.loads(plain)
+    assert yamlrocks.dumps({"a": None, key: 2}, represent=lambda _: None) == (
+        b"a:\n? !foo k\n: 2\n"
+    )
+    assert yamlrocks.dumps({key: 1}, represent=lambda _: None) == b"!foo k: 1\n"
+
+
+def test_deeply_nested_represent_tree_tears_down_without_overflow():
+    """A deeply nested synthetic tree emits and is dismantled iteratively, so its
+    recursive drop cannot overflow the native stack (regression for the AST being
+    freed by the derived recursive ``Drop`` on return)."""
+    doc: dict = {}
+    cursor = doc
+    for _ in range(900):
+        child: dict = {}
+        cursor["k"] = child
+        cursor = child
+    cursor["k"] = "leaf"
+    out = yamlrocks.dumps(doc, represent=lambda _: None)
+    assert yamlrocks.loads(out) is not None
+
+
 def test_sequence_flow_override():
     """``flow=True`` emits a flow sequence."""
     out = yamlrocks.dumps(

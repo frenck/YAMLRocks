@@ -655,8 +655,16 @@ pub fn dumps(
             indent_sequences: true,
             explicit_end: opts & OPT_EXPLICIT_END != 0,
         };
-        let bytes =
-            py.detach(|| crate::roundtrip::emit::emit_roundtrip_dump(&node, null_style, dump));
+        let bytes = py.detach(|| {
+            let bytes = crate::roundtrip::emit::emit_roundtrip_dump(&node, null_style, dump);
+            // Dismantle the synthetic AST iteratively, with the GIL still
+            // detached, so a deeply nested represent tree (bounded by
+            // `MAX_REPRESENT_DEPTH`) cannot overflow the native stack on its
+            // recursive drop. Mirrors the loaded-document teardown. See
+            // [`crate::stack`].
+            crate::stack::drop_node_tree(node);
+            bytes
+        });
         return Ok(PyBytes::new(py, &bytes).into_any().unbind());
     }
 

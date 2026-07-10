@@ -182,11 +182,11 @@ impl RoundTripEmitter {
     }
 
     fn emit_block_mapping(&mut self, pairs: &[(YamlNode, YamlNode)], indent: usize) {
-        for (key, val) in pairs {
+        for (i, (key, val)) in pairs.iter().enumerate() {
             self.emit_blank_before(&key.comments);
             self.emit_head(&key.comments, indent);
             self.write_indent(indent);
-            if key_needs_explicit(key) {
+            if key_needs_explicit(key) || synthetic_key_needs_explicit(key, i == 0) {
                 self.emit_explicit_key_pair(key, val, indent);
                 continue;
             }
@@ -209,7 +209,7 @@ impl RoundTripEmitter {
                 self.emit_head(&key.comments, indent);
                 self.write_indent(indent);
             }
-            if key_needs_explicit(key) {
+            if key_needs_explicit(key) || synthetic_key_needs_explicit(key, i == 0) {
                 self.emit_explicit_key_pair(key, val, indent);
                 continue;
             }
@@ -310,7 +310,10 @@ impl RoundTripEmitter {
             }
             // A `key:` with no value: emitted empty for a loaded null (preserving
             // it) and for a synthetic null whose style is `empty`. A synthetic
-            // null styled `null`/`~` falls through to the inline arm below.
+            // null styled `null`/`~` falls through to the inline arm below. A tag
+            // is kept as a bare `key: !x` (never collapsed to `key:`, which drops
+            // it, nor expanded to `key: !x null`, which reloads as the string
+            // "null" rather than an empty value); this matches the fast path.
             _ if is_empty_scalar(val)
                 && val.comments.inline.is_none()
                 && val.anchor.is_none()
@@ -318,6 +321,10 @@ impl RoundTripEmitter {
                     .synthetic_null(val)
                     .map_or(true, |s| s == NullStyle::Empty) =>
             {
+                if let Some(ref tag) = val.tag {
+                    self.buf.push(b' ');
+                    self.buf.extend_from_slice(tag.as_bytes());
+                }
                 self.buf.push(b'\n');
             }
             _ => {
@@ -391,15 +398,20 @@ impl RoundTripEmitter {
         // A bare `-` (an empty entry) re-emits as a bare `-`: a loaded null
         // (originally written `-`, not `- null`), or a synthetic null whose
         // style is empty. An explicit `- null`/`- ~` is a scalar, not a null
-        // node, so it falls through and keeps its spelling.
+        // node, so it falls through and keeps its spelling. A tag is kept as a
+        // bare `- !x` (never expanded to `- !x null`, which reloads as the
+        // string "null" rather than an empty value); this matches the fast path.
         if is_empty_scalar(item)
             && item.comments.inline.is_none()
             && item.anchor.is_none()
-            && item.tag.is_none()
             && self
                 .synthetic_null(item)
                 .map_or(true, |style| style == NullStyle::Empty)
         {
+            if let Some(ref tag) = item.tag {
+                self.buf.push(b' ');
+                self.buf.extend_from_slice(tag.as_bytes());
+            }
             self.buf.push(b'\n');
             return;
         }
@@ -838,6 +850,18 @@ fn key_needs_explicit(key: &YamlNode) -> bool {
         YamlNodeKind::Scalar(_, ScalarStyle::Literal | ScalarStyle::Folded) => true,
         _ => false,
     }
+}
+
+/// Whether a synthetic (dump-path) key must switch to the explicit `? key` form
+/// because it is not the first entry and carries a tag or anchor. An inline
+/// `!tag key:` (or `&a key:`) after a previous entry has its property read as the
+/// preceding value's node property, which is a reparse error when that value was
+/// empty (`k:\n!tag key: v`) and a silent parity break otherwise. The explicit
+/// `?` indicator opens a fresh key the preceding value cannot absorb, matching
+/// the fast emitter. A loaded key is never synthetic, so its inline tag/anchor is
+/// left untouched for byte-for-byte fidelity.
+fn synthetic_key_needs_explicit(key: &YamlNode, is_first: bool) -> bool {
+    !is_first && key.synthetic && (key.tag.is_some() || key.anchor.is_some())
 }
 
 #[cfg(test)]

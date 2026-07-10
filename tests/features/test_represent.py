@@ -477,17 +477,22 @@ def test_chained_default_raises_like_plain_dumps():
         yamlrocks.dumps(A(), default=default)
 
 
-def test_mapping_descriptor_pair_must_have_two_items():
-    """A `YAMLRocksMapping` pair with the wrong arity raises rather than silently
-    dropping items."""
+@pytest.mark.parametrize(
+    "bad",
+    [
+        [("k", "val", "extra")],  # wrong arity
+        [["a", 1]],  # a list, not a tuple
+        ["ab"],  # a 2-char string is a 2-item sequence, but not a pair
+    ],
+)
+def test_mapping_descriptor_pair_must_be_a_two_tuple(bad):
+    """A `YAMLRocksMapping` entry must be a 2-item `(key, value)` tuple; a longer
+    tuple, a list, or a 2-character string is rejected rather than silently
+    misread or dropping items."""
     with pytest.raises(ValueError, match="key, value"):
         yamlrocks.dumps(
             "m",
-            represent=lambda v: (
-                yamlrocks.YAMLRocksMapping([("k", "val", "extra")])
-                if v == "m"
-                else None
-            ),
+            represent=lambda v: yamlrocks.YAMLRocksMapping(bad) if v == "m" else None,
         )
 
 

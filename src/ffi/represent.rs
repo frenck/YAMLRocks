@@ -430,11 +430,17 @@ impl Lower<'_, '_, '_> {
             let mut entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = Vec::new();
             for pair in map.pairs.bind(self.py).try_iter()? {
                 let pair = pair?;
-                // Each pair must be exactly `(key, value)`; a longer tuple would
-                // otherwise silently drop its extra items.
-                if pair.len()? != 2 {
-                    return Err(pyo3::exceptions::PyValueError::new_err(
+                // Each pair must be a 2-tuple, as the type advertises. Accepting
+                // any 2-item sequence would let a longer tuple silently drop
+                // items, or a 2-character string be read as `(key, value)`.
+                let pair = pair.cast_into::<PyTuple>().map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err(
                         "a YAMLRocksMapping pair must be a (key, value) tuple",
+                    )
+                })?;
+                if pair.len() != 2 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "a YAMLRocksMapping pair must be a (key, value) tuple of exactly two items",
                     ));
                 }
                 entries.push((pair.get_item(0)?, pair.get_item(1)?));

@@ -584,10 +584,10 @@ the datetime/dataclass/numpy handling still apply, and a deferred value renders
 byte-for-byte as it would from a plain `dumps`. `represent` is offered every
 value, including those nested inside a deferred set, dataclass, or `default`
 result. `OPT_SORT_KEYS` (by type and value, numbers numerically),
-`OPT_FLOW_STYLE`, `OPT_EXPLICIT_START`, `OPT_EXPLICIT_END`, the null-style flags,
-and the quote-style flag all apply, to what `represent` returns and to deferred
-values alike. Block indentation is a fixed two spaces on this path, so
-`OPT_INDENT_4`, `OPT_INDENTLESS_SEQUENCES`, and `width` do not apply here.
+`OPT_FLOW_STYLE`, `OPT_EXPLICIT_START`, `OPT_EXPLICIT_END`, `OPT_INDENT_4`,
+`OPT_INDENTLESS_SEQUENCES`, the null-style flags, and the quote-style flag all
+apply, to what `represent` returns and to deferred values alike. Only `width`
+line-wrapping is not implemented on this path yet.
 
 ## Writing to a file with `dump`
 

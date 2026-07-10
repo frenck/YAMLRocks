@@ -73,11 +73,11 @@ pub struct DumpConfig {
     /// Emit an explicit `...` end marker after the document (`OPT_EXPLICIT_END`).
     /// The `---` start marker is carried on the root node's `explicit_start`.
     pub explicit_end: bool,
-    /// Spaces per nesting level for mappings and block scalars under a key
-    /// (`OPT_INDENT_2`/`OPT_INDENT_4`). Zero means "unset", read through
-    /// [`RoundTripEmitter::step`] as the default [`STEP`]. Block-sequence item
-    /// content is always two columns past the dash regardless, matching the fast
-    /// encoder.
+    /// Spaces per nesting level for mappings and block scalars under a key: the
+    /// default two, or four when `OPT_INDENT_4` is set. Zero means "unset", read
+    /// through [`RoundTripEmitter::step`] as the default [`STEP`]. Block-sequence
+    /// item content is always two columns past the dash regardless, matching the
+    /// fast encoder.
     pub indent: usize,
     /// Align a block sequence under a key with the key's own column instead of
     /// indenting it a step (`OPT_INDENTLESS_SEQUENCES`). Only consulted on the
@@ -129,9 +129,9 @@ impl RoundTripEmitter {
     }
 
     /// Spaces per nesting level for mappings and block scalars under a key: the
-    /// dump config's indent when set (`OPT_INDENT_2`/`_4`), else the default
-    /// [`STEP`]. Block-sequence item content is always `+2` past the dash (the
-    /// fast encoder's fixed offset) and does not go through here.
+    /// dump config's indent when set (four for `OPT_INDENT_4`), else the default
+    /// [`STEP`] of two. Block-sequence item content is always `+2` past the dash
+    /// (the fast encoder's fixed offset) and does not go through here.
     fn step(&self) -> usize {
         if self.dump.indent > 0 {
             self.dump.indent

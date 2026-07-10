@@ -634,6 +634,50 @@ def test_large_integer_keys_sort_exactly():
     ) == yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
 
 
+def test_sort_keys_does_not_double_invoke_serializers():
+    """Sorting a mapping with serialized keys must not run the serializer an extra
+    time: the sort ranks such keys directly (they lower to a tagged node, which
+    sorts in input order), so each key's serializer is called exactly once, as in
+    a plain `dumps`."""
+
+    class Custom:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    calls: list[str] = []
+
+    def serialize(obj: Custom):
+        calls.append(obj.name)
+        return ("!c", obj.name)
+
+    doc = {Custom("b"): 1, Custom("a"): 2}
+    serializers = {Custom: serialize}
+    deferred = yamlrocks.dumps(
+        doc,
+        option=yamlrocks.OPT_SORT_KEYS,
+        serializers=serializers,
+        represent=lambda _: None,
+    )
+    deferred_calls = list(calls)
+    calls.clear()
+    plain = yamlrocks.dumps(
+        doc, option=yamlrocks.OPT_SORT_KEYS, serializers=serializers
+    )
+    assert deferred == plain
+    assert deferred_calls == calls == ["b", "a"]
+
+
+def test_sort_keys_propagates_a_bad_key_conversion_error():
+    """A key whose conversion genuinely errors (a non-UTF-8 `bytes` key) raises
+    during sorting rather than being silently ranked as an 'other' key, matching
+    a plain `dumps` (which converts keys before sorting)."""
+    doc = {b"\xff\xfe": 1, "a": 2}
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError):
+        yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda _: None)
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError):
+        yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
+
+
 # --- Byte-for-byte parity sweep: dumps(x, represent=lambda _: None) == dumps(x) ---
 #
 # A callback that defers on every value must reproduce a plain `dumps` exactly.

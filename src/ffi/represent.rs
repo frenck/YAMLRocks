@@ -477,7 +477,7 @@ impl Lower<'_, '_, '_> {
             validate_tag(tag)?;
         }
         let flow = self.flowing(flow, in_flow);
-        let ordered = self.sorted_pairs(entries);
+        let ordered = self.sorted_pairs(entries)?;
         let mut pairs = Vec::with_capacity(ordered.len());
         for (key, val) in &ordered {
             // A collection used as a key is emitted inline as a flow collection
@@ -584,53 +584,63 @@ impl Lower<'_, '_, '_> {
     }
 
     /// Order a mapping's `(key, value)` pairs for emission. With `sort_keys` set,
-    /// sort by a key derived directly from the Python key object (by type and
-    /// value), matching the fast path's `compare_keys`: null, then booleans, then
-    /// numbers numerically, then strings lexically, then everything else in input
-    /// order. Deriving the sort key straight from the object (not through
-    /// `python_to_value`) means `default`/`serializers` are not run an extra time
-    /// on a custom key. Sorting happens here, before the values are lowered, so
-    /// anchor detection follows the final emission order (sorting after would risk
-    /// emitting an alias before its anchor).
+    /// sort by a key derived from the Python key object, matching the fast path's
+    /// `compare_keys`: null, then booleans, then numbers numerically, then strings
+    /// lexically, then everything else in input order. Sorting happens here,
+    /// before the values are lowered, so anchor detection follows the final
+    /// emission order (sorting after would risk emitting an alias before its
+    /// anchor). A key-conversion error (a non-UTF-8 `bytes` key) propagates, as it
+    /// does when the fast path converts keys before sorting.
     fn sorted_pairs<'a>(
         &self,
         pairs: Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)>,
-    ) -> Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)> {
+    ) -> PyResult<Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)>> {
         if !self.sort_keys {
-            return pairs;
+            return Ok(pairs);
         }
-        let mut keyed: Vec<(SortKey, Bound<'a, PyAny>, Bound<'a, PyAny>)> = pairs
-            .into_iter()
-            .enumerate()
-            .map(|(i, (k, v))| (self.sort_key(&k, i), k, v))
-            .collect();
+        let mut keyed: Vec<(SortKey, Bound<'a, PyAny>, Bound<'a, PyAny>)> =
+            Vec::with_capacity(pairs.len());
+        for (i, (k, v)) in pairs.into_iter().enumerate() {
+            keyed.push((self.sort_key(&k, i)?, k, v));
+        }
         keyed.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
-        keyed.into_iter().map(|(_, k, v)| (k, v)).collect()
+        Ok(keyed.into_iter().map(|(_, k, v)| (k, v)).collect())
     }
 
     /// The sort key for a mapping key under `sort_keys`. A primitive
     /// (null/bool/number/string) is ranked directly. Any other key is ranked by
     /// the scalar the fast path would emit for it, so a `datetime`/`UUID`/`Path`
     /// key sorts by its rendered string exactly as a plain `dumps` does (rather
-    /// than dropping to `Other` and reordering). The conversion runs with
-    /// `default` disabled: a key only `default` could handle is not a scalar and
-    /// falls to `Other` (input order), matching `compare_keys`' complex-key rank.
-    fn sort_key(&self, key: &Bound<'_, PyAny>, index: usize) -> SortKey {
+    /// than dropping to `Other` and reordering).
+    ///
+    /// The conversion disables both `default` and `serializers`: sorting must not
+    /// invoke a user callback, since it would run again when the key is lowered
+    /// and a stateful one must not observe a double call. A key that only a
+    /// serializer or `default` could render is therefore not a plain scalar here;
+    /// it ranks `Other` (input order), exactly as `compare_keys` ranks a
+    /// tagged/complex key (a serialized key lowers to a `Tagged` node, which is
+    /// also rank-`Other`). A genuine conversion error (a non-UTF-8 `bytes` key)
+    /// propagates rather than being swallowed.
+    fn sort_key(&self, key: &Bound<'_, PyAny>, index: usize) -> PyResult<SortKey> {
         if key.is_none()
             || key.is_instance_of::<PyBool>()
             || key.is_instance_of::<PyInt>()
             || key.is_instance_of::<PyFloat>()
             || key.is_instance_of::<PyString>()
         {
-            return SortKey::of(key, index);
+            return Ok(SortKey::of(key, index));
         }
-        let no_default = EncodeCtx {
+        let scalar_only = EncodeCtx {
             default: None,
+            tags: None,
             ..self.encode
         };
-        match python_to_value(self.py, key, no_default) {
-            Ok(value) => SortKey::from_value(&value, index),
-            Err(_) => SortKey::Other(index),
+        match python_to_value(self.py, key, scalar_only) {
+            Ok(value) => Ok(SortKey::from_value(&value, index)),
+            Err(err) if err.is_instance_of::<YAMLRocksUnserializableError>(self.py) => {
+                Ok(SortKey::Other(index))
+            }
+            Err(err) => Err(err),
         }
     }
 

@@ -370,7 +370,15 @@ impl Lower<'_, '_, '_> {
                 match self.encode.default {
                     Some(default) => {
                         let result = default.call1(self.py, (obj,))?;
-                        self.lower(result.bind(self.py), depth + 1, in_flow)
+                        // Disable `default` while lowering its result, matching the
+                        // fast path (which converts a `default` result with
+                        // `default` off): a result that is itself unsupported
+                        // raises rather than re-invoking `default`. `represent`
+                        // still sees the result and its children.
+                        let prev = self.encode.default.take();
+                        let lowered = self.lower(result.bind(self.py), depth + 1, in_flow);
+                        self.encode.default = prev;
+                        lowered
                     }
                     None => Err(err),
                 }
@@ -415,6 +423,13 @@ impl Lower<'_, '_, '_> {
             let mut entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = Vec::new();
             for pair in map.pairs.bind(self.py).try_iter()? {
                 let pair = pair?;
+                // Each pair must be exactly `(key, value)`; a longer tuple would
+                // otherwise silently drop its extra items.
+                if pair.len()? != 2 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "a YAMLRocksMapping pair must be a (key, value) tuple",
+                    ));
+                }
                 entries.push((pair.get_item(0)?, pair.get_item(1)?));
             }
             return self.mapping_node(entries, depth, map.tag.clone(), map.flow, in_flow);

@@ -449,6 +449,48 @@ def test_default_result_shared_elsewhere_anchors_correctly():
     assert yamlrocks.loads(out) == [[1], [1]]
 
 
+def test_shared_mapping_as_sequence_item_anchors_correctly():
+    """A shared mapping nested as a sequence item carries its anchor on the dash
+    line (`- &id001` then the indented keys), not inline where it would bind to
+    the first key, so it reloads to two equal mappings."""
+    shared = {"x": 1}
+    out = yamlrocks.dumps([shared, shared], represent=lambda v: None)
+    assert out == b"- &id001\n  x: 1\n- *id001\n"
+    assert yamlrocks.loads(out) == [{"x": 1}, {"x": 1}]
+
+
+def test_chained_default_raises_like_plain_dumps():
+    """A `default` whose result is itself unsupported raises, matching plain
+    `dumps`: `default` is not re-invoked on its own result."""
+
+    class A:
+        pass
+
+    class B:
+        pass
+
+    default = lambda o: B() if isinstance(o, A) else o  # noqa: E731
+    with pytest.raises(yamlrocks.YAMLRocksUnserializableError):
+        yamlrocks.dumps(A(), default=default, represent=lambda v: None)
+    # Same as a plain dump.
+    with pytest.raises(yamlrocks.YAMLRocksUnserializableError):
+        yamlrocks.dumps(A(), default=default)
+
+
+def test_mapping_descriptor_pair_must_have_two_items():
+    """A `YAMLRocksMapping` pair with the wrong arity raises rather than silently
+    dropping items."""
+    with pytest.raises(ValueError, match="key, value"):
+        yamlrocks.dumps(
+            "m",
+            represent=lambda v: (
+                yamlrocks.YAMLRocksMapping([("k", "val", "extra")])
+                if v == "m"
+                else None
+            ),
+        )
+
+
 def test_large_integer_keys_sort_exactly():
     """Integer keys keep their exact value when sorting, so two large `i64`s do
     not collide (as they would if coerced to `f64`), matching plain `dumps`."""

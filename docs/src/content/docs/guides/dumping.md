@@ -563,8 +563,8 @@ yamlrocks.dumps({"on_press": "return x + 1;"}, represent=represent)
 ### Shared objects become anchors
 
 Because the emitter drives the recursion, it sees the whole object graph. A value
-that appears more than once emits once with an anchor and aliases the repeats,
-so the shared reference survives a dump and reload:
+that appears more than once emits once with an anchor and aliases the repeats, so
+the YAML stays compact and the anchor/alias structure is preserved:
 
 ```python
 import yamlrocks
@@ -573,6 +573,10 @@ shared = {"host": "localhost", "port": 8080}
 yamlrocks.dumps({"primary": shared, "backup": shared}, represent=lambda v: None)
 # b'primary: &id001\n  host: localhost\n  port: 8080\nbackup: *id001\n'
 ```
+
+On a plain `loads`, an alias reloads as an equal but distinct object (the fast
+loader copies the anchored value); load with `OPT_ANNOTATED` if you need the
+reloaded Python objects to share identity the way the anchors imply.
 
 `represent` composes with everything else. It runs first; a value it defers on
 (`None`) falls through to the normal pipeline, so `default`, `serializers`, and

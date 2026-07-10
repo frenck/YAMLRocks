@@ -402,9 +402,18 @@ impl RoundTripEmitter {
         }
         match &item.kind {
             YamlNodeKind::Mapping(m) if item.style == NodeStyle::Block && !m.is_empty() => {
-                self.buf.push(b' ');
-                self.emit_anchor_tag(item);
-                self.emit_block_mapping_after_dash(m, child);
+                if item.anchor.is_some() || item.tag.is_some() {
+                    // An anchored/tagged block mapping carries its marker on the
+                    // dash line, then breaks to the indented keys. Emitting it
+                    // inline (`- &a key: value`) would bind the marker to the
+                    // first key rather than the mapping.
+                    self.emit_anchor_tag_compact(item);
+                    self.buf.push(b'\n');
+                    self.emit_block_mapping(m, child);
+                } else {
+                    self.buf.push(b' ');
+                    self.emit_block_mapping_after_dash(m, child);
+                }
                 // A trailing comment block at the end of this item's mapping.
                 self.emit_foot(&item.comments, child);
             }

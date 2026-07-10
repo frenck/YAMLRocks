@@ -162,6 +162,7 @@ pub fn represent_to_node(
         schema,
         seen: HashSet::new(),
         aliased: HashSet::new(),
+        retained: Vec::new(),
     };
     let mut root = ctx.lower(obj, 0, false)?;
     // Turn the raw `id()` markers left on shared nodes into real anchor names,
@@ -185,6 +186,11 @@ struct Lower<'py, 'r, 'c> {
     schema: Schema,
     seen: HashSet<usize>,
     aliased: HashSet<usize>,
+    /// A strong reference to every object recorded in `seen`, so its `id()`
+    /// (a raw pointer) stays valid for the whole lowering. Without this a
+    /// temporary from `default`/numpy could be freed and its address reused by a
+    /// later temporary, which would then be misread as an alias to the first.
+    retained: Vec<Py<PyAny>>,
 }
 
 impl Lower<'_, '_, '_> {
@@ -222,15 +228,35 @@ impl Lower<'_, '_, '_> {
                 ));
             }
             self.seen.insert(id);
+            // Keep the object alive so its `id()` cannot be reused mid-lowering.
+            self.retained.push(obj.clone().unbind());
         }
 
-        let mut node = self.render(obj, depth, in_flow)?;
-        if aliasable {
-            // Stamp the raw id; `name_anchors` later turns it into a real anchor
-            // name or strips it if this object was never aliased.
-            node.anchor = Some(id.to_string());
+        let node = self.render(obj, depth, in_flow)?;
+        if !aliasable {
+            return Ok(node);
         }
-        Ok(node)
+        match &node.kind {
+            // A transparent re-dispatch (an enum value, a numpy value, or a
+            // `default`/serializer result) resolved back to this very object, so
+            // the value is defined only in terms of itself with no node to
+            // anchor. An anchored alias is malformed YAML; raise instead.
+            YamlNodeKind::Alias(target) if *target == id.to_string() => {
+                Err(pyo3::exceptions::PyValueError::new_err(
+                    "cannot serialize a value that refers only to itself",
+                ))
+            }
+            // An alias to a *different* shared object cannot carry an anchor;
+            // leave it as the alias it is.
+            YamlNodeKind::Alias(_) => Ok(node),
+            _ => {
+                // Stamp the raw id; `name_anchors` later turns it into a real
+                // anchor name or strips it if this object was never aliased.
+                let mut node = node;
+                node.anchor = Some(id.to_string());
+                Ok(node)
+            }
+        }
     }
 
     /// The node for `obj`: the representer's result, or the built-in rendering
@@ -395,6 +421,7 @@ impl Lower<'_, '_, '_> {
         flow: Option<bool>,
         in_flow: bool,
     ) -> PyResult<YamlNode> {
+        let tag = tag.map(|t| normalize_tag(&t));
         if let Some(tag) = &tag {
             validate_tag(tag)?;
         }
@@ -424,6 +451,7 @@ impl Lower<'_, '_, '_> {
         flow: Option<bool>,
         in_flow: bool,
     ) -> PyResult<YamlNode> {
+        let tag = tag.map(|t| normalize_tag(&t));
         if let Some(tag) = &tag {
             validate_tag(tag)?;
         }
@@ -440,7 +468,10 @@ impl Lower<'_, '_, '_> {
     }
 
     /// A tagged node: lower `inner` (its children still reach `represent`) and
-    /// attach the validated tag.
+    /// attach the validated tag. `inner` goes through `lower` at the next depth so
+    /// it is depth-bounded and stack-guarded; a serializer that returns a tag
+    /// wrapping its own input therefore aliases (and is rejected below) instead of
+    /// recursing without bound.
     fn tagged_node(
         &mut self,
         tag: String,
@@ -448,8 +479,16 @@ impl Lower<'_, '_, '_> {
         depth: u32,
         in_flow: bool,
     ) -> PyResult<YamlNode> {
+        let tag = normalize_tag(&tag);
         validate_tag(&tag)?;
-        let mut node = self.render(inner, depth, in_flow)?;
+        let mut node = self.lower(inner, depth + 1, in_flow)?;
+        // An alias cannot carry a tag (nor an anchor); a tag wrapping a
+        // self-referential or already-shared value is unrepresentable.
+        if matches!(node.kind, YamlNodeKind::Alias(_)) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "cannot attach a tag to a self-referential or shared value",
+            ));
+        }
         node.tag = Some(tag);
         Ok(node)
     }
@@ -590,13 +629,18 @@ fn is_aliasable(obj: &Bound<'_, PyAny>) -> bool {
 /// A total-ordered sort key for a mapping key under `sort_keys`, derived directly
 /// from the Python key object. Mirrors the fast path's `compare_keys` ranking
 /// (null, bool, number, string, then everything else) so the represent path sorts
-/// identically to a plain `dumps`. A key that is not a plain scalar falls into
-/// `Other`, tie-broken by input index to stay a stable no-op with a total order.
+/// scalar keys identically to a plain `dumps`: integers keep their exact value
+/// (`i128`, so two large `i64`s do not collide as they would under `f64`), and
+/// integers and floats share one numeric rank compared numerically. A key that is
+/// not a plain scalar (a custom object, or a special type like `datetime`/`UUID`
+/// that the fast path would stringify) falls into `Other`, tie-broken by input
+/// index to stay a stable no-op with a total order.
 #[derive(PartialEq)]
 enum SortKey {
     Null,
     Bool(bool),
-    Num(f64),
+    Int(i128),
+    Float(f64),
     Str(String),
     Other(usize),
 }
@@ -610,9 +654,19 @@ impl SortKey {
         if let Ok(b) = obj.cast::<PyBool>() {
             return SortKey::Bool(b.is_true());
         }
-        if obj.is_instance_of::<PyInt>() || obj.is_instance_of::<PyFloat>() {
+        if obj.is_instance_of::<PyInt>() {
+            // Keep the exact value when it fits `i128`; a bigger integer falls
+            // back to `f64` (as the fast path's `compare_keys` does for a BigInt).
+            return match obj.extract::<i128>() {
+                Ok(i) => SortKey::Int(i),
+                Err(_) => obj
+                    .extract::<f64>()
+                    .map_or(SortKey::Other(index), SortKey::Float),
+            };
+        }
+        if obj.is_instance_of::<PyFloat>() {
             if let Ok(f) = obj.extract::<f64>() {
-                return SortKey::Num(f);
+                return SortKey::Float(f);
             }
         }
         if let Ok(s) = obj.cast::<PyString>() {
@@ -627,9 +681,19 @@ impl SortKey {
         match self {
             SortKey::Null => 0,
             SortKey::Bool(_) => 1,
-            SortKey::Num(_) => 2,
+            // Integers and floats share the numeric rank, as in `compare_keys`.
+            SortKey::Int(_) | SortKey::Float(_) => 2,
             SortKey::Str(_) => 3,
             SortKey::Other(_) => 4,
+        }
+    }
+
+    /// A number's `f64` value, for cross-representation numeric ordering.
+    fn as_f64(&self) -> f64 {
+        match self {
+            SortKey::Int(i) => *i as f64,
+            SortKey::Float(f) => *f,
+            _ => f64::NAN,
         }
     }
 
@@ -639,9 +703,12 @@ impl SortKey {
             .cmp(&other.rank())
             .then_with(|| match (self, other) {
                 (SortKey::Bool(a), SortKey::Bool(b)) => a.cmp(b),
-                (SortKey::Num(a), SortKey::Num(b)) => a.total_cmp(b),
+                // Two exact integers compare exactly; a mix with a float compares
+                // numerically as `f64`.
+                (SortKey::Int(a), SortKey::Int(b)) => a.cmp(b),
                 (SortKey::Str(a), SortKey::Str(b)) => a.cmp(b),
                 (SortKey::Other(a), SortKey::Other(b)) => a.cmp(b),
+                _ if self.rank() == 2 => self.as_f64().total_cmp(&other.as_f64()),
                 _ => Ordering::Equal,
             })
     }
@@ -773,9 +840,12 @@ fn scalar_node(
     schema: Schema,
     in_flow: bool,
 ) -> PyResult<YamlNode> {
-    if let Some(tag) = tag {
+    // Normalize a canonical core tag to its `!!X` shorthand, then validate.
+    let tag = tag.map(normalize_tag);
+    if let Some(tag) = &tag {
         validate_tag(tag)?;
     }
+    let tag = tag.as_deref();
     if let Some(style) = style {
         return Ok(synthetic(
             YamlNodeKind::Scalar(value, flow_safe_style(style, in_flow)),
@@ -832,6 +902,17 @@ enum StdKind {
     Int,
     Float,
     Str,
+}
+
+/// Normalize a canonical core tag (`tag:yaml.org,2002:X`) to its `!!X` shorthand,
+/// so a callback ported from a PyYAML representer (which uses the canonical URI
+/// tags) both passes tag validation and gets the standard-tag elision. Any other
+/// tag is left as written.
+fn normalize_tag(tag: &str) -> String {
+    match tag.strip_prefix("tag:yaml.org,2002:") {
+        Some(suffix) => format!("!!{suffix}"),
+        None => tag.to_owned(),
+    }
 }
 
 /// Classify a tag as a standard YAML scalar type, or `None` for a custom tag.

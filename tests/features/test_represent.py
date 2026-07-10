@@ -390,15 +390,53 @@ def test_default_only_catches_unserializable_type_not_encode_errors():
         yamlrocks.dumps(doc)
 
 
-def test_non_progressing_default_does_not_overflow():
-    """A `default` that returns its argument is depth-bounded (resolved as a
-    self-alias) rather than recursing into a native stack overflow."""
+def test_non_progressing_default_raises_cleanly():
+    """A `default` that returns its argument is a value defined only in terms of
+    itself: it raises cleanly rather than recursing into a native stack overflow
+    or emitting a malformed anchored alias."""
 
     class Unserializable:
         pass
 
-    obj = Unserializable()
-    # Does not crash; the self-reference resolves to an anchor/alias pair.
-    assert yamlrocks.dumps(obj, default=lambda o: o, represent=lambda v: None) == (
-        b"&id001 *id001\n"
-    )
+    with pytest.raises(ValueError, match="refers only to itself"):
+        yamlrocks.dumps(Unserializable(), default=lambda o: o, represent=lambda v: None)
+
+
+def test_canonical_tags_are_normalized():
+    """A canonical `tag:yaml.org,2002:*` tag (as PyYAML representers use) is
+    accepted and gets the same shorthand handling as `!!*`: an implicit bool
+    elides, and a str tag on a number quotes to stay a string."""
+
+    def rep(v):
+        if v == "b":
+            return yamlrocks.YAMLRocksScalar("true", tag="tag:yaml.org,2002:bool")
+        if v == "s":
+            return yamlrocks.YAMLRocksScalar("123", tag="tag:yaml.org,2002:str")
+        return None
+
+    assert yamlrocks.dumps({"k": "b"}, represent=rep) == b"k: true\n"
+    assert yamlrocks.dumps({"k": "s"}, represent=rep) == b"k: '123'\n"
+
+
+def test_self_referential_serializer_raises():
+    """A serializer that tags its own input (a non-progressing result) raises
+    rather than recursing without bound."""
+
+    class Thing:
+        pass
+
+    with pytest.raises(ValueError):
+        yamlrocks.dumps(
+            {"k": Thing()},
+            serializers={Thing: lambda o: yamlrocks.YAMLRocksTag("!x", o)},
+            represent=lambda v: None,
+        )
+
+
+def test_large_integer_keys_sort_exactly():
+    """Integer keys keep their exact value when sorting, so two large `i64`s do
+    not collide (as they would if coerced to `f64`), matching plain `dumps`."""
+    doc = {9007199254740993: "a", 9007199254740992: "b"}
+    assert yamlrocks.dumps(
+        doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda v: None
+    ) == yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)

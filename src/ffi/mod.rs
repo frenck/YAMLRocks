@@ -636,19 +636,24 @@ pub fn dumps(
             tags: serializers.as_ref(),
             depth: 0,
         };
-        let node = represent::represent_to_node(
+        let mut node = represent::represent_to_node(
             py,
             obj,
             represent.bind(py),
             encode_ctx,
             opts & OPT_SORT_KEYS != 0,
+            opts & OPT_FLOW_STYLE != 0,
             double_quotes,
             schema,
         )?;
-        // Synthetic sequences have no source column; indent them a step under
-        // their key (the PyYAML dump style) rather than flush.
+        // The `---` start marker rides on the root node; the `...` end marker is
+        // appended by the emitter.
+        node.explicit_start = opts & OPT_EXPLICIT_START != 0;
         let dump = crate::roundtrip::emit::DumpConfig {
+            // Synthetic sequences have no source column; indent them a step under
+            // their key (the PyYAML dump style) rather than flush.
             indent_sequences: true,
+            explicit_end: opts & OPT_EXPLICIT_END != 0,
         };
         let bytes =
             py.detach(|| crate::roundtrip::emit::emit_roundtrip_dump(&node, null_style, dump));

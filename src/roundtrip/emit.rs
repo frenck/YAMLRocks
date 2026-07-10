@@ -70,6 +70,9 @@ pub struct DumpConfig {
     /// style) rather than at the key's own column. Synthetic sequences have no
     /// recorded source column, so without this they emit flush.
     pub indent_sequences: bool,
+    /// Emit an explicit `...` end marker after the document (`OPT_EXPLICIT_END`).
+    /// The `---` start marker is carried on the root node's `explicit_start`.
+    pub explicit_end: bool,
 }
 
 /// Emit a single synthetic document tree with dump-shaping options applied. Used
@@ -79,6 +82,9 @@ pub fn emit_roundtrip_dump(node: &YamlNode, null_style: NullStyle, dump: DumpCon
     let mut emitter = RoundTripEmitter::new(null_style);
     emitter.dump = dump;
     emitter.emit_document(node);
+    if dump.explicit_end {
+        emitter.buf.extend_from_slice(b"...\n");
+    }
     emitter.buf
 }
 

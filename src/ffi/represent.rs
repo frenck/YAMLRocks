@@ -11,19 +11,24 @@
 //! Lowering targets the round-trip [`YamlNode`] tree and the round-trip emitter,
 //! which already speaks per-node style (`plain`/`single`/`double`/`literal`/
 //! `folded`), per-node tags, and block/flow layout, rather than the fast `Value`
-//! emitter, which speaks none of them. A deferred value (one `represent` returns
-//! `None` for) runs through the same `python_to_value` encode pipeline as a plain
-//! `dumps`, then a `Value`-to-node bridge, so `default`/`serializers` and the
-//! datetime/dataclass/numpy handling compose and deferred output stays
-//! byte-for-byte identical to a plain `dumps`.
+//! emitter, which speaks none of them. A value the host defers on is rendered the
+//! built-in way: a compound (dict/list/set/dataclass/enum/numpy/tagged, or a
+//! `default` result) decomposes into child objects that recurse back through
+//! `represent` (so every value is offered to the callback), while a scalar leaf
+//! goes through the shared `python_to_value` pipeline and a `Value`-to-node
+//! bridge, so `default`/`serializers` and datetime/dataclass/numpy handling
+//! compose and deferred output stays byte-for-byte identical to a plain `dumps`.
 
 use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{
+    PyBool, PyBytes, PyDict, PyFloat, PyFrozenSet, PyInt, PyList, PySet, PyString, PyTuple, PyType,
+};
 
 use crate::decode::Value;
-use crate::ffi::convert::{python_to_value, EncodeCtx};
+use crate::ffi::convert::{is_enum, numpy_child, python_to_value, validate_tag, EncodeCtx};
+use crate::ffi::YAMLRocksTag;
 use crate::resolver::{ScalarKind, Schema};
 use crate::roundtrip::ast::{NodeStyle, YamlNode, YamlNodeKind};
 use crate::roundtrip::value::assigned_string_style;
@@ -132,14 +137,16 @@ fn parse_style(style: Option<&str>) -> PyResult<Option<ScalarStyle>> {
 }
 
 /// Lower a Python object into a synthetic [`YamlNode`] tree using `represent`,
-/// ready for the round-trip emitter. Detects shared container objects and emits
-/// them once with an anchor, aliasing the repeats.
+/// ready for the round-trip emitter. Detects shared objects and emits them once
+/// with an anchor, aliasing the repeats.
+#[allow(clippy::too_many_arguments)]
 pub fn represent_to_node(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     represent: &Bound<'_, PyAny>,
     encode: EncodeCtx<'_>,
     sort_keys: bool,
+    flow_all: bool,
     double_quotes: bool,
     schema: Schema,
 ) -> PyResult<YamlNode> {
@@ -148,12 +155,13 @@ pub fn represent_to_node(
         represent,
         encode,
         sort_keys,
+        flow_all,
         double_quotes,
         schema,
         seen: HashSet::new(),
         aliased: HashSet::new(),
     };
-    let mut root = ctx.lower(obj, 0)?;
+    let mut root = ctx.lower(obj, 0, false)?;
     // Turn the raw `id()` markers left on shared nodes into real anchor names,
     // dropping them from nodes that were never aliased.
     name_anchors(&mut root, &ctx.aliased, &mut HashMap::new(), &mut 0);
@@ -161,15 +169,16 @@ pub fn represent_to_node(
 }
 
 /// Carries the lowering invariants plus the shared-object tracking. `seen` holds
-/// the `id()` of every container lowered so far; `aliased` holds those that
-/// turned up again (so a name is worth minting). `encode` is the full `dumps`
-/// encode context, used to render a deferred value through the same pipeline as
-/// a plain `dumps` (so `default`/`serializers`/datetime/dataclass all compose).
+/// the `id()` of every aliasable object lowered so far; `aliased` holds those
+/// that turned up again (so a name is worth minting). `encode` is the full
+/// `dumps` encode context, used to render a deferred scalar leaf through the same
+/// pipeline as a plain `dumps` (so `default`/`serializers`/datetime compose).
 struct Lower<'py, 'r, 'c> {
     py: Python<'py>,
     represent: &'r Bound<'py, PyAny>,
     encode: EncodeCtx<'c>,
     sort_keys: bool,
+    flow_all: bool,
     double_quotes: bool,
     schema: Schema,
     seen: HashSet<usize>,
@@ -177,28 +186,31 @@ struct Lower<'py, 'r, 'c> {
 }
 
 impl Lower<'_, '_, '_> {
-    fn lower(&mut self, obj: &Bound<'_, PyAny>, depth: u32) -> PyResult<YamlNode> {
+    fn lower(&mut self, obj: &Bound<'_, PyAny>, depth: u32, in_flow: bool) -> PyResult<YamlNode> {
         // Grow the native stack on demand so a deeply nested object (bounded by
         // `MAX_REPRESENT_DEPTH`) cannot overflow a small thread stack. See
         // [`crate::stack`].
-        crate::stack::guard(|| self.lower_inner(obj, depth))
+        crate::stack::guard(|| self.lower_inner(obj, depth, in_flow))
     }
 
-    fn lower_inner(&mut self, obj: &Bound<'_, PyAny>, depth: u32) -> PyResult<YamlNode> {
+    fn lower_inner(
+        &mut self,
+        obj: &Bound<'_, PyAny>,
+        depth: u32,
+        in_flow: bool,
+    ) -> PyResult<YamlNode> {
         if depth >= MAX_REPRESENT_DEPTH {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "object is too deeply nested to serialize (possible self-reference)",
             ));
         }
 
-        // Only real containers (dict/list/tuple) are aliasable; scalars are never
-        // shared the way PyYAML aliases (it ignores str/int/float/bool/None), and
-        // interning would make their `id()` collide spuriously. A container seen
-        // before becomes an alias; otherwise mark it before recursing so a cycle
-        // (a container holding itself) resolves to an alias instead of looping.
-        let container = is_container(obj);
+        // A non-scalar object (matching PyYAML's `ignore_aliases`) is aliasable: a
+        // repeat becomes an alias, and a first occurrence is marked before its
+        // children are lowered so a cycle resolves to an alias instead of looping.
+        let aliasable = is_aliasable(obj);
         let id = obj.as_ptr() as usize;
-        if container {
+        if aliasable {
             if self.seen.contains(&id) {
                 self.aliased.insert(id);
                 return Ok(synthetic(
@@ -210,8 +222,8 @@ impl Lower<'_, '_, '_> {
             self.seen.insert(id);
         }
 
-        let mut node = self.build_node(obj, depth)?;
-        if container {
+        let mut node = self.render(obj, depth, in_flow)?;
+        if aliasable {
             // Stamp the raw id; `name_anchors` later turns it into a real anchor
             // name or strips it if this object was never aliased.
             node.anchor = Some(id.to_string());
@@ -219,57 +231,102 @@ impl Lower<'_, '_, '_> {
         Ok(node)
     }
 
-    /// Build the node for `obj` (representer result, or the built-in rendering
-    /// when the host defers), without the shared-object bookkeeping.
-    fn build_node(&mut self, obj: &Bound<'_, PyAny>, depth: u32) -> PyResult<YamlNode> {
+    /// The node for `obj`: the representer's result, or the built-in rendering
+    /// when the host defers. Alias bookkeeping is the caller's ([`lower_inner`]).
+    fn render(&mut self, obj: &Bound<'_, PyAny>, depth: u32, in_flow: bool) -> PyResult<YamlNode> {
         let described = self.represent.call1((obj,))?;
         if !described.is_none() {
-            return self.descriptor_to_node(&described, depth);
+            return self.descriptor_to_node(&described, depth, in_flow);
         }
+        self.deferred_node(obj, depth, in_flow)
+    }
 
-        // Deferred: recurse into containers so nested values still reach
-        // `represent`; a leaf goes through the full `dumps` pipeline below.
+    /// Built-in rendering for a value the host deferred on. A compound value
+    /// decomposes into child objects that recurse back through `represent` (so
+    /// every value is offered to the callback); a scalar leaf goes through the
+    /// shared `python_to_value` pipeline so datetime/Decimal/... and the
+    /// numeric/string formatting match a plain `dumps` byte-for-byte.
+    fn deferred_node(
+        &mut self,
+        obj: &Bound<'_, PyAny>,
+        depth: u32,
+        in_flow: bool,
+    ) -> PyResult<YamlNode> {
         if let Ok(dict) = obj.cast::<PyDict>() {
             // Snapshot before recursing: `represent` runs arbitrary Python that
             // could mutate the dict mid-walk (which `PyDict_Next` forbids).
-            let snapshot: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
-            let ordered = self.sorted_pairs(snapshot)?;
-            let mut pairs = Vec::with_capacity(ordered.len());
-            for (k, v) in &ordered {
-                pairs.push((self.lower(k, depth + 1)?, self.lower(v, depth + 1)?));
-            }
-            return Ok(synthetic(
-                YamlNodeKind::Mapping(pairs),
-                NodeStyle::Block,
-                None,
-            ));
+            let entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+            return self.mapping_node(entries, depth, None, None, in_flow);
         }
         if let Ok(list) = obj.cast::<PyList>() {
-            let snapshot: Vec<Bound<'_, PyAny>> = list.iter().collect();
-            let items = self.lower_all(&snapshot, depth)?;
-            return Ok(synthetic(
-                YamlNodeKind::Sequence(items),
-                NodeStyle::Block,
-                None,
-            ));
+            return self.sequence_node(list.iter().collect(), depth, None, None, in_flow);
         }
         if let Ok(tuple) = obj.cast::<PyTuple>() {
-            let snapshot: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
-            let items = self.lower_all(&snapshot, depth)?;
-            return Ok(synthetic(
-                YamlNodeKind::Sequence(items),
-                NodeStyle::Block,
-                None,
-            ));
+            return self.sequence_node(tuple.iter().collect(), depth, None, None, in_flow);
         }
-
-        // A deferred non-container leaf. Run it through the same encode pipeline a
-        // plain `dumps` uses (`default`, `serializers`, datetime/dataclass/numpy
-        // auto-serialization), then bridge the resulting `Value` to a node. This
-        // is what makes deferred values render byte-for-byte like a plain `dumps`
-        // and `represent` compose with `default`/`serializers`.
-        let value = python_to_value(self.py, obj, self.encode)?;
-        Ok(self.value_to_node(value))
+        if let Ok(set) = obj.cast::<PySet>() {
+            return self.sequence_node(set.iter().collect(), depth, None, None, in_flow);
+        }
+        if let Ok(set) = obj.cast::<PyFrozenSet>() {
+            return self.sequence_node(set.iter().collect(), depth, None, None, in_flow);
+        }
+        // A load-side custom-tagged value (`OPT_PASSTHROUGH_TAG` output).
+        if let Ok(tag_obj) = obj.cast::<YAMLRocksTag>() {
+            let (tag, inner) = {
+                let borrowed = tag_obj.borrow();
+                (borrowed.tag.clone(), borrowed.value.clone_ref(self.py))
+            };
+            return self.tagged_node(tag, inner.bind(self.py), depth, in_flow);
+        }
+        // A `serializers` entry for this exact type: a custom `!tag value`.
+        if let Some(registry) = self.encode.tags {
+            if let Some(func) = registry.bind(self.py).get_item(obj.get_type())? {
+                let result = func.call1((obj,))?;
+                return self.serializer_result_node(&result, depth, in_flow);
+            }
+        }
+        // Enum: its value, re-dispatched (no separate node, so no extra anchor).
+        if is_enum(obj)? {
+            return self.render(&obj.getattr("value")?, depth, in_flow);
+        }
+        // Dataclass instance: a mapping of its fields.
+        if !self.encode.passthrough_dataclass
+            && obj.hasattr("__dataclass_fields__")?
+            && !obj.is_instance_of::<PyType>()
+        {
+            let fields = obj.getattr("__dataclass_fields__")?;
+            let mut entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = Vec::new();
+            for name in fields.try_iter()? {
+                let name = name?;
+                let value = obj.getattr(name.cast::<PyString>()?.to_str()?)?;
+                entries.push((name, value));
+            }
+            return self.mapping_node(entries, depth, None, None, in_flow);
+        }
+        // numpy array/scalar (opt-in): re-dispatch its list/scalar form.
+        if self.encode.serialize_numpy {
+            if let Some(child) = numpy_child(self.py, obj)? {
+                return self.render(&child, depth, in_flow);
+            }
+        }
+        // A scalar leaf (str/int/float/bool/None/datetime/Decimal/UUID/Path/...).
+        // Render it through the shared pipeline with `default` disabled, so a
+        // value `default` handles is caught below and its result re-dispatched
+        // (its children reach `represent`) rather than expanded opaquely here.
+        let no_default = EncodeCtx {
+            default: None,
+            ..self.encode
+        };
+        match python_to_value(self.py, obj, no_default) {
+            Ok(value) => Ok(self.value_to_node(value, in_flow)),
+            Err(err) => match self.encode.default {
+                Some(default) => {
+                    let result = default.call1(self.py, (obj,))?;
+                    self.render(result.bind(self.py), depth, in_flow)
+                }
+                None => Err(err),
+            },
+        }
     }
 
     /// Turn a `represent` return value (a `Scalar`/`Sequence`/`Mapping`) into a
@@ -278,6 +335,7 @@ impl Lower<'_, '_, '_> {
         &mut self,
         described: &Bound<'_, PyAny>,
         depth: u32,
+        in_flow: bool,
     ) -> PyResult<YamlNode> {
         if let Ok(scalar) = described.cast::<YAMLRocksScalar>() {
             let scalar = scalar.borrow();
@@ -287,24 +345,20 @@ impl Lower<'_, '_, '_> {
                 scalar.tag.as_deref(),
                 self.double_quotes,
                 self.schema,
-            );
+                in_flow,
+            )?;
             // A scalar carries no children, so its span end stays at the start.
             node.end_offset = node.span.offset;
             return Ok(node);
         }
         if let Ok(seq) = described.cast::<YAMLRocksSequence>() {
             let seq = seq.borrow();
-            let snapshot: Vec<Bound<'_, PyAny>> = seq
+            let items: Vec<Bound<'_, PyAny>> = seq
                 .items
                 .bind(self.py)
                 .try_iter()?
                 .collect::<PyResult<_>>()?;
-            let items = self.lower_all(&snapshot, depth)?;
-            return Ok(synthetic(
-                YamlNodeKind::Sequence(items),
-                flow_style(seq.flow),
-                seq.tag.clone(),
-            ));
+            return self.sequence_node(items, depth, seq.tag.clone(), seq.flow, in_flow);
         }
         if let Ok(map) = described.cast::<YAMLRocksMapping>() {
             let map = map.borrow();
@@ -313,16 +367,7 @@ impl Lower<'_, '_, '_> {
                 let pair = pair?;
                 entries.push((pair.get_item(0)?, pair.get_item(1)?));
             }
-            let ordered = self.sorted_pairs(entries)?;
-            let mut pairs = Vec::with_capacity(ordered.len());
-            for (key, val) in &ordered {
-                pairs.push((self.lower(key, depth + 1)?, self.lower(val, depth + 1)?));
-            }
-            return Ok(synthetic(
-                YamlNodeKind::Mapping(pairs),
-                flow_style(map.flow),
-                map.tag.clone(),
-            ));
+            return self.mapping_node(entries, depth, map.tag.clone(), map.flow, in_flow);
         }
         Err(pyo3::exceptions::PyTypeError::new_err(
             "a represent callback must return a yamlrocks.YAMLRocksScalar, \
@@ -330,52 +375,146 @@ impl Lower<'_, '_, '_> {
         ))
     }
 
-    /// Lower a snapshot of child objects, each through `represent`.
-    fn lower_all(&mut self, items: &[Bound<'_, PyAny>], depth: u32) -> PyResult<Vec<YamlNode>> {
-        items
-            .iter()
-            .map(|item| self.lower(item, depth + 1))
-            .collect()
+    /// Build a mapping node from Python `(key, value)` pairs, sorting keys when
+    /// requested and lowering each key and value (so they reach `represent`).
+    fn mapping_node(
+        &mut self,
+        entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)>,
+        depth: u32,
+        tag: Option<String>,
+        flow: Option<bool>,
+        in_flow: bool,
+    ) -> PyResult<YamlNode> {
+        if let Some(tag) = &tag {
+            validate_tag(tag)?;
+        }
+        let flow = self.flowing(flow, in_flow);
+        let ordered = self.sorted_pairs(entries);
+        let mut pairs = Vec::with_capacity(ordered.len());
+        for (key, val) in &ordered {
+            pairs.push((
+                self.lower(key, depth + 1, flow)?,
+                self.lower(val, depth + 1, flow)?,
+            ));
+        }
+        Ok(synthetic(
+            YamlNodeKind::Mapping(pairs),
+            node_style(flow),
+            tag,
+        ))
+    }
+
+    /// Build a sequence node from Python items, lowering each (so they reach
+    /// `represent`).
+    fn sequence_node(
+        &mut self,
+        items: Vec<Bound<'_, PyAny>>,
+        depth: u32,
+        tag: Option<String>,
+        flow: Option<bool>,
+        in_flow: bool,
+    ) -> PyResult<YamlNode> {
+        if let Some(tag) = &tag {
+            validate_tag(tag)?;
+        }
+        let flow = self.flowing(flow, in_flow);
+        let mut out = Vec::with_capacity(items.len());
+        for item in &items {
+            out.push(self.lower(item, depth + 1, flow)?);
+        }
+        Ok(synthetic(
+            YamlNodeKind::Sequence(out),
+            node_style(flow),
+            tag,
+        ))
+    }
+
+    /// A tagged node: lower `inner` (its children still reach `represent`) and
+    /// attach the validated tag.
+    fn tagged_node(
+        &mut self,
+        tag: String,
+        inner: &Bound<'_, PyAny>,
+        depth: u32,
+        in_flow: bool,
+    ) -> PyResult<YamlNode> {
+        validate_tag(&tag)?;
+        let mut node = self.render(inner, depth, in_flow)?;
+        node.tag = Some(tag);
+        Ok(node)
+    }
+
+    /// Interpret a `serializers` callback result: a `YAMLRocksTag` or a
+    /// `(tag, value)` tuple, both producing a tagged node.
+    fn serializer_result_node(
+        &mut self,
+        result: &Bound<'_, PyAny>,
+        depth: u32,
+        in_flow: bool,
+    ) -> PyResult<YamlNode> {
+        if let Ok(tag_obj) = result.cast::<YAMLRocksTag>() {
+            let (tag, inner) = {
+                let borrowed = tag_obj.borrow();
+                (borrowed.tag.clone(), borrowed.value.clone_ref(self.py))
+            };
+            return self.tagged_node(tag, inner.bind(self.py), depth, in_flow);
+        }
+        if let Ok(tuple) = result.cast::<PyTuple>() {
+            if tuple.len() == 2 {
+                let tag: String = tuple.get_item(0)?.extract()?;
+                let value = tuple.get_item(1)?;
+                return self.tagged_node(tag, &value, depth, in_flow);
+            }
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(
+            "a serializers callback must return a yamlrocks.YAMLRocksTag or a (tag, value) tuple",
+        ))
+    }
+
+    /// Whether a collection emits in flow style: forced when already inside a flow
+    /// collection (a block child would be invalid there), else the descriptor's
+    /// explicit `flow=`, else the document-wide `OPT_FLOW_STYLE` default.
+    fn flowing(&self, flow: Option<bool>, in_flow: bool) -> bool {
+        in_flow || flow.unwrap_or(self.flow_all)
     }
 
     /// Order a mapping's `(key, value)` pairs for emission. With `sort_keys` set,
-    /// sort by the key resolved through the encode pipeline and the fast path's
-    /// key comparator, so the represent path orders keys identically to a plain
-    /// `dumps` (numbers numerically, not lexically). Sorting happens here, before
-    /// the values are lowered, so anchor detection follows the final emission
-    /// order (sorting after would risk emitting an alias before its anchor). A key
-    /// the pipeline cannot resolve keeps its input position (a stable no-op).
+    /// sort by a key derived directly from the Python key object (by type and
+    /// value), matching the fast path's `compare_keys`: null, then booleans, then
+    /// numbers numerically, then strings lexically, then everything else in input
+    /// order. Deriving the sort key straight from the object (not through
+    /// `python_to_value`) means `default`/`serializers` are not run an extra time
+    /// on a custom key. Sorting happens here, before the values are lowered, so
+    /// anchor detection follows the final emission order (sorting after would risk
+    /// emitting an alias before its anchor).
     fn sorted_pairs<'a>(
         &self,
         pairs: Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)>,
-    ) -> PyResult<Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)>> {
+    ) -> Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)> {
         if !self.sort_keys {
-            return Ok(pairs);
+            return pairs;
         }
-        let mut keyed: Vec<(Option<Value<'static>>, Bound<'a, PyAny>, Bound<'a, PyAny>)> = pairs
+        let mut keyed: Vec<(SortKey, Bound<'a, PyAny>, Bound<'a, PyAny>)> = pairs
             .into_iter()
-            .map(|(k, v)| {
-                let key = python_to_value(self.py, &k, self.encode).ok();
-                (key, k, v)
-            })
+            .enumerate()
+            .map(|(i, (k, v))| (SortKey::of(&k, i), k, v))
             .collect();
-        keyed.sort_by(|(a, _, _), (b, _, _)| match (a, b) {
-            (Some(a), Some(b)) => crate::encode::compare_keys(a, b),
-            _ => std::cmp::Ordering::Equal,
-        });
-        Ok(keyed.into_iter().map(|(_, k, v)| (k, v)).collect())
+        keyed.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
+        keyed.into_iter().map(|(_, k, v)| (k, v)).collect()
     }
 
-    /// Bridge a fast-path [`Value`] (from the deferred-leaf pipeline) into a
+    /// Bridge a fast-path [`Value`] (from the deferred scalar-leaf pipeline) into a
     /// synthetic node, choosing the same styles the fast encoder would so the
-    /// round-trip emitter reproduces its bytes.
-    fn value_to_node(&self, value: Value<'_>) -> YamlNode {
+    /// round-trip emitter reproduces its bytes. `in_flow` forces a block scalar
+    /// (`literal`/`folded`) to a quoted style, since a block scalar is invalid
+    /// inside a flow collection.
+    fn value_to_node(&self, value: Value<'_>, in_flow: bool) -> YamlNode {
         // Grow the native stack on demand: the `Value` tree is bounded by the
         // encoder's depth guard, but the walk still recurses per level.
-        crate::stack::guard(|| self.value_to_node_inner(value))
+        crate::stack::guard(|| self.value_to_node_inner(value, in_flow))
     }
 
-    fn value_to_node_inner(&self, value: Value<'_>) -> YamlNode {
+    fn value_to_node_inner(&self, value: Value<'_>, in_flow: bool) -> YamlNode {
         use crate::decode::Value as V;
         match value {
             V::Null => synthetic(YamlNodeKind::Null, NodeStyle::Block, None),
@@ -384,7 +523,10 @@ impl Lower<'_, '_, '_> {
             V::BigInt(s) => scalar_plain(&s),
             V::Float(f) => scalar_plain(&crate::emit_util::canonical_float(f)),
             V::String(s) => {
-                let style = auto_string_style(&s, self.double_quotes, self.schema);
+                let style = flow_safe_style(
+                    auto_string_style(&s, self.double_quotes, self.schema),
+                    in_flow,
+                );
                 synthetic(
                     YamlNodeKind::Scalar(s.into_owned(), style),
                     NodeStyle::Block,
@@ -393,18 +535,26 @@ impl Lower<'_, '_, '_> {
             }
             V::Timestamp(ts) => scalar_plain(&ts.to_iso()),
             V::Sequence(items) => {
-                let items = items.into_iter().map(|v| self.value_to_node(v)).collect();
+                let items = items
+                    .into_iter()
+                    .map(|v| self.value_to_node(v, in_flow))
+                    .collect();
                 synthetic(YamlNodeKind::Sequence(items), NodeStyle::Block, None)
             }
             V::Mapping(pairs) => {
                 let pairs = pairs
                     .into_iter()
-                    .map(|(k, v)| (self.value_to_node(k), self.value_to_node(v)))
+                    .map(|(k, v)| {
+                        (
+                            self.value_to_node(k, in_flow),
+                            self.value_to_node(v, in_flow),
+                        )
+                    })
                     .collect();
                 synthetic(YamlNodeKind::Mapping(pairs), NodeStyle::Block, None)
             }
             V::Tagged(tag, inner) => {
-                let mut node = self.value_to_node(*inner);
+                let mut node = self.value_to_node(*inner, in_flow);
                 node.tag = Some(tag);
                 node
             }
@@ -412,16 +562,83 @@ impl Lower<'_, '_, '_> {
     }
 }
 
-/// Whether `obj` is a container PyYAML would consider for aliasing (a mapping or
-/// sequence); scalars and everything else are never aliased.
-fn is_container(obj: &Bound<'_, PyAny>) -> bool {
-    obj.is_instance_of::<PyDict>()
-        || obj.is_instance_of::<PyList>()
-        || obj.is_instance_of::<PyTuple>()
+/// Whether `obj` is aliasable: shared occurrences should emit an anchor and
+/// alias rather than duplicate. Mirrors PyYAML's `ignore_aliases`, which never
+/// aliases `None`, `bool`, `int`, `float`, `str`, or `bytes` (interned/immutable
+/// scalars whose `id()` would collide spuriously), and aliases everything else,
+/// so a shared mapping/sequence/set or a custom object represented as one is
+/// deduped, and a cycle through any of them resolves to an alias.
+fn is_aliasable(obj: &Bound<'_, PyAny>) -> bool {
+    !(obj.is_none()
+        || obj.is_instance_of::<PyBool>()
+        || obj.is_instance_of::<PyInt>()
+        || obj.is_instance_of::<PyFloat>()
+        || obj.is_instance_of::<PyString>()
+        || obj.is_instance_of::<PyBytes>())
 }
 
-/// Replace the raw `id()` markers left on container nodes with real anchor names.
-/// A container that turned up more than once (in `aliased`) gets a sequential
+/// A total-ordered sort key for a mapping key under `sort_keys`, derived directly
+/// from the Python key object. Mirrors the fast path's `compare_keys` ranking
+/// (null, bool, number, string, then everything else) so the represent path sorts
+/// identically to a plain `dumps`. A key that is not a plain scalar falls into
+/// `Other`, tie-broken by input index to stay a stable no-op with a total order.
+#[derive(PartialEq)]
+enum SortKey {
+    Null,
+    Bool(bool),
+    Num(f64),
+    Str(String),
+    Other(usize),
+}
+
+impl SortKey {
+    fn of(obj: &Bound<'_, PyAny>, index: usize) -> Self {
+        if obj.is_none() {
+            return SortKey::Null;
+        }
+        // `bool` is an `int` subclass, so test it first.
+        if let Ok(b) = obj.cast::<PyBool>() {
+            return SortKey::Bool(b.is_true());
+        }
+        if obj.is_instance_of::<PyInt>() || obj.is_instance_of::<PyFloat>() {
+            if let Ok(f) = obj.extract::<f64>() {
+                return SortKey::Num(f);
+            }
+        }
+        if let Ok(s) = obj.cast::<PyString>() {
+            if let Ok(text) = s.to_str() {
+                return SortKey::Str(text.to_owned());
+            }
+        }
+        SortKey::Other(index)
+    }
+
+    fn rank(&self) -> u8 {
+        match self {
+            SortKey::Null => 0,
+            SortKey::Bool(_) => 1,
+            SortKey::Num(_) => 2,
+            SortKey::Str(_) => 3,
+            SortKey::Other(_) => 4,
+        }
+    }
+
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        self.rank()
+            .cmp(&other.rank())
+            .then_with(|| match (self, other) {
+                (SortKey::Bool(a), SortKey::Bool(b)) => a.cmp(b),
+                (SortKey::Num(a), SortKey::Num(b)) => a.total_cmp(b),
+                (SortKey::Str(a), SortKey::Str(b)) => a.cmp(b),
+                (SortKey::Other(a), SortKey::Other(b)) => a.cmp(b),
+                _ => Ordering::Equal,
+            })
+    }
+}
+
+/// Replace the raw `id()` markers left on aliasable nodes with real anchor names.
+/// An object that turned up more than once (in `aliased`) gets a sequential
 /// `id001`-style name shared by its anchor and every alias; one that never
 /// repeated has its marker stripped. Pre-order, so an anchor is named before the
 /// aliases that reference it.
@@ -498,18 +715,28 @@ fn synthetic(kind: YamlNodeKind, style: NodeStyle, tag: Option<String>) -> YamlN
     node
 }
 
-/// A `flow=True` override maps to flow layout; `False` and the unset default map
-/// to block, the dominant configuration style.
-fn flow_style(flow: Option<bool>) -> NodeStyle {
-    if flow == Some(true) {
+/// Block or flow layout for a collection node.
+fn node_style(flow: bool) -> NodeStyle {
+    if flow {
         NodeStyle::Flow
     } else {
         NodeStyle::Block
     }
 }
 
+/// Downgrade a block scalar style (`literal`/`folded`) to double-quoted when the
+/// scalar sits inside a flow collection, where a block scalar is invalid.
+fn flow_safe_style(style: ScalarStyle, in_flow: bool) -> ScalarStyle {
+    if in_flow && matches!(style, ScalarStyle::Literal | ScalarStyle::Folded) {
+        ScalarStyle::DoubleQuoted
+    } else {
+        style
+    }
+}
+
 /// Build a scalar node from a descriptor's value, style, and tag, applying
-/// PyYAML-faithful auto styling when the style is unset.
+/// PyYAML-faithful auto styling when the style is unset. Any provided tag is
+/// validated with the emit-side tag rules.
 ///
 /// An explicit style is honored verbatim, tag kept. For `auto` we mirror
 /// PyYAML's rule so a host's representers port without hand-annotating styles:
@@ -525,33 +752,44 @@ fn flow_style(flow: Option<bool>) -> NodeStyle {
 ///   keep the tag and force quotes, because a plain form would resolve to a
 ///   different tag and lose it. This is why `!extend my_id` emits as
 ///   `!extend 'my_id'`.
+///
+/// A block scalar style inside a flow collection is downgraded to a quoted style
+/// (`in_flow`), since block scalars are invalid there.
 fn scalar_node(
     value: String,
     style: Option<ScalarStyle>,
     tag: Option<&str>,
     double_quotes: bool,
     schema: Schema,
-) -> YamlNode {
+    in_flow: bool,
+) -> PyResult<YamlNode> {
+    if let Some(tag) = tag {
+        validate_tag(tag)?;
+    }
     if let Some(style) = style {
-        return synthetic(
-            YamlNodeKind::Scalar(value, style),
+        return Ok(synthetic(
+            YamlNodeKind::Scalar(value, flow_safe_style(style, in_flow)),
             NodeStyle::Block,
             tag.map(str::to_owned),
-        );
+        ));
     }
     let Some(tag) = tag else {
-        let style = auto_string_style(&value, double_quotes, schema);
-        return synthetic(YamlNodeKind::Scalar(value, style), NodeStyle::Block, None);
+        let style = flow_safe_style(auto_string_style(&value, double_quotes, schema), in_flow);
+        return Ok(synthetic(
+            YamlNodeKind::Scalar(value, style),
+            NodeStyle::Block,
+            None,
+        ));
     };
     let plain_kind = schema.classify(&value, ScalarStyle::Plain, None);
-    match standard_tag_kind(tag) {
+    let node = match standard_tag_kind(tag) {
         // The plain value already resolves to the tag's type: the tag is
         // redundant, so drop it. A string still runs through the quoting rule
         // (a plain `[x]` would be unsafe); a bool/int/float/null token is
         // inherently plain-safe (`true`, `1.0e17`), so emit it plain.
         Some(std) if kind_matches(plain_kind, std) => {
             let style = if matches!(std, StdKind::Str) {
-                auto_string_style(&value, double_quotes, schema)
+                flow_safe_style(auto_string_style(&value, double_quotes, schema), in_flow)
             } else {
                 ScalarStyle::Plain
             };
@@ -571,7 +809,8 @@ fn scalar_node(
             NodeStyle::Block,
             Some(tag.to_owned()),
         ),
-    }
+    };
+    Ok(node)
 }
 
 /// A YAML standard scalar type, recognized in both `!!x` and full

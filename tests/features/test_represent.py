@@ -241,3 +241,127 @@ def test_bad_represent_return_raises():
 def test_represent_does_not_change_plain_dumps():
     """Omitting ``represent`` leaves ``dumps`` on its fast path, unchanged."""
     assert yamlrocks.dumps({"a": [1, 2], "b": "x"}) == b"a:\n  - 1\n  - 2\nb: x\n"
+
+
+def test_every_value_reaches_represent_through_compounds():
+    """Descendants of a deferred compound (dataclass, set) still reach
+    ``represent``, so a callback that restyles nested values is not silently
+    skipped inside those shapes."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class Point:
+        x: int
+        y: int
+
+    seen: list[object] = []
+
+    def rep(value):
+        seen.append(value)
+        return None
+
+    yamlrocks.dumps({"p": Point(1, 2), "s": {7}}, represent=rep)
+    assert 1 in seen and 2 in seen  # dataclass field values
+    assert 7 in seen  # set element
+
+
+@pytest.mark.parametrize(
+    "doc_factory",
+    [
+        lambda: {"s": {1, 2, 3}},
+        lambda: {"fs": frozenset({1})},
+    ],
+)
+def test_deferred_compounds_match_plain_dumps(doc_factory):
+    """Deferred sets/frozensets render byte-for-byte like a plain ``dumps``."""
+    doc = doc_factory()
+    assert yamlrocks.dumps(doc, represent=lambda v: None) == yamlrocks.dumps(doc)
+
+
+def test_shared_custom_object_aliases():
+    """A custom object the host represents as a mapping is deduped with an anchor
+    and alias when it appears more than once, not duplicated."""
+
+    class Box:
+        def __init__(self, value):
+            self.value = value
+
+    box = Box(1)
+
+    def rep(value):
+        if isinstance(value, Box):
+            return yamlrocks.YAMLRocksMapping([("value", value.value)])
+        return None
+
+    out = yamlrocks.dumps({"a": box, "b": box}, represent=rep)
+    assert out == b"a: &id001\n  value: 1\nb: *id001\n"
+
+
+def test_cycle_through_custom_object_resolves_to_alias():
+    """A reference cycle through a custom (represented) object resolves to an
+    alias instead of hitting the depth limit."""
+
+    class Node:
+        def __init__(self):
+            self.next = None
+
+    node = Node()
+    node.next = node
+
+    def rep(value):
+        if isinstance(value, Node):
+            pairs = [("next", value.next)] if value.next is not None else []
+            return yamlrocks.YAMLRocksMapping(pairs)
+        return None
+
+    assert yamlrocks.dumps(node, represent=rep) == b"&id001\nnext: *id001\n"
+
+
+def test_flow_sequence_downgrades_block_scalar_child():
+    """A block scalar inside a flow collection is invalid YAML, so a
+    ``style="literal"`` child of a ``flow=True`` sequence is downgraded to a
+    quoted scalar rather than emitted as a block."""
+
+    def rep(value):
+        if isinstance(value, list):
+            return yamlrocks.YAMLRocksSequence(value, flow=True)
+        if value == "x":
+            return yamlrocks.YAMLRocksScalar(value, style="literal")
+        return None
+
+    out = yamlrocks.dumps(["x"], represent=rep)
+    assert out == b'["x"]\n'
+    # And it reloads to the same value.
+    assert yamlrocks.loads(out) == ["x"]
+
+
+def test_descriptor_tag_is_validated():
+    """A descriptor tag is checked with the emit-side tag rules, so a malformed
+    tag raises rather than corrupting the output."""
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError):
+        yamlrocks.dumps(
+            {"k": "v"},
+            represent=lambda v: (
+                yamlrocks.YAMLRocksScalar(v, tag="bad tag") if v == "v" else None
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        None,
+        "OPT_EXPLICIT_START",
+        "OPT_EXPLICIT_END",
+        "OPT_FLOW_STYLE",
+        "OPT_SORT_KEYS",
+    ],
+)
+def test_emit_options_compose_with_represent(option):
+    """Deferring on everything under an emit option matches a plain `dumps` with
+    that option: `represent` composes with the emit-shaping flags."""
+    doc = {"b": [1, 2], "a": 3}
+    opt = 0 if option is None else getattr(yamlrocks, option)
+    assert yamlrocks.dumps(
+        doc, option=opt, represent=lambda v: None
+    ) == yamlrocks.dumps(doc, option=opt)

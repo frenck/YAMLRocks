@@ -186,7 +186,7 @@ fn python_to_value_inner(
 /// reload as the tag `!foo` on a (broken) value `,bar v`. A verbatim tag
 /// (`!<...>`) is delimited by its closing `>` and may carry such characters
 /// (URI commas), so it is exempt from the flow-indicator check but must close.
-fn validate_tag(tag: &str) -> PyResult<()> {
+pub(crate) fn validate_tag(tag: &str) -> PyResult<()> {
     if tag.is_empty() || !tag.starts_with('!') {
         return Err(errors::encode_error(format!(
             "invalid tag {tag:?}: a tag must start with '!'"
@@ -516,10 +516,41 @@ fn decimal_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<V
 }
 
 /// Whether `obj` is an `enum.Enum` instance (detected via its metaclass).
-fn is_enum(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub(crate) fn is_enum(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
     let metaclass = obj.get_type().get_type();
     let name = metaclass.name()?.to_string();
     Ok(name == "EnumType" || name == "EnumMeta")
+}
+
+/// The child object a numpy value decomposes to: an array's `tolist()` (a nested
+/// list) or a scalar's `item()` (a Python scalar), or `None` when `obj` is not a
+/// genuine numpy object (checked with `isinstance` against numpy's exported
+/// `ndarray`/`generic`, so a look-alike from another module is not caught). The
+/// represent path re-dispatches this child so its elements still reach the
+/// callback, where the fast path would convert it straight to a `Value`.
+pub(crate) fn numpy_child<'py>(
+    py: Python<'py>,
+    obj: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let types = NUMPY_TYPES.get_or_init(|| {
+        let numpy = py.import("numpy").ok()?;
+        let ndarray = numpy.getattr("ndarray").ok()?.unbind();
+        let generic = numpy.getattr("generic").ok()?.unbind();
+        Some((ndarray, generic))
+    });
+    let Some((ndarray, generic)) = types else {
+        return Ok(None);
+    };
+    if !(obj.is_instance(ndarray.bind(py))? || obj.is_instance(generic.bind(py))?) {
+        return Ok(None);
+    }
+    if let Ok(list) = obj.call_method0("tolist") {
+        return Ok(Some(list));
+    }
+    if let Ok(item) = obj.call_method0("item") {
+        return Ok(Some(item));
+    }
+    Ok(None)
 }
 
 /// Cached `numpy.ndarray` / `numpy.generic` types, resolved once. `None` means

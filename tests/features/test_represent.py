@@ -562,6 +562,16 @@ def test_integers_beyond_i64_tie_like_plain_dumps():
     ) == yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
 
 
+def test_integer_keys_past_f64_range_still_sort_numeric():
+    """An integer key past `f64`'s range keeps the numeric rank (ahead of string
+    keys) instead of overflowing to the 'other' rank, and two that saturate to
+    the same infinity keep insertion order, matching plain `dumps`."""
+    doc = {10**400: "a", "z": "b", 10**400 + 1: "c"}
+    assert yamlrocks.dumps(
+        doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda v: None
+    ) == yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
+
+
 def test_large_integer_keys_sort_exactly():
     """Integer keys keep their exact value when sorting, so two large `i64`s do
     not collide (as they would if coerced to `f64`), matching plain `dumps`."""

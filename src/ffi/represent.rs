@@ -703,9 +703,20 @@ impl SortKey {
             // round to the same `f64` tie and keep insertion order).
             return match obj.extract::<i64>() {
                 Ok(i) => SortKey::Int(i),
-                Err(_) => obj
-                    .extract::<f64>()
-                    .map_or(SortKey::Other(index), SortKey::Float),
+                // Beyond `i64`, compare as `f64` like `compare_keys` does for a
+                // `BigInt`. Parse the decimal repr rather than `extract::<f64>()`:
+                // a value past `f64`'s range makes `extract` raise `OverflowError`
+                // (which would drop the key to `Other`, ranked after strings),
+                // whereas parsing yields `±inf`, keeping the key numeric (rank 2)
+                // and tying on insertion order, exactly as the fast path.
+                Err(_) => {
+                    let f = obj
+                        .str()
+                        .ok()
+                        .and_then(|s| s.to_string().parse::<f64>().ok())
+                        .unwrap_or(f64::NAN);
+                    SortKey::Float(f)
+                }
             };
         }
         if obj.is_instance_of::<PyFloat>() {

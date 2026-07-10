@@ -232,27 +232,41 @@ impl Lower<'_, '_, '_> {
             self.retained.push(obj.clone().unbind());
         }
 
-        let node = self.render(obj, depth, in_flow)?;
+        let mut node = self.render(obj, depth, in_flow)?;
         if !aliasable {
             return Ok(node);
         }
+        // Decide the anchor. `render` either materializes a *new* node for this
+        // object (a container/scalar it built, with no anchor yet) or delegates
+        // transparently to a child (enum value, numpy, a `default`/serializer
+        // result), returning the child's node, which already carries the child's
+        // anchor or is an alias. Only the former is anchored on this object; the
+        // latter must keep the child's identity, and this object is untracked so
+        // a later occurrence re-dispatches rather than aliasing an id no node
+        // defines.
         match &node.kind {
-            // A transparent re-dispatch (an enum value, a numpy value, or a
-            // `default`/serializer result) resolved back to this very object, so
-            // the value is defined only in terms of itself with no node to
-            // anchor. An anchored alias is malformed YAML; raise instead.
+            // Delegated back to this very object: the value is defined only in
+            // terms of itself, with no node to anchor. Raise rather than emit a
+            // dangling or anchored alias.
             YamlNodeKind::Alias(target) if *target == id.to_string() => {
                 Err(pyo3::exceptions::PyValueError::new_err(
                     "cannot serialize a value that refers only to itself",
                 ))
             }
-            // An alias to a *different* shared object cannot carry an anchor;
-            // leave it as the alias it is.
-            YamlNodeKind::Alias(_) => Ok(node),
+            // Delegated to a child (an alias to a sibling, or a child node that
+            // already carries its own anchor): keep the child's identity.
+            YamlNodeKind::Alias(_) => {
+                self.seen.remove(&id);
+                Ok(node)
+            }
+            _ if node.anchor.is_some() => {
+                self.seen.remove(&id);
+                Ok(node)
+            }
+            // A node this object materialized itself: stamp its id, which
+            // `name_anchors` later turns into a real anchor name (or strips if it
+            // was never aliased).
             _ => {
-                // Stamp the raw id; `name_anchors` later turns it into a real
-                // anchor name or strips it if this object was never aliased.
-                let mut node = node;
                 node.anchor = Some(id.to_string());
                 Ok(node)
             }

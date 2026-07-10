@@ -433,6 +433,22 @@ def test_self_referential_serializer_raises():
         )
 
 
+def test_default_result_shared_elsewhere_anchors_correctly():
+    """When `default` returns an object that is also present directly, the shared
+    object keeps its own anchor (a transparent delegation must not overwrite it),
+    so the alias has a definition and the output reloads."""
+
+    class Custom:
+        pass
+
+    shared = [1]
+    out = yamlrocks.dumps(
+        [Custom(), shared], default=lambda o: shared, represent=lambda v: None
+    )
+    assert out == b"- &id001\n  - 1\n- *id001\n"
+    assert yamlrocks.loads(out) == [[1], [1]]
+
+
 def test_large_integer_keys_sort_exactly():
     """Integer keys keep their exact value when sorting, so two large `i64`s do
     not collide (as they would if coerced to `f64`), matching plain `dumps`."""

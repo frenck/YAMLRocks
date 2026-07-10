@@ -537,7 +537,10 @@ yamlrocks.YAMLRocksMapping(pairs, *, tag=None, flow=None)
   (`!!bool` on `true`, `!!float` on `1.0e17`) is elided; a custom tag is kept.
 - `style` is one of `"auto"`, `"plain"`, `"single"`, `"double"`, `"literal"`
   (a `|` block), or `"folded"` (a `>` block). `"auto"` lets the emitter quote as
-  needed; an explicit style is honored verbatim.
+  needed; an explicit style is honored verbatim, so it is on you to pick one the
+  value can be represented in losslessly (forcing `"plain"` on `"[x]"`, say,
+  would reload as a list). A block style inside a flow collection is downgraded
+  to a quoted style, since block scalars are invalid there.
 - `items` and `pairs` hold your **original** objects, not pre-rendered nodes.
   YAMLRocks re-dispatches each child through `represent`, so you only ever
   describe one level. Indentation, flow, `sort_keys`, and shared-object anchoring

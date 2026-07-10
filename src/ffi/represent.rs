@@ -34,6 +34,8 @@ use crate::roundtrip::ast::{NodeStyle, YamlNode, YamlNodeKind};
 use crate::roundtrip::value::assigned_string_style;
 use crate::scanner::{ScalarStyle, Span};
 
+pyo3::import_exception!(yamlrocks.exceptions, YAMLRocksUnserializableError);
+
 /// Maximum object nesting depth when lowering a `represent` tree. Mirrors the
 /// assign/encode depth guards so a deeply nested or self-referential object
 /// cannot overflow the native stack; the recursion re-enters here per level.
@@ -285,9 +287,10 @@ impl Lower<'_, '_, '_> {
                 return self.serializer_result_node(&result, depth, in_flow);
             }
         }
-        // Enum: its value, re-dispatched (no separate node, so no extra anchor).
+        // Enum: its value, re-dispatched. Through `lower` (not `render`) so the
+        // depth increments and the stack guard applies.
         if is_enum(obj)? {
-            return self.render(&obj.getattr("value")?, depth, in_flow);
+            return self.lower(&obj.getattr("value")?, depth + 1, in_flow);
         }
         // Dataclass instance: a mapping of its fields.
         if !self.encode.passthrough_dataclass
@@ -303,29 +306,36 @@ impl Lower<'_, '_, '_> {
             }
             return self.mapping_node(entries, depth, None, None, in_flow);
         }
-        // numpy array/scalar (opt-in): re-dispatch its list/scalar form.
+        // numpy array/scalar (opt-in): re-dispatch its list/scalar form through
+        // `lower` (depth-bounded, stack-guarded).
         if self.encode.serialize_numpy {
             if let Some(child) = numpy_child(self.py, obj)? {
-                return self.render(&child, depth, in_flow);
+                return self.lower(&child, depth + 1, in_flow);
             }
         }
         // A scalar leaf (str/int/float/bool/None/datetime/Decimal/UUID/Path/...).
-        // Render it through the shared pipeline with `default` disabled, so a
-        // value `default` handles is caught below and its result re-dispatched
-        // (its children reach `represent`) rather than expanded opaquely here.
+        // Render it through the shared pipeline with `default` disabled.
         let no_default = EncodeCtx {
             default: None,
             ..self.encode
         };
         match python_to_value(self.py, obj, no_default) {
             Ok(value) => Ok(self.value_to_node(value, in_flow)),
-            Err(err) => match self.encode.default {
-                Some(default) => {
-                    let result = default.call1(self.py, (obj,))?;
-                    self.render(result.bind(self.py), depth, in_flow)
+            // Only an *unrecognized type* falls back to `default`, matching the
+            // fast path; a genuine encode error (non-UTF-8 bytes, a lone
+            // surrogate) is propagated unchanged rather than masked by `default`.
+            // The result re-dispatches through `lower` so its children reach
+            // `represent` and a non-progressing `default` is depth-bounded.
+            Err(err) if err.is_instance_of::<YAMLRocksUnserializableError>(self.py) => {
+                match self.encode.default {
+                    Some(default) => {
+                        let result = default.call1(self.py, (obj,))?;
+                        self.lower(result.bind(self.py), depth + 1, in_flow)
+                    }
+                    None => Err(err),
                 }
-                None => Err(err),
-            },
+            }
+            Err(err) => Err(err),
         }
     }
 

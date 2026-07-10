@@ -409,9 +409,16 @@ impl RoundTripEmitter {
                 self.emit_foot(&item.comments, child);
             }
             YamlNodeKind::Sequence(s) if item.style == NodeStyle::Block && !s.is_empty() => {
-                // A compact nested sequence (`- - 1`) keeps its first item on
-                // this dash line; otherwise it breaks to the next, indented.
-                if item.comments.compact {
+                if item.anchor.is_some() || item.tag.is_some() {
+                    // An anchored/tagged nested block sequence carries its marker
+                    // on the dash line, then breaks to the indented items (the
+                    // compact `- -` form cannot hold a leading `&anchor`/tag).
+                    self.emit_anchor_tag_compact(item);
+                    self.buf.push(b'\n');
+                    self.emit_block_sequence(s, child);
+                } else if item.comments.compact {
+                    // A compact nested sequence (`- - 1`) keeps its first item on
+                    // this dash line; otherwise it breaks to the next, indented.
                     self.buf.push(b' ');
                     self.emit_block_sequence_after_dash(s, child);
                 } else {

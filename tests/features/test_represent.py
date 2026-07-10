@@ -365,3 +365,40 @@ def test_emit_options_compose_with_represent(option):
     assert yamlrocks.dumps(
         doc, option=opt, represent=lambda v: None
     ) == yamlrocks.dumps(doc, option=opt)
+
+
+def test_shared_nested_sequence_emits_anchor():
+    """A shared list nested inside a sequence emits its anchor on the dash line,
+    so the later alias has a definition (previously the anchor was dropped)."""
+    shared = [1]
+    out = yamlrocks.dumps([shared, shared], represent=lambda v: None)
+    assert out == b"- &id001\n  - 1\n- *id001\n"
+    # The anchor/alias pair reloads to a shared list.
+    back = yamlrocks.loads(out)
+    assert back == [[1], [1]]
+
+
+def test_default_only_catches_unserializable_type_not_encode_errors():
+    """`default` is a fallback for an unrecognized type only; a genuine encode
+    error (non-UTF-8 bytes) propagates instead of being masked, matching plain
+    `dumps`."""
+    doc = {"b": b"\xff\xfe"}
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError):
+        yamlrocks.dumps(doc, default=lambda o: "x", represent=lambda v: None)
+    # Same error as a plain dump.
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError):
+        yamlrocks.dumps(doc)
+
+
+def test_non_progressing_default_does_not_overflow():
+    """A `default` that returns its argument is depth-bounded (resolved as a
+    self-alias) rather than recursing into a native stack overflow."""
+
+    class Unserializable:
+        pass
+
+    obj = Unserializable()
+    # Does not crash; the self-reference resolves to an anchor/alias pair.
+    assert yamlrocks.dumps(obj, default=lambda o: o, represent=lambda v: None) == (
+        b"&id001 *id001\n"
+    )

@@ -73,6 +73,16 @@ pub struct DumpConfig {
     /// Emit an explicit `...` end marker after the document (`OPT_EXPLICIT_END`).
     /// The `---` start marker is carried on the root node's `explicit_start`.
     pub explicit_end: bool,
+    /// Spaces per nesting level for mappings and block scalars under a key
+    /// (`OPT_INDENT_2`/`OPT_INDENT_4`). Zero means "unset", read through
+    /// [`RoundTripEmitter::step`] as the default [`STEP`]. Block-sequence item
+    /// content is always two columns past the dash regardless, matching the fast
+    /// encoder.
+    pub indent: usize,
+    /// Align a block sequence under a key with the key's own column instead of
+    /// indenting it a step (`OPT_INDENTLESS_SEQUENCES`). Only consulted on the
+    /// dump path (`indent_sequences`).
+    pub indentless: bool,
 }
 
 /// Emit a single synthetic document tree with dump-shaping options applied. Used
@@ -115,6 +125,18 @@ impl RoundTripEmitter {
             dump: DumpConfig::default(),
             null_style,
             flow_depth: 0,
+        }
+    }
+
+    /// Spaces per nesting level for mappings and block scalars under a key: the
+    /// dump config's indent when set (`OPT_INDENT_2`/`_4`), else the default
+    /// [`STEP`]. Block-sequence item content is always `+2` past the dash (the
+    /// fast encoder's fixed offset) and does not go through here.
+    fn step(&self) -> usize {
+        if self.dump.indent > 0 {
+            self.dump.indent
+        } else {
+            STEP
         }
     }
 
@@ -163,7 +185,9 @@ impl RoundTripEmitter {
             }
             _ => {
                 self.emit_anchor_tag(node);
-                self.emit_inline_content(node, 0);
+                // A root block scalar's body sits one step in, matching the fast
+                // encoder's `emit_literal_block(s, step())`.
+                self.emit_inline_content(node, self.step());
                 self.emit_inline_comment(&node.comments);
                 self.end_line();
             }
@@ -245,7 +269,7 @@ impl RoundTripEmitter {
             _ => {
                 self.buf.push(b' ');
                 self.emit_anchor_tag(key);
-                self.emit_inline_content(key, indent);
+                self.emit_inline_content(key, indent + self.step());
                 self.end_line();
             }
         }
@@ -263,7 +287,7 @@ impl RoundTripEmitter {
     }
 
     fn emit_value_after_colon_inner(&mut self, val: &YamlNode, indent: usize) {
-        let child = indent + STEP;
+        let child = indent + self.step();
         if let Some(ref source) = val.source {
             self.buf.push(b' ');
             self.emit_directive(source);
@@ -294,9 +318,15 @@ impl RoundTripEmitter {
                 // instead of always indenting (which would reflow every list).
                 // On the dump path (`represent`), synthetic sequences have no
                 // source column, so indent a step under the key (the PyYAML style)
-                // instead of the flush default.
+                // instead of the flush default, unless indentless is requested
+                // (`OPT_INDENTLESS_SEQUENCES`), which aligns the dashes with the
+                // key's own column, matching the fast encoder.
                 let seq_indent = if self.dump.indent_sequences {
-                    child
+                    if self.dump.indentless {
+                        indent
+                    } else {
+                        child
+                    }
                 } else if (val.span.column as usize) <= indent {
                     indent
                 } else {
@@ -334,7 +364,9 @@ impl RoundTripEmitter {
                     self.buf.push(b' ');
                 }
                 self.emit_anchor_tag(val);
-                self.emit_inline_content(val, indent);
+                // A block-scalar value's body sits one step past the key, matching
+                // the fast encoder (`emit_literal_block(s, indent + step())`).
+                self.emit_inline_content(val, indent + self.step());
                 self.emit_inline_comment(&val.comments);
                 // Block scalars already end with their own newline(s).
                 self.end_line();
@@ -510,7 +542,7 @@ impl RoundTripEmitter {
         }
     }
 
-    fn emit_scalar(&mut self, value: &str, style: ScalarStyle, indent: usize) {
+    fn emit_scalar(&mut self, value: &str, style: ScalarStyle, body_indent: usize) {
         match style {
             // A plain scalar whose first character is U+FEFF cannot be emitted
             // verbatim: if it lands at the start of the stream, the scanner
@@ -535,14 +567,16 @@ impl RoundTripEmitter {
             ScalarStyle::Plain => self.buf.extend_from_slice(value.as_bytes()),
             ScalarStyle::SingleQuoted => crate::emit_util::push_single_quoted(&mut self.buf, value),
             ScalarStyle::DoubleQuoted => crate::emit_util::push_double_quoted(&mut self.buf, value),
-            ScalarStyle::Literal => self.emit_block_scalar(value, indent, b'|'),
-            ScalarStyle::Folded => self.emit_block_scalar(value, indent, b'>'),
+            ScalarStyle::Literal => self.emit_block_scalar(value, body_indent, b'|'),
+            ScalarStyle::Folded => self.emit_block_scalar(value, body_indent, b'>'),
         }
     }
 
-    fn emit_block_scalar(&mut self, value: &str, indent: usize, marker: u8) {
-        let body_indent = indent + STEP;
-
+    /// Emit a block scalar whose body lines sit at the absolute column
+    /// `body_indent`. The caller computes that column for its context (a mapping
+    /// value: `key + step`; a sequence item: `dash + 2`; the document root:
+    /// `step`), matching the fast encoder rather than adding a fixed step here.
+    fn emit_block_scalar(&mut self, value: &str, body_indent: usize, marker: u8) {
         // The scanner already applied chomping when producing `value`, so we
         // reverse-engineer the indicator from its trailing newlines:
         //   0 trailing  → strip  (`-`)

@@ -334,6 +334,15 @@ impl Lower<'_, '_, '_> {
                 return self.serializer_result_node(&result, depth, in_flow);
             }
         }
+        // datetime/date/time → ISO scalar, checked before Enum and dataclass to
+        // match the fast path's `special_type_to_value` order: an Enum or
+        // dataclass that also exposes `isoformat()` serializes as that scalar, not
+        // as its members or fields. Honors `OPT_PASSTHROUGH_DATETIME` (the
+        // converter returns `None` when passthrough is on, falling through to the
+        // Enum/dataclass/`default` handling exactly as the fast path does).
+        if let Some(value) = crate::ffi::convert::datetime_to_value(obj, self.encode)? {
+            return Ok(self.value_to_node(value, in_flow));
+        }
         // Enum: its value, re-dispatched. Through `lower` (not `render`) so the
         // depth increments and the stack guard applies.
         if is_enum(obj)? {
@@ -471,10 +480,15 @@ impl Lower<'_, '_, '_> {
         let ordered = self.sorted_pairs(entries);
         let mut pairs = Vec::with_capacity(ordered.len());
         for (key, val) in &ordered {
-            pairs.push((
-                self.lower(key, depth + 1, flow)?,
-                self.lower(val, depth + 1, flow)?,
-            ));
+            // A collection used as a key is emitted inline as a flow collection
+            // (`[1, 2]: x`), never a block collection under an explicit `?`, so
+            // lower it in flow context (matching the fast path, which has no
+            // explicit-key form). A scalar key stays in block context; a
+            // multi-line one is double-quoted by `keyify_scalar` below.
+            let key_flow = flow || is_container(key);
+            let mut key_node = self.lower(key, depth + 1, key_flow)?;
+            keyify_scalar(&mut key_node);
+            pairs.push((key_node, self.lower(val, depth + 1, flow)?));
         }
         Ok(synthetic(
             YamlNodeKind::Mapping(pairs),
@@ -588,10 +602,36 @@ impl Lower<'_, '_, '_> {
         let mut keyed: Vec<(SortKey, Bound<'a, PyAny>, Bound<'a, PyAny>)> = pairs
             .into_iter()
             .enumerate()
-            .map(|(i, (k, v))| (SortKey::of(&k, i), k, v))
+            .map(|(i, (k, v))| (self.sort_key(&k, i), k, v))
             .collect();
         keyed.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
         keyed.into_iter().map(|(_, k, v)| (k, v)).collect()
+    }
+
+    /// The sort key for a mapping key under `sort_keys`. A primitive
+    /// (null/bool/number/string) is ranked directly. Any other key is ranked by
+    /// the scalar the fast path would emit for it, so a `datetime`/`UUID`/`Path`
+    /// key sorts by its rendered string exactly as a plain `dumps` does (rather
+    /// than dropping to `Other` and reordering). The conversion runs with
+    /// `default` disabled: a key only `default` could handle is not a scalar and
+    /// falls to `Other` (input order), matching `compare_keys`' complex-key rank.
+    fn sort_key(&self, key: &Bound<'_, PyAny>, index: usize) -> SortKey {
+        if key.is_none()
+            || key.is_instance_of::<PyBool>()
+            || key.is_instance_of::<PyInt>()
+            || key.is_instance_of::<PyFloat>()
+            || key.is_instance_of::<PyString>()
+        {
+            return SortKey::of(key, index);
+        }
+        let no_default = EncodeCtx {
+            default: None,
+            ..self.encode
+        };
+        match python_to_value(self.py, key, no_default) {
+            Ok(value) => SortKey::from_value(&value, index),
+            Err(_) => SortKey::Other(index),
+        }
     }
 
     /// Bridge a fast-path [`Value`] (from the deferred scalar-leaf pipeline) into a
@@ -732,6 +772,25 @@ impl SortKey {
         SortKey::Other(index)
     }
 
+    /// Derive a sort key from the fast-path [`Value`] a non-primitive key
+    /// converts to, mirroring `compare_keys`: a rendered scalar (a stringified
+    /// `datetime`/`UUID`/... lands in `String`/`Timestamp`) ranks by its scalar
+    /// value; a complex value (mapping/sequence/tagged) has no scalar order and
+    /// keeps input order via `Other`.
+    fn from_value(value: &Value<'_>, index: usize) -> Self {
+        use crate::decode::Value as V;
+        match value {
+            V::Null => SortKey::Null,
+            V::Bool(b) => SortKey::Bool(*b),
+            V::Int(i) => SortKey::Int(*i),
+            V::BigInt(s) => SortKey::Float(s.replace('_', "").parse().unwrap_or(f64::NAN)),
+            V::Float(f) => SortKey::Float(*f),
+            V::String(s) => SortKey::Str(s.to_string()),
+            V::Timestamp(ts) => SortKey::Str(ts.to_iso()),
+            _ => SortKey::Other(index),
+        }
+    }
+
     fn rank(&self) -> u8 {
         match self {
             SortKey::Null => 0,
@@ -845,6 +904,35 @@ fn synthetic(kind: YamlNodeKind, style: NodeStyle, tag: Option<String>) -> YamlN
     node.style = style;
     node.tag = tag;
     node
+}
+
+/// Whether `obj` is a built-in collection (dict/list/tuple/set/frozenset), the
+/// values that render as a collection and so, as a mapping key, must be emitted
+/// inline as a flow collection rather than a block one.
+fn is_container(obj: &Bound<'_, PyAny>) -> bool {
+    obj.is_instance_of::<PyDict>()
+        || obj.is_instance_of::<PyList>()
+        || obj.is_instance_of::<PyTuple>()
+        || obj.is_instance_of::<PySet>()
+        || obj.is_instance_of::<PyFrozenSet>()
+}
+
+/// Re-style a synthetic block-scalar (`literal`/`folded`) key as double-quoted,
+/// matching the fast path: a multi-line string used as a mapping key is emitted
+/// inline as a double-quoted scalar (`"a\nb": v`), not as an explicit
+/// `? |`-block key. A block scalar cannot be an inline (implicit) key, so a
+/// deferred multi-line string that auto-styled to a literal block would
+/// otherwise diverge from a plain `dumps`. Only synthetic (dump-path) keys are
+/// touched; a loaded key keeps its source form.
+fn keyify_scalar(node: &mut YamlNode) {
+    if !node.synthetic {
+        return;
+    }
+    if let YamlNodeKind::Scalar(_, style @ (ScalarStyle::Literal | ScalarStyle::Folded)) =
+        &mut node.kind
+    {
+        *style = ScalarStyle::DoubleQuoted;
+    }
 }
 
 /// Block or flow layout for a collection node.

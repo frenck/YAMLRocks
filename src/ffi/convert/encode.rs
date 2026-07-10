@@ -332,7 +332,7 @@ fn dict_to_pairs(
 /// Convert a `datetime`/`date`/`time` to an ISO 8601 string, applying the
 /// datetime formatting options. Returns `None` when `obj` is not datetime-like
 /// or when datetimes are being passed through to `default`.
-fn datetime_to_value(
+pub(crate) fn datetime_to_value(
     obj: &Bound<'_, PyAny>,
     ctx: EncodeCtx<'_>,
 ) -> PyResult<Option<Value<'static>>> {

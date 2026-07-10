@@ -119,10 +119,16 @@ def test_deferred_non_first_tagged_key_uses_explicit_form():
 def test_deeply_nested_represent_tree_tears_down_without_overflow():
     """A deeply nested synthetic tree emits and is dismantled iteratively, so its
     recursive drop cannot overflow the native stack (regression for the AST being
-    freed by the derived recursive ``Drop`` on return)."""
+    freed by the derived recursive ``Drop`` on return).
+
+    The depth stays well under the point where invoking the Python ``represent``
+    callback at every level exhausts the interpreter's own C recursion budget (a
+    separate, pre-existing deep-nesting limit shared with the fast path); 500 is
+    deep enough that a naive recursive drop would overflow a small thread stack.
+    """
     doc: dict = {}
     cursor = doc
-    for _ in range(900):
+    for _ in range(500):
         child: dict = {}
         cursor["k"] = child
         cursor = child
@@ -626,3 +632,119 @@ def test_large_integer_keys_sort_exactly():
     assert yamlrocks.dumps(
         doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda v: None
     ) == yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
+
+
+# --- Byte-for-byte parity sweep: dumps(x, represent=lambda _: None) == dumps(x) ---
+#
+# A callback that defers on every value must reproduce a plain `dumps` exactly.
+# The two paths are separate emitters (the deferred path lowers to a synthetic
+# node tree and emits it through the round-trip emitter), so this sweep is the
+# guard against them drifting on any type, structural position, or option. The
+# one accepted divergence is aliasing: `represent` keeps PyYAML-style anchors for
+# shared objects while plain `dumps` never aliases, so a case whose deferred
+# output introduces an anchor the plain output lacks is skipped (see ADR-021).
+
+
+def _parity_bases():
+    """A value of every type and edge the emitter special-cases."""
+    return [
+        None,
+        True,
+        False,
+        0,
+        -1,
+        2**63,
+        2**63 - 1,
+        10**20,
+        10**400,
+        0.0,
+        1.5,
+        1e16,
+        1e-5,
+        1e308,
+        float("inf"),
+        float("nan"),
+        "",
+        "plain",
+        "it's",
+        'has "quote"',
+        "true",
+        "null",
+        "123",
+        "~",
+        ": leading",
+        "trailing ",
+        " leading",
+        "a\nb",
+        "a\nb\n",
+        "  indented\nfirst\n",
+        "a\tb",
+        "a\x00b",
+        "a\x7fb",
+        "café",
+        b"bytes",
+        b"with\nnewline",
+        datetime.date(2020, 1, 2),
+        datetime.datetime(2020, 1, 2, 3, 4, 5),
+        datetime.datetime(2020, 1, 2, 3, 4, 5, 123456),
+        datetime.time(3, 4, 5),
+        [],
+        {},
+        [1, 2, 3],
+        {"a": 1, "b": 2},
+        (1, 2),
+        frozenset([1]),
+    ]
+
+
+def _parity_positions(value, hashable):
+    """The same value embedded in every structural position."""
+    yield value
+    yield [value]
+    yield [value, value]
+    yield [1, value]
+    yield {"k": value}
+    yield {"a": 1, "k": value}
+    yield {"k": value, "z": 2}
+    yield {"a": {"b": value}}
+    yield [[value]]
+    yield {"list": [value]}
+    yield [{"k": value}]
+    if hashable:
+        yield {value: "x"}
+        yield {"a": 1, value: "x"}
+
+
+_PARITY_OPTIONS = {
+    "default": 0,
+    "sort_keys": yamlrocks.OPT_SORT_KEYS,
+    "flow": yamlrocks.OPT_FLOW_STYLE,
+    "single_quotes": yamlrocks.OPT_SINGLE_QUOTES,
+    "explicit_start": yamlrocks.OPT_EXPLICIT_START,
+    "explicit_end": yamlrocks.OPT_EXPLICIT_END,
+    "null_keyword": yamlrocks.OPT_NULL_AS_KEYWORD,
+    "null_tilde": yamlrocks.OPT_NULL_AS_TILDE,
+    "indent_4": yamlrocks.OPT_INDENT_4,
+    "indentless": yamlrocks.OPT_INDENTLESS_SEQUENCES,
+    "sort_flow": yamlrocks.OPT_SORT_KEYS | yamlrocks.OPT_FLOW_STYLE,
+}
+
+
+@pytest.mark.parametrize("option_name", _PARITY_OPTIONS)
+def test_deferred_output_matches_plain_dumps(option_name):
+    """A fully deferred callback reproduces plain `dumps` byte-for-byte across a
+    broad corpus of types and structural positions, for each option combination."""
+    option = _PARITY_OPTIONS[option_name]
+    for base in _parity_bases():
+        try:
+            hash(base)
+            hashable = True
+        except TypeError:
+            hashable = False
+        for doc in _parity_positions(base, hashable):
+            plain = yamlrocks.dumps(doc, option=option)
+            deferred = yamlrocks.dumps(doc, option=option, represent=lambda _: None)
+            # Skip the accepted aliasing divergence (anchors on shared objects).
+            if b"&id" in deferred and b"&id" not in plain:
+                continue
+            assert deferred == plain, f"{base!r} in {doc!r} [{option_name}]"

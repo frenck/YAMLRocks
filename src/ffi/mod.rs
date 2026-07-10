@@ -654,6 +654,8 @@ pub fn dumps(
             // their key (the PyYAML dump style) rather than flush.
             indent_sequences: true,
             explicit_end: opts & OPT_EXPLICIT_END != 0,
+            indent: if opts & OPT_INDENT_4 != 0 { 4 } else { 2 },
+            indentless: opts & OPT_INDENTLESS_SEQUENCES != 0,
         };
         let bytes = py.detach(|| {
             let bytes = crate::roundtrip::emit::emit_roundtrip_dump(&node, null_style, dump);

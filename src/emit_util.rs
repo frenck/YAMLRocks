@@ -61,6 +61,22 @@ pub(crate) fn single_quoted_body(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+/// Whether a value that needs quoting can be single-quoted, or must be
+/// double-quoted. Single quotes cannot span a line break nor escape anything, so
+/// a value containing `\n`/`\r`, a C0/DEL control, a C1 control, or a
+/// non-character forces double quotes; a value containing a single quote also
+/// takes double quotes here. `double_quotes` (the document preference) forces
+/// double directly. Shared by the fast encoder and the round-trip quoting rules
+/// so both choose the same quote character.
+pub(crate) fn single_quotable(value: &str, double_quotes: bool) -> bool {
+    !double_quotes
+        && !value.contains('\'')
+        && !value.contains('\n')
+        && !value.contains('\r')
+        && !value.bytes().any(|b| b < 0x20 || b == 0x7f)
+        && !value.chars().any(is_non_printable)
+}
+
 /// Whether `c` falls outside YAML 1.2's `c-printable` set and so cannot appear
 /// raw in a scalar: it forces a plain scalar to be quoted and must be escaped
 /// inside a double-quoted one. This is the emitter's mirror of the scanner's

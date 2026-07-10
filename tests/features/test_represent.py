@@ -532,6 +532,36 @@ def test_single_newline_string_keeps_chomping():
     assert yamlrocks.loads(out) == {"k": "\n"}
 
 
+def test_control_char_scalar_double_quotes_not_single():
+    """A value with a control character cannot be single-quoted (single quotes
+    escape nothing), so both a custom-tagged auto scalar and a deferred value
+    fall back to double quotes and reload correctly, matching plain `dumps`."""
+    tagged = yamlrocks.dumps(
+        {"k": "v"},
+        represent=lambda v: (
+            yamlrocks.YAMLRocksScalar("a\x00b", tag="!x") if v == "v" else None
+        ),
+    )
+    assert tagged == b'k: !x "a\\0b"\n'
+    assert yamlrocks.loads(tagged) == {"k": "a\x00b"}
+
+    doc = {"k": "a\tb\x00c"}
+    for option in (0, yamlrocks.OPT_SINGLE_QUOTES):
+        out = yamlrocks.dumps(doc, option=option, represent=lambda v: None)
+        assert out == yamlrocks.dumps(doc, option=option)
+        assert yamlrocks.loads(out) == doc
+
+
+def test_integers_beyond_i64_tie_like_plain_dumps():
+    """Integer keys past `i64` compare as `f64` (as the fast path treats a
+    BigInt), so two that round to the same float keep insertion order, matching
+    plain `dumps` rather than reordering."""
+    doc = {10**20: "a", 10**20 + 1: "b"}
+    assert yamlrocks.dumps(
+        doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda v: None
+    ) == yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
+
+
 def test_large_integer_keys_sort_exactly():
     """Integer keys keep their exact value when sorting, so two large `i64`s do
     not collide (as they would if coerced to `f64`), matching plain `dumps`."""

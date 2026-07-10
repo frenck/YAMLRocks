@@ -554,10 +554,12 @@ pub(crate) fn assigned_string_style(
     // that only 1.1 would re-read as a non-string.
     if !crate::encode::needs_quoting(value, schema) {
         ScalarStyle::Plain
-    } else if double_quotes || value.contains('\'') || value.contains('\n') || value.contains('\r')
-    {
-        ScalarStyle::DoubleQuoted
-    } else {
+    } else if crate::emit_util::single_quotable(value, double_quotes) {
         ScalarStyle::SingleQuoted
+    } else {
+        // A line break or a control/non-printable character cannot be single
+        // quoted, so double-quote it (where it can be escaped), matching the
+        // fast encoder.
+        ScalarStyle::DoubleQuoted
     }
 }

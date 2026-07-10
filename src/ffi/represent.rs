@@ -671,8 +671,8 @@ fn is_aliasable(obj: &Bound<'_, PyAny>) -> bool {
 /// A total-ordered sort key for a mapping key under `sort_keys`, derived directly
 /// from the Python key object. Mirrors the fast path's `compare_keys` ranking
 /// (null, bool, number, string, then everything else) so the represent path sorts
-/// scalar keys identically to a plain `dumps`: integers keep their exact value
-/// (`i128`, so two large `i64`s do not collide as they would under `f64`), and
+/// scalar keys identically to a plain `dumps`: integers within `i64` compare
+/// exactly and larger ones as `f64` (as `compare_keys` treats a `BigInt`), and
 /// integers and floats share one numeric rank compared numerically. A key that is
 /// not a plain scalar (a custom object, or a special type like `datetime`/`UUID`
 /// that the fast path would stringify) falls into `Other`, tie-broken by input
@@ -681,7 +681,7 @@ fn is_aliasable(obj: &Bound<'_, PyAny>) -> bool {
 enum SortKey {
     Null,
     Bool(bool),
-    Int(i128),
+    Int(i64),
     Float(f64),
     Str(String),
     Other(usize),
@@ -697,9 +697,11 @@ impl SortKey {
             return SortKey::Bool(b.is_true());
         }
         if obj.is_instance_of::<PyInt>() {
-            // Keep the exact value when it fits `i128`; a bigger integer falls
-            // back to `f64` (as the fast path's `compare_keys` does for a BigInt).
-            return match obj.extract::<i128>() {
+            // Compare exactly within `i64` and fall back to `f64` beyond it,
+            // matching the fast path's `compare_keys` (which compares `i64` keys
+            // exactly and a `BigInt` as `f64`, so two integers past `i64` that
+            // round to the same `f64` tie and keep insertion order).
+            return match obj.extract::<i64>() {
                 Ok(i) => SortKey::Int(i),
                 Err(_) => obj
                     .extract::<f64>()
@@ -983,12 +985,14 @@ fn kind_matches(kind: ScalarKind, std: StdKind) -> bool {
 
 /// The quote style for a scalar that must be quoted (a custom-tagged value, or a
 /// string that would otherwise reparse as another type). Single quotes, matching
-/// PyYAML's default, unless a line break forces double quotes.
+/// PyYAML's default, unless the value cannot be single-quoted (a line break, a
+/// literal single quote, or a control/non-printable character), which forces
+/// double quotes, where it can be escaped.
 fn forced_quote_style(value: &str) -> ScalarStyle {
-    if value.contains('\n') || value.contains('\r') {
-        ScalarStyle::DoubleQuoted
-    } else {
+    if crate::emit_util::single_quotable(value, false) {
         ScalarStyle::SingleQuoted
+    } else {
+        ScalarStyle::DoubleQuoted
     }
 }
 

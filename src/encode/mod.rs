@@ -484,15 +484,7 @@ impl<'a> Emitter<'a> {
         // when the value can be represented that way (a single-quoted scalar
         // cannot contain a line break, nor escape a control character), otherwise
         // fall back to double.
-        let single_ok = !self.options.double_quotes
-            && !value.contains('\'')
-            && !value.contains('\n')
-            && !value.contains('\r')
-            && !value.bytes().any(|b| b < 0x20 || b == 0x7f)
-            // A single-quoted scalar cannot escape anything, so a C1 control or a
-            // non-character (which the byte check above misses) forces double
-            // quotes, where it can be escaped.
-            && !value.chars().any(crate::emit_util::is_non_printable);
+        let single_ok = crate::emit_util::single_quotable(value, self.options.double_quotes);
         if self.options.width > 0 && !self.emitting_key {
             // Fold the (already-escaped) body between the quotes. A space in the
             // body folds the same way as in a plain scalar; the surrounding

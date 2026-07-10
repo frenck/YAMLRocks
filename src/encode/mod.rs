@@ -669,7 +669,7 @@ impl<'a> Emitter<'a> {
 /// key (a sequence, mapping, or tagged node) shares one rank, so complex keys
 /// keep their relative input order via the stable sort. A pure string-keyed
 /// mapping, the common case, is unchanged.
-fn compare_keys(a: &Value, b: &Value) -> std::cmp::Ordering {
+pub(crate) fn compare_keys(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
     fn rank(v: &Value) -> u8 {

@@ -9,6 +9,8 @@ values with a plain ``dumps``.
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 import yamlrocks
@@ -172,12 +174,56 @@ def test_multiline_string_defaults_to_literal_block():
         {"s": "hello world", "q": "a: b", "empty": ""},
         [1, "two", None, 3.14, False],
         {"multi": "line1\nline2\n"},
+        # Types the deferred path routes through the full encode pipeline.
+        {"dt": datetime.datetime(2020, 1, 2, 3, 4, 5), "d": datetime.date(2021, 6, 7)},
+        {"nums": [1.5, float("inf"), float("-inf"), -0.0], "big": 10**30},
     ],
 )
 def test_deferred_values_match_plain_dumps(doc):
     """When ``represent`` defers on everything, the output is byte-for-byte a plain
-    ``dumps`` (the two emitters agree on deferred content)."""
+    ``dumps`` (the two emitters agree on deferred content, through the full encode
+    pipeline including datetime and numeric formatting)."""
     assert yamlrocks.dumps(doc, represent=lambda v: None) == yamlrocks.dumps(doc)
+
+
+def test_deferred_values_compose_with_default():
+    """A value ``represent`` defers on still reaches the `default` callback, so
+    `represent` and `default` compose rather than the former shadowing the latter."""
+
+    class Money:
+        pass
+
+    out = yamlrocks.dumps(
+        {"total": Money()},
+        default=lambda o: "42 EUR" if isinstance(o, Money) else o,
+        represent=lambda v: None,
+    )
+    assert out == b"total: 42 EUR\n"
+
+
+def test_deferred_values_compose_with_serializers():
+    """A deferred value still reaches the `serializers` registry, emitting its
+    custom tag."""
+
+    class Input:
+        def __init__(self, name):
+            self.name = name
+
+    out = yamlrocks.dumps(
+        {"pin": Input("gpio")},
+        serializers={Input: lambda o: yamlrocks.YAMLRocksTag("!input", o.name)},
+        represent=lambda v: None,
+    )
+    assert out == b"pin: !input gpio\n"
+
+
+def test_sort_keys_orders_numeric_keys_like_plain_dumps():
+    """`sort_keys` on the represent path orders keys by type and value (numbers
+    numerically), matching plain `dumps`, not lexically by text."""
+    doc = {10: "a", 2: "b", "z": "s"}
+    assert yamlrocks.dumps(
+        doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda v: None
+    ) == yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
 
 
 def test_invalid_style_raises():

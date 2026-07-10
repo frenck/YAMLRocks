@@ -622,14 +622,34 @@ pub fn dumps(
         let double_quotes = opts & OPT_SINGLE_QUOTES == 0;
         let schema = Schema::new(opts & OPT_YAML_1_1 != 0, opts & OPT_PYYAML_COMPAT != 0);
         let null_style = null_style_from_opts(opts)?;
+        // A deferred value renders through the same encode context as a plain
+        // `dumps`, so `default`/`serializers` and datetime/dataclass/numpy
+        // handling compose with `represent`.
+        let encode_ctx = EncodeCtx {
+            default: default.as_ref(),
+            serialize_numpy: opts & OPT_SERIALIZE_NUMPY != 0,
+            omit_microseconds: opts & OPT_OMIT_MICROSECONDS != 0,
+            naive_utc: opts & OPT_NAIVE_UTC != 0,
+            utc_z: opts & OPT_UTC_Z != 0,
+            passthrough_datetime: opts & OPT_PASSTHROUGH_DATETIME != 0,
+            passthrough_dataclass: opts & OPT_PASSTHROUGH_DATACLASS != 0,
+            tags: serializers.as_ref(),
+            depth: 0,
+        };
+        let node = represent::represent_to_node(
+            py,
+            obj,
+            represent.bind(py),
+            encode_ctx,
+            opts & OPT_SORT_KEYS != 0,
+            double_quotes,
+            schema,
+        )?;
+        // Synthetic sequences have no source column; indent them a step under
+        // their key (the PyYAML dump style) rather than flush.
         let dump = crate::roundtrip::emit::DumpConfig {
-            sort_keys: opts & OPT_SORT_KEYS != 0,
-            // Synthetic sequences have no source column; indent them a step under
-            // their key (the PyYAML dump style) rather than flush.
             indent_sequences: true,
         };
-        let node =
-            represent::represent_to_node(py, obj, represent.bind(py), double_quotes, schema)?;
         let bytes =
             py.detach(|| crate::roundtrip::emit::emit_roundtrip_dump(&node, null_style, dump));
         return Ok(PyBytes::new(py, &bytes).into_any().unbind());

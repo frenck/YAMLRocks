@@ -66,8 +66,6 @@ pub fn emit_roundtrip(node: &YamlNode) -> Vec<u8> {
 /// is untouched.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DumpConfig {
-    /// Sort mapping keys alphabetically before emitting.
-    pub sort_keys: bool,
     /// Indent a block sequence a step under its key (`k:\n  - a`, the PyYAML
     /// style) rather than at the key's own column. Synthetic sequences have no
     /// recorded source column, so without this they emit flush.
@@ -174,28 +172,8 @@ impl RoundTripEmitter {
         }
     }
 
-    /// Return a mapping's pairs in emit order: sorted by key when the dump path
-    /// requests it and every key is a scalar, else in source order. Mirrors
-    /// PyYAML's `sorted()` with a suppressed `TypeError` on unsortable keys.
-    fn ordered<'a>(
-        &self,
-        pairs: &'a [(YamlNode, YamlNode)],
-    ) -> std::borrow::Cow<'a, [(YamlNode, YamlNode)]> {
-        if !self.dump.sort_keys
-            || !pairs
-                .iter()
-                .all(|(k, _)| matches!(&k.kind, YamlNodeKind::Scalar(..)))
-        {
-            return std::borrow::Cow::Borrowed(pairs);
-        }
-        let mut sorted = pairs.to_vec();
-        sorted.sort_by(|(a, _), (b, _)| scalar_text(a).cmp(scalar_text(b)));
-        std::borrow::Cow::Owned(sorted)
-    }
-
     fn emit_block_mapping(&mut self, pairs: &[(YamlNode, YamlNode)], indent: usize) {
-        let pairs = self.ordered(pairs);
-        for (key, val) in pairs.iter() {
+        for (key, val) in pairs {
             self.emit_blank_before(&key.comments);
             self.emit_head(&key.comments, indent);
             self.write_indent(indent);
@@ -213,7 +191,6 @@ impl RoundTripEmitter {
     /// Emit a mapping whose first pair shares the line opened by a sequence
     /// dash (`- key: value`). `indent` is the key column.
     fn emit_block_mapping_after_dash(&mut self, pairs: &[(YamlNode, YamlNode)], indent: usize) {
-        let pairs = self.ordered(pairs);
         for (i, (key, val)) in pairs.iter().enumerate() {
             // The first pair shares the dash line: the caller has already left
             // the cursor at the key column, so do not re-indent it. Later pairs
@@ -696,15 +673,6 @@ fn emit_include_target(node: &YamlNode) -> Vec<u8> {
     let mut content = node.clone();
     content.source = None;
     emit_roundtrip(&content)
-}
-
-/// The text of a scalar node, or `""` for a non-scalar. Used to order mapping
-/// keys under `sort_keys` on the dump path.
-fn scalar_text(node: &YamlNode) -> &str {
-    match &node.kind {
-        YamlNodeKind::Scalar(text, _) => text,
-        _ => "",
-    }
 }
 
 /// Walk a resolved include tree and produce `(target_file_id, file_bytes)` for

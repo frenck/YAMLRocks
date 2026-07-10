@@ -571,11 +571,14 @@ yamlrocks.dumps({"primary": shared, "backup": shared}, represent=lambda v: None)
 # b'primary: &id001\n  host: localhost\n  port: 8080\nbackup: *id001\n'
 ```
 
-`represent` composes with `OPT_SORT_KEYS`, the null-style flags, and the
-quote-style flag, applying them to what it returns and to deferred values alike,
-and it takes precedence over `default`/`serializers` when more than one matches.
-Block sequences are always indented two spaces on this path; `OPT_INDENT_4`,
-`OPT_INDENTLESS_SEQUENCES`, and `width` do not apply here.
+`represent` composes with everything else. It runs first; a value it defers on
+(`None`) falls through to the normal pipeline, so `default`, `serializers`, and
+the datetime/dataclass/numpy handling still apply, and a deferred value renders
+byte-for-byte as it would from a plain `dumps`. `OPT_SORT_KEYS` (by type and
+value, numbers numerically), the null-style flags, and the quote-style flag apply
+to what `represent` returns and to deferred values alike. Block sequences are
+always indented two spaces on this path; `OPT_INDENT_4`, `OPT_INDENTLESS_SEQUENCES`,
+and `width` do not apply here.
 
 ## Writing to a file with `dump`
 

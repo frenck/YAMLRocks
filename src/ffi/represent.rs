@@ -11,17 +11,22 @@
 //! Lowering targets the round-trip [`YamlNode`] tree and the round-trip emitter,
 //! which already speaks per-node style (`plain`/`single`/`double`/`literal`/
 //! `folded`), per-node tags, and block/flow layout, rather than the fast `Value`
-//! emitter, which speaks none of them. A deferred value is lowered by the shared
-//! [`python_to_node`] converter, the same one the document-edit path uses.
+//! emitter, which speaks none of them. A deferred value (one `represent` returns
+//! `None` for) runs through the same `python_to_value` encode pipeline as a plain
+//! `dumps`, then a `Value`-to-node bridge, so `default`/`serializers` and the
+//! datetime/dataclass/numpy handling compose and deferred output stays
+//! byte-for-byte identical to a plain `dumps`.
 
 use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyString, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
+use crate::decode::Value;
+use crate::ffi::convert::{python_to_value, EncodeCtx};
 use crate::resolver::{ScalarKind, Schema};
 use crate::roundtrip::ast::{NodeStyle, YamlNode, YamlNodeKind};
-use crate::roundtrip::value::{assigned_string_style, python_to_node};
+use crate::roundtrip::value::assigned_string_style;
 use crate::scanner::{ScalarStyle, Span};
 
 /// Maximum object nesting depth when lowering a `represent` tree. Mirrors the
@@ -133,12 +138,16 @@ pub fn represent_to_node(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     represent: &Bound<'_, PyAny>,
+    encode: EncodeCtx<'_>,
+    sort_keys: bool,
     double_quotes: bool,
     schema: Schema,
 ) -> PyResult<YamlNode> {
     let mut ctx = Lower {
         py,
         represent,
+        encode,
+        sort_keys,
         double_quotes,
         schema,
         seen: HashSet::new(),
@@ -153,17 +162,21 @@ pub fn represent_to_node(
 
 /// Carries the lowering invariants plus the shared-object tracking. `seen` holds
 /// the `id()` of every container lowered so far; `aliased` holds those that
-/// turned up again (so a name is worth minting).
-struct Lower<'py, 'r> {
+/// turned up again (so a name is worth minting). `encode` is the full `dumps`
+/// encode context, used to render a deferred value through the same pipeline as
+/// a plain `dumps` (so `default`/`serializers`/datetime/dataclass all compose).
+struct Lower<'py, 'r, 'c> {
     py: Python<'py>,
     represent: &'r Bound<'py, PyAny>,
+    encode: EncodeCtx<'c>,
+    sort_keys: bool,
     double_quotes: bool,
     schema: Schema,
     seen: HashSet<usize>,
     aliased: HashSet<usize>,
 }
 
-impl Lower<'_, '_> {
+impl Lower<'_, '_, '_> {
     fn lower(&mut self, obj: &Bound<'_, PyAny>, depth: u32) -> PyResult<YamlNode> {
         // Grow the native stack on demand so a deeply nested object (bounded by
         // `MAX_REPRESENT_DEPTH`) cannot overflow a small thread stack. See
@@ -215,13 +228,14 @@ impl Lower<'_, '_> {
         }
 
         // Deferred: recurse into containers so nested values still reach
-        // `represent`; a leaf goes through the shared rendering.
+        // `represent`; a leaf goes through the full `dumps` pipeline below.
         if let Ok(dict) = obj.cast::<PyDict>() {
             // Snapshot before recursing: `represent` runs arbitrary Python that
             // could mutate the dict mid-walk (which `PyDict_Next` forbids).
             let snapshot: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
-            let mut pairs = Vec::with_capacity(snapshot.len());
-            for (k, v) in &snapshot {
+            let ordered = self.sorted_pairs(snapshot)?;
+            let mut pairs = Vec::with_capacity(ordered.len());
+            for (k, v) in &ordered {
                 pairs.push((self.lower(k, depth + 1)?, self.lower(v, depth + 1)?));
             }
             return Ok(synthetic(
@@ -249,22 +263,13 @@ impl Lower<'_, '_> {
             ));
         }
 
-        // A deferred string: style it like the fast encoder, so a multi-line
-        // value defaults to a `|` literal block rather than a double-quoted
-        // scalar. `python_to_node` (every other leaf) would double-quote it.
-        if let Ok(s) = obj.cast::<PyString>() {
-            let value = s.to_str()?.to_owned();
-            let style = auto_string_style(&value, self.double_quotes, self.schema);
-            return Ok(synthetic(
-                YamlNodeKind::Scalar(value, style),
-                NodeStyle::Block,
-                None,
-            ));
-        }
-
-        // Any other leaf (int/float/bool/None/...): render it exactly as a plain
-        // `dumps` edit would, so deferred values stay consistent.
-        python_to_node(self.py, obj, self.double_quotes, self.schema)
+        // A deferred non-container leaf. Run it through the same encode pipeline a
+        // plain `dumps` uses (`default`, `serializers`, datetime/dataclass/numpy
+        // auto-serialization), then bridge the resulting `Value` to a node. This
+        // is what makes deferred values render byte-for-byte like a plain `dumps`
+        // and `represent` compose with `default`/`serializers`.
+        let value = python_to_value(self.py, obj, self.encode)?;
+        Ok(self.value_to_node(value))
     }
 
     /// Turn a `represent` return value (a `Scalar`/`Sequence`/`Mapping`) into a
@@ -303,16 +308,15 @@ impl Lower<'_, '_> {
         }
         if let Ok(map) = described.cast::<YAMLRocksMapping>() {
             let map = map.borrow();
-            let snapshot: Vec<Bound<'_, PyAny>> = map
-                .pairs
-                .bind(self.py)
-                .try_iter()?
-                .collect::<PyResult<_>>()?;
-            let mut pairs = Vec::with_capacity(snapshot.len());
-            for pair in &snapshot {
-                let key = pair.get_item(0)?;
-                let val = pair.get_item(1)?;
-                pairs.push((self.lower(&key, depth + 1)?, self.lower(&val, depth + 1)?));
+            let mut entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = Vec::new();
+            for pair in map.pairs.bind(self.py).try_iter()? {
+                let pair = pair?;
+                entries.push((pair.get_item(0)?, pair.get_item(1)?));
+            }
+            let ordered = self.sorted_pairs(entries)?;
+            let mut pairs = Vec::with_capacity(ordered.len());
+            for (key, val) in &ordered {
+                pairs.push((self.lower(key, depth + 1)?, self.lower(val, depth + 1)?));
             }
             return Ok(synthetic(
                 YamlNodeKind::Mapping(pairs),
@@ -332,6 +336,79 @@ impl Lower<'_, '_> {
             .iter()
             .map(|item| self.lower(item, depth + 1))
             .collect()
+    }
+
+    /// Order a mapping's `(key, value)` pairs for emission. With `sort_keys` set,
+    /// sort by the key resolved through the encode pipeline and the fast path's
+    /// key comparator, so the represent path orders keys identically to a plain
+    /// `dumps` (numbers numerically, not lexically). Sorting happens here, before
+    /// the values are lowered, so anchor detection follows the final emission
+    /// order (sorting after would risk emitting an alias before its anchor). A key
+    /// the pipeline cannot resolve keeps its input position (a stable no-op).
+    fn sorted_pairs<'a>(
+        &self,
+        pairs: Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)>,
+    ) -> PyResult<Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)>> {
+        if !self.sort_keys {
+            return Ok(pairs);
+        }
+        let mut keyed: Vec<(Option<Value<'static>>, Bound<'a, PyAny>, Bound<'a, PyAny>)> = pairs
+            .into_iter()
+            .map(|(k, v)| {
+                let key = python_to_value(self.py, &k, self.encode).ok();
+                (key, k, v)
+            })
+            .collect();
+        keyed.sort_by(|(a, _, _), (b, _, _)| match (a, b) {
+            (Some(a), Some(b)) => crate::encode::compare_keys(a, b),
+            _ => std::cmp::Ordering::Equal,
+        });
+        Ok(keyed.into_iter().map(|(_, k, v)| (k, v)).collect())
+    }
+
+    /// Bridge a fast-path [`Value`] (from the deferred-leaf pipeline) into a
+    /// synthetic node, choosing the same styles the fast encoder would so the
+    /// round-trip emitter reproduces its bytes.
+    fn value_to_node(&self, value: Value<'_>) -> YamlNode {
+        // Grow the native stack on demand: the `Value` tree is bounded by the
+        // encoder's depth guard, but the walk still recurses per level.
+        crate::stack::guard(|| self.value_to_node_inner(value))
+    }
+
+    fn value_to_node_inner(&self, value: Value<'_>) -> YamlNode {
+        use crate::decode::Value as V;
+        match value {
+            V::Null => synthetic(YamlNodeKind::Null, NodeStyle::Block, None),
+            V::Bool(b) => scalar_plain(if b { "true" } else { "false" }),
+            V::Int(i) => scalar_plain(&i.to_string()),
+            V::BigInt(s) => scalar_plain(&s),
+            V::Float(f) => scalar_plain(&crate::emit_util::canonical_float(f)),
+            V::String(s) => {
+                let style = auto_string_style(&s, self.double_quotes, self.schema);
+                synthetic(
+                    YamlNodeKind::Scalar(s.into_owned(), style),
+                    NodeStyle::Block,
+                    None,
+                )
+            }
+            V::Timestamp(ts) => scalar_plain(&ts.to_iso()),
+            V::Sequence(items) => {
+                let items = items.into_iter().map(|v| self.value_to_node(v)).collect();
+                synthetic(YamlNodeKind::Sequence(items), NodeStyle::Block, None)
+            }
+            V::Mapping(pairs) => {
+                let pairs = pairs
+                    .into_iter()
+                    .map(|(k, v)| (self.value_to_node(k), self.value_to_node(v)))
+                    .collect();
+                synthetic(YamlNodeKind::Mapping(pairs), NodeStyle::Block, None)
+            }
+            V::Tagged(tag, inner) => {
+                let mut node = self.value_to_node(*inner);
+                node.tag = Some(tag);
+                node
+            }
+        }
     }
 }
 
@@ -399,6 +476,16 @@ fn name_anchors_inner(
         }
         _ => {}
     }
+}
+
+/// A synthetic plain scalar node, for a value that is inherently plain-safe (a
+/// bool/int/float/timestamp token from the fast-path `Value`).
+fn scalar_plain(text: &str) -> YamlNode {
+    synthetic(
+        YamlNodeKind::Scalar(text.to_owned(), ScalarStyle::Plain),
+        NodeStyle::Block,
+        None,
+    )
 }
 
 /// Build a synthetic node (edited-in, not parsed) with the given kind, layout,

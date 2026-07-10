@@ -97,7 +97,7 @@ lint = ["ruff==0.15.21", "codespell==2.4.2", "zizmor==1.26.1"]
 # Continuous performance testing (bench/test_benchmarks.py, run by CodSpeed).
 codspeed = [{ include-group = "test" }, "pytest-codspeed==5.0.3"]
 # Comparison libraries used only by the one-off bench/bench.py report.
-bench = ["pyyaml==6.0.3", "ruamel.yaml==0.19.1", "yamlium==0.2.5"]
+bench = ["pyyaml==6.0.3", "ruamel.yaml==0.19.1", "yamlium==0.3.0"]
 # Renders the cross-library comparison charts (just charts) into the docs assets.
 # Adds the wider field (Rust-backed ryaml/py-yaml12/yaml_rs, the ordered and strict
 # pure-Python parsers) that only bench/compare.py needs, plus matplotlib.

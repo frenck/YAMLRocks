@@ -491,6 +491,42 @@ def test_mapping_descriptor_pair_must_have_two_items():
         )
 
 
+def test_default_returning_container_with_original_raises():
+    """A `default` that returns a container referencing the original object has no
+    node to anchor the back-reference to, so it raises rather than emitting an
+    orphan alias (a plain `dumps` raises here too)."""
+
+    class C:
+        pass
+
+    with pytest.raises(ValueError):
+        yamlrocks.dumps(C(), default=lambda o: {"self": o}, represent=lambda v: None)
+
+
+def test_primitive_subclass_serializer_matches_plain_dumps():
+    """A `str`/`int` subclass registered in `serializers` is emitted as its
+    builtin (the serializer is not consulted), matching the fast path's dispatch
+    order, so a fully-deferred callback stays byte-identical."""
+
+    class MyStr(str):
+        pass
+
+    serializers = {MyStr: lambda o: yamlrocks.YAMLRocksTag("!s", str(o))}
+    doc = {"k": MyStr("hi")}
+    assert yamlrocks.dumps(
+        doc, serializers=serializers, represent=lambda v: None
+    ) == yamlrocks.dumps(doc, serializers=serializers)
+
+
+def test_single_newline_string_keeps_chomping():
+    """A one-character `"\\n"` value keeps its trailing newline via a `|+` block,
+    matching plain `dumps`, rather than a clip `|` that would reload as empty."""
+    doc = {"k": "\n"}
+    out = yamlrocks.dumps(doc, represent=lambda v: None)
+    assert out == yamlrocks.dumps(doc)
+    assert yamlrocks.loads(out) == {"k": "\n"}
+
+
 def test_large_integer_keys_sort_exactly():
     """Integer keys keep their exact value when sorting, so two large `i64`s do
     not collide (as they would if coerced to `f64`), matching plain `dumps`."""

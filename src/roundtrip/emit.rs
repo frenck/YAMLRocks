@@ -539,6 +539,11 @@ impl RoundTripEmitter {
         self.buf.push(marker);
         match trailing {
             0 => self.buf.push(b'-'),
+            // Clip (a single trailing newline) cannot represent an all-newline
+            // value whose body is empty (`"\n"`): the body collapses to nothing
+            // and the lone newline is chomped away on re-read. Keep (`+`) so the
+            // trailing newline survives. Mirrors the fast encoder.
+            1 if body.is_empty() => self.buf.push(b'+'),
             1 => {}
             _ => self.buf.push(b'+'),
         }

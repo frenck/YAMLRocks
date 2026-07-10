@@ -236,41 +236,35 @@ impl Lower<'_, '_, '_> {
         if !aliasable {
             return Ok(node);
         }
-        // Decide the anchor. `render` either materializes a *new* node for this
-        // object (a container/scalar it built, with no anchor yet) or delegates
+        // `render` either materializes a *new* node for this object (a
+        // container/scalar it built, with no anchor yet) or delegates
         // transparently to a child (enum value, numpy, a `default`/serializer
         // result), returning the child's node, which already carries the child's
-        // anchor or is an alias. Only the former is anchored on this object; the
-        // latter must keep the child's identity, and this object is untracked so
-        // a later occurrence re-dispatches rather than aliasing an id no node
-        // defines.
-        match &node.kind {
-            // Delegated back to this very object: the value is defined only in
-            // terms of itself, with no node to anchor. Raise rather than emit a
-            // dangling or anchored alias.
-            YamlNodeKind::Alias(target) if *target == id.to_string() => {
-                Err(pyo3::exceptions::PyValueError::new_err(
-                    "cannot serialize a value that refers only to itself",
-                ))
-            }
-            // Delegated to a child (an alias to a sibling, or a child node that
-            // already carries its own anchor): keep the child's identity.
-            YamlNodeKind::Alias(_) => {
-                self.seen.remove(&id);
-                Ok(node)
-            }
-            _ if node.anchor.is_some() => {
-                self.seen.remove(&id);
-                Ok(node)
-            }
+        // anchor or is an alias.
+        let delegated = matches!(node.kind, YamlNodeKind::Alias(_)) || node.anchor.is_some();
+        if !delegated {
             // A node this object materialized itself: stamp its id, which
             // `name_anchors` later turns into a real anchor name (or strips if it
-            // was never aliased).
-            _ => {
-                node.anchor = Some(id.to_string());
-                Ok(node)
-            }
+            // was never aliased). A cycle back into it (e.g. `d["self"] = d`) has
+            // already recorded an alias to this id, which now resolves.
+            node.anchor = Some(id.to_string());
+            return Ok(node);
         }
+        // Delegated: this object produced no node of its own. If something inside
+        // the delegated subtree aliased back to *this* object, there is no node
+        // bearing its identity for that alias to resolve to (a `default` that
+        // returns a container holding the original, or a value that resolves only
+        // to itself). Raise, as a plain `dumps` does for such input.
+        if self.aliased.contains(&id) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "cannot serialize a value that refers only to itself",
+            ));
+        }
+        // Otherwise the delegated node keeps the child's identity; untrack this
+        // object so a later occurrence re-dispatches rather than aliasing an id no
+        // node defines.
+        self.seen.remove(&id);
+        Ok(node)
     }
 
     /// The node for `obj`: the representer's result, or the built-in rendering
@@ -294,6 +288,19 @@ impl Lower<'_, '_, '_> {
         depth: u32,
         in_flow: bool,
     ) -> PyResult<YamlNode> {
+        // Primitive scalars, and their subclasses (an `IntEnum`, a `str`/`bytes`
+        // subclass), are converted directly, before the `serializers` registry,
+        // matching the fast path's dispatch order: a registered primitive
+        // subclass is emitted as its builtin, not routed through its serializer.
+        if obj.is_instance_of::<PyBool>()
+            || obj.is_instance_of::<PyInt>()
+            || obj.is_instance_of::<PyFloat>()
+            || obj.is_instance_of::<PyString>()
+            || obj.is_instance_of::<PyBytes>()
+        {
+            let value = python_to_value(self.py, obj, self.encode)?;
+            return Ok(self.value_to_node(value, in_flow));
+        }
         if let Ok(dict) = obj.cast::<PyDict>() {
             // Snapshot before recursing: `represent` runs arbitrary Python that
             // could mutate the dict mid-walk (which `PyDict_Next` forbids).

@@ -61,7 +61,7 @@ pub struct YAMLRocksScalar {
 #[pymethods]
 impl YAMLRocksScalar {
     #[new]
-    #[pyo3(signature = (value, *, tag=None, style=None))]
+    #[pyo3(signature = (value, *, tag=None, style="auto"))]
     fn new(value: String, tag: Option<String>, style: Option<&str>) -> PyResult<Self> {
         Ok(Self {
             value,
@@ -449,7 +449,7 @@ impl Lower<'_, '_, '_> {
         }
         Err(pyo3::exceptions::PyTypeError::new_err(
             "a represent callback must return a yamlrocks.YAMLRocksScalar, \
-             YAMLRocksSequence, YAMLRocksMapping, or None",
+             yamlrocks.YAMLRocksSequence, yamlrocks.YAMLRocksMapping, or None",
         ))
     }
 

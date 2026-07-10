@@ -81,6 +81,9 @@ pub struct DumpConfig {
 pub fn emit_roundtrip_dump(node: &YamlNode, null_style: NullStyle, dump: DumpConfig) -> Vec<u8> {
     let mut emitter = RoundTripEmitter::new(null_style);
     emitter.dump = dump;
+    if node.leading_bom {
+        emitter.buf.extend_from_slice(BOM);
+    }
     emitter.emit_document(node);
     if dump.explicit_end {
         emitter.buf.extend_from_slice(b"...\n");

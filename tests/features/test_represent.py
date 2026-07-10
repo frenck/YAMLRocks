@@ -667,15 +667,46 @@ def test_sort_keys_does_not_double_invoke_serializers():
     assert deferred_calls == calls == ["b", "a"]
 
 
-def test_sort_keys_propagates_a_bad_key_conversion_error():
-    """A key whose conversion genuinely errors (a non-UTF-8 `bytes` key) raises
-    during sorting rather than being silently ranked as an 'other' key, matching
-    a plain `dumps` (which converts keys before sorting)."""
+def test_sort_keys_deferred_bad_key_still_raises():
+    """A deferred key whose conversion genuinely errors (a non-UTF-8 `bytes` key)
+    still raises, matching a plain `dumps`. Sorting ranks it in input order rather
+    than deciding its fate, but lowering it (where `represent` deferred) then
+    raises, so the error is not swallowed."""
     doc = {b"\xff\xfe": 1, "a": 2}
     with pytest.raises(yamlrocks.YAMLRocksEncodeError):
         yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda _: None)
     with pytest.raises(yamlrocks.YAMLRocksEncodeError):
         yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
+
+
+def test_sort_keys_lets_represent_rescue_an_unconvertible_key():
+    """`represent` runs first, so under `OPT_SORT_KEYS` a key the built-in
+    conversion cannot handle (a non-UTF-8 `bytes` key) is ranked in input order
+    for sorting and then rescued by the callback when lowered, rather than raising
+    during the sort pass."""
+
+    def rescue(v):
+        return yamlrocks.YAMLRocksScalar("safe") if isinstance(v, bytes) else None
+
+    out = yamlrocks.dumps(
+        {b"\xff": 1, "a": 2}, option=yamlrocks.OPT_SORT_KEYS, represent=rescue
+    )
+    assert out == b"a: 2\nsafe: 1\n"
+
+
+def test_sort_keys_int_subclass_key_sorts_by_numeric_value():
+    """A large `int` subclass key that overrides `__str__` sorts by its real
+    numeric value (reduced through a base `int`), not the overridden text, matching
+    plain `dumps`."""
+
+    class Weird(int):
+        def __str__(self) -> str:
+            return "zzz"
+
+    doc = {Weird(10**30): "big", 5: "small"}
+    assert yamlrocks.dumps(
+        doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda _: None
+    ) == yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
 
 
 # --- Byte-for-byte parity sweep: dumps(x, represent=lambda _: None) == dumps(x) ---

@@ -121,7 +121,7 @@ dev = [
   { include-group = "proptest" },
   { include-group = "typing" },
   { include-group = "lint" },
-  "rust-just==1.55.1",
+  "rust-just==1.56.0",
 ]
 
 [tool.ruff]

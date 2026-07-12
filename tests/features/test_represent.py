@@ -17,9 +17,7 @@ import yamlrocks
 
 
 def test_scalar_with_custom_tag_forces_single_quotes():
-    """A custom-tagged scalar under auto style is force-quoted, matching PyYAML's
-    default style for a tagged scalar (the tag survives a plain form too; the
-    quote is the selected auto style, not a tag-preservation requirement)."""
+    """A custom-tagged scalar under auto style is force-quoted."""
     out = yamlrocks.dumps(
         {"key": "my_id"},
         represent=lambda v: (
@@ -30,7 +28,7 @@ def test_scalar_with_custom_tag_forces_single_quotes():
 
 
 def test_scalar_explicit_literal_style():
-    """An explicit ``style="literal"`` emits a ``|`` block, keeping the tag."""
+    """An explicit ``style="literal"`` emits a ``|`` block."""
     out = yamlrocks.dumps(
         {"lam": "return x + 1;"},
         represent=lambda v: (
@@ -43,8 +41,7 @@ def test_scalar_explicit_literal_style():
 
 
 def test_implicit_tag_is_elided():
-    """A standard tag the plain value already resolves to (``!!bool`` on ``true``,
-    ``!!float`` on a float literal) is dropped, rendering the bare value."""
+    """A standard tag the plain value already resolves to is dropped."""
 
     def rep(v):
         if v is True:
@@ -58,8 +55,7 @@ def test_implicit_tag_is_elided():
 
 
 def test_str_tag_on_number_looking_value_quotes_to_stay_string():
-    """``!!str`` on a value that would plainly resolve to a number quotes it (so
-    it stays a string) and drops the now-implied tag."""
+    """``!!str`` on a value that would plainly resolve to a number quotes it."""
     out = yamlrocks.dumps(
         {"s": "x"},
         represent=lambda v: (
@@ -70,8 +66,7 @@ def test_str_tag_on_number_looking_value_quotes_to_stay_string():
 
 
 def test_tagged_mapping_form():
-    """A ``YAMLRocksMapping`` with a tag emits the tag before an indented block
-    mapping (the ``!include {file, vars}`` form)."""
+    """A ``YAMLRocksMapping`` with a tag emits the tag before an indented block mapping."""
     out = yamlrocks.dumps(
         {"key": "inc"},
         represent=lambda v: (
@@ -86,10 +81,7 @@ def test_tagged_mapping_form():
 
 
 def test_deferred_tagged_null_keeps_tag_without_null_token():
-    """A deferred tagged null keeps its tag as a bare ``!x`` in both mapping and
-    sequence position, matching plain ``dumps`` byte-for-byte. Expanding it to
-    ``!x null`` would reload as the string ``"null"`` instead of an empty value,
-    and dropping the tag would lose it entirely."""
+    """A deferred tagged null keeps its tag as a bare ``!x`` in both mapping and sequence position."""
     tag = yamlrocks.YAMLRocksTag("!x", None)
     for doc in ({"k": tag}, [tag], {"a": tag, "b": yamlrocks.YAMLRocksTag("!y", None)}):
         deferred = yamlrocks.dumps(doc, represent=lambda _: None)
@@ -101,9 +93,7 @@ def test_deferred_tagged_null_keeps_tag_without_null_token():
 
 
 def test_shared_tagged_empty_value_keeps_tag_and_anchor_losslessly():
-    """A shared tagged empty value anchors the first occurrence and aliases the
-    rest, keeping the tag as a bare `!x &id001` (never `!x &id001 null`, which
-    would reload as the string "null"), so it reloads to the empty value."""
+    """A shared tagged empty value anchors the first occurrence and aliases the rest."""
     tag = yamlrocks.YAMLRocksTag("!x", None)
     mapping = yamlrocks.dumps({"a": tag, "b": tag}, represent=lambda _: None)
     assert mapping == b"a: !x &id001\nb: *id001\n"
@@ -114,8 +104,7 @@ def test_shared_tagged_empty_value_keeps_tag_and_anchor_losslessly():
 
 
 def test_indent_4_applies_to_a_represented_block_collection_key():
-    """`OPT_INDENT_4` indents a represented block-collection key (a custom key
-    whose `default` renders as a mapping) by four spaces, like other nodes."""
+    """`OPT_INDENT_4` indents a represented block-collection key."""
 
     class Key:
         pass
@@ -130,10 +119,7 @@ def test_indent_4_applies_to_a_represented_block_collection_key():
 
 
 def test_deferred_non_first_tagged_key_uses_explicit_form():
-    """A non-first tagged key is emitted in the explicit ``? key`` form, matching
-    plain ``dumps``. An inline ``!tag key:`` after a previous entry binds its tag
-    to that entry's value (a reparse error after an empty value), so the ``?``
-    indicator opens a fresh key instead. A first/only tagged key stays inline."""
+    """A non-first tagged key is emitted in the explicit ``? key`` form."""
     key = yamlrocks.YAMLRocksTag("!foo", "k")
     for doc in ({"a": None, key: 2}, {"a": 1, key: 2}, {key: 1}):
         deferred = yamlrocks.dumps(doc, represent=lambda _: None)
@@ -147,15 +133,7 @@ def test_deferred_non_first_tagged_key_uses_explicit_form():
 
 
 def test_deeply_nested_represent_tree_tears_down_without_overflow():
-    """A deeply nested synthetic tree emits and is dismantled iteratively, so its
-    recursive drop cannot overflow the native stack (regression for the AST being
-    freed by the derived recursive ``Drop`` on return).
-
-    The depth stays well under the point where invoking the Python ``represent``
-    callback at every level exhausts the interpreter's own C recursion budget (a
-    separate, pre-existing deep-nesting limit shared with the fast path); 500 is
-    deep enough that a naive recursive drop would overflow a small thread stack.
-    """
+    """A deeply nested synthetic tree emits and is dismantled iteratively."""
     doc: dict = {}
     cursor = doc
     for _ in range(500):
@@ -168,9 +146,7 @@ def test_deeply_nested_represent_tree_tears_down_without_overflow():
 
 
 def test_mapping_error_after_deep_value_tears_down_iteratively():
-    """When a later mapping entry fails to lower after a deeply nested earlier
-    value, the partially built pairs are dismantled iteratively, so the error
-    propagates cleanly instead of overflowing the stack on their recursive drop."""
+    """A mapping lowering error dismantles the already-built pairs iteratively."""
     deep: dict = {}
     cursor = deep
     for _ in range(300):
@@ -186,9 +162,7 @@ def test_mapping_error_after_deep_value_tears_down_iteratively():
 
 
 def test_sequence_error_after_deep_item_tears_down_iteratively():
-    """The sequence path likewise dismantles already-built items iteratively when
-    a later item fails to lower, so a deep earlier item cannot overflow the stack
-    on teardown."""
+    """The sequence path likewise dismantles already-built items iteratively when a later item fails to lower."""
     deep: dict = {}
     cursor = deep
     for _ in range(300):
@@ -201,10 +175,7 @@ def test_sequence_error_after_deep_item_tears_down_iteratively():
 
 
 def test_explicit_block_style_rejects_lossy_values():
-    """An explicit ``literal``/``folded`` style that cannot round-trip the value
-    is rejected rather than silently emitting YAML that reloads differently: a
-    folded value with line breaks, a literal whose first line is indented, and any
-    block scalar carrying a carriage return or control character."""
+    """An explicit literal/folded style that cannot round-trip the value is rejected."""
     scalar = yamlrocks.YAMLRocksScalar
     cases = [
         ("a\nb", "folded"),
@@ -228,13 +199,20 @@ def test_explicit_block_style_rejects_lossy_values():
     )
     assert out == b"k: |-\n  line1\n  line2\n"
     assert yamlrocks.loads(out) == {"k": "line1\nline2"}
+    # An explicit double-quoted style is never rejected: it escapes a carriage
+    # return and control characters, so it round-trips losslessly.
+    for value in ("a\rb", "a\x00b"):
+        quoted = yamlrocks.dumps(
+            {"k": value},
+            represent=lambda v, _val=value: (
+                scalar(_val, style="double") if v == _val else None
+            ),
+        )
+        assert yamlrocks.loads(quoted) == {"k": value}
 
 
 def test_default_self_reference_after_deep_subtree_raises_cleanly():
-    """A ``default`` result that both nests deeply and refers back to the original
-    object is unrepresentable (a value referring only to itself), so it raises;
-    the deep delegated node is dismantled iteratively, so the error propagates
-    instead of overflowing the stack on its recursive drop."""
+    """A ``default`` result that both nests deeply and refers back to the original object is unrepresentable."""
 
     class Box:
         pass
@@ -256,8 +234,7 @@ def test_default_self_reference_after_deep_subtree_raises_cleanly():
 
 
 def test_dump_forwards_represent_to_a_stream():
-    """The file-oriented ``dump`` forwards ``represent`` to ``dumps``, so the
-    protocol is usable when writing to a path or stream, not only ``dumps``."""
+    """The file-oriented ``dump`` forwards ``represent`` to ``dumps``."""
     import io
 
     buffer = io.BytesIO()
@@ -272,8 +249,7 @@ def test_dump_forwards_represent_to_a_stream():
 
 
 def test_async_dump_forwards_represent_to_a_stream():
-    """The async file wrapper ``async_dump`` forwards ``represent`` to ``dump``,
-    so the protocol is usable from async file writes like the sync ``dump``."""
+    """The async file wrapper ``async_dump`` forwards ``represent`` to ``dump``."""
     import asyncio
     import io
 
@@ -292,9 +268,7 @@ def test_async_dump_forwards_represent_to_a_stream():
 
 
 def test_empty_tuple_is_not_aliased():
-    """An empty tuple is the CPython `()` singleton, so it must not be treated as
-    a shared object; `[(), ()]` emits two empty flow sequences like plain `dumps`
-    (and PyYAML's ``ignore_aliases``), not an anchor/alias pair."""
+    """An empty tuple is the CPython `()` singleton."""
     out = yamlrocks.dumps([(), ()], represent=lambda _: None)
     assert out == yamlrocks.dumps([(), ()]) == b"- []\n- []\n"
 
@@ -311,8 +285,7 @@ def test_sequence_flow_override():
 
 
 def test_children_are_re_dispatched_through_represent():
-    """A descriptor's children are the original objects; the emitter re-dispatches
-    each through ``represent`` (emitter-driven recursion)."""
+    """A descriptor's children are the original objects; the emitter re-dispatches each through ``represent``."""
     seen: list[object] = []
 
     def rep(v):
@@ -328,8 +301,7 @@ def test_children_are_re_dispatched_through_represent():
 
 
 def test_block_sequences_are_indented():
-    """A deferred block sequence indents under its key (the PyYAML dump style),
-    not flush."""
+    """A deferred block sequence indents under its key."""
     out = yamlrocks.dumps({"a": 1, "b": ["x", "y"]}, represent=lambda v: None)
     assert out == b"a: 1\nb:\n  - x\n  - y\n"
 
@@ -346,8 +318,7 @@ def test_sort_keys_option_applies():
 
 
 def test_shared_object_emits_anchor_and_alias():
-    """A Python object appearing more than once emits ``&id`` once and ``*id``
-    after, so the shared reference survives a dump/reload."""
+    """A Python object appearing more than once emits ``&id`` once and ``*id`` after."""
     shared = {"x": 1, "y": 2}
     out = yamlrocks.dumps({"a": shared, "b": shared}, represent=lambda v: None)
     assert out == b"a: &id001\n  x: 1\n  y: 2\nb: *id001\n"
@@ -357,7 +328,7 @@ def test_shared_object_emits_anchor_and_alias():
 
 
 def test_unshared_objects_get_no_anchors():
-    """Distinct objects never carry an anchor, even with equal contents."""
+    """Distinct objects never carry an anchor."""
     out = yamlrocks.dumps({"a": {"x": 1}, "b": {"x": 1}}, represent=lambda v: None)
     assert out == b"a:\n  x: 1\nb:\n  x: 1\n"
 
@@ -371,8 +342,7 @@ def test_cycle_resolves_to_an_alias():
 
 
 def test_multiline_string_defaults_to_literal_block():
-    """A deferred multi-line string defaults to a ``|`` literal block, matching a
-    plain dump rather than a double-quoted scalar."""
+    """A deferred multi-line string defaults to a ``|`` literal block."""
     doc = {"multi": "line1\nline2\n"}
     assert yamlrocks.dumps(doc, represent=lambda v: None) == yamlrocks.dumps(doc)
     assert (
@@ -395,15 +365,12 @@ def test_multiline_string_defaults_to_literal_block():
     ],
 )
 def test_deferred_values_match_plain_dumps(doc):
-    """When ``represent`` defers on everything, the output is byte-for-byte a plain
-    ``dumps`` (the two emitters agree on deferred content, through the full encode
-    pipeline including datetime and numeric formatting)."""
+    """When ``represent`` defers on everything."""
     assert yamlrocks.dumps(doc, represent=lambda v: None) == yamlrocks.dumps(doc)
 
 
 def test_deferred_values_compose_with_default():
-    """A value ``represent`` defers on still reaches the `default` callback, so
-    `represent` and `default` compose rather than the former shadowing the latter."""
+    """A value ``represent`` defers on still reaches the `default` callback."""
 
     class Money:
         pass
@@ -417,8 +384,7 @@ def test_deferred_values_compose_with_default():
 
 
 def test_deferred_values_compose_with_serializers():
-    """A deferred value still reaches the `serializers` registry, emitting its
-    custom tag."""
+    """A deferred value still reaches the `serializers` registry."""
 
     class Input:
         def __init__(self, name):
@@ -433,8 +399,7 @@ def test_deferred_values_compose_with_serializers():
 
 
 def test_sort_keys_orders_numeric_keys_like_plain_dumps():
-    """`sort_keys` on the represent path orders keys by type and value (numbers
-    numerically), matching plain `dumps`, not lexically by text."""
+    """`sort_keys` on the represent path orders keys by type and value."""
     doc = {10: "a", 2: "b", "z": "s"}
     assert yamlrocks.dumps(
         doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda v: None
@@ -454,14 +419,12 @@ def test_bad_represent_return_raises():
 
 
 def test_represent_does_not_change_plain_dumps():
-    """Omitting ``represent`` leaves ``dumps`` on its fast path, unchanged."""
+    """Omitting ``represent`` leaves ``dumps`` on its fast path."""
     assert yamlrocks.dumps({"a": [1, 2], "b": "x"}) == b"a:\n  - 1\n  - 2\nb: x\n"
 
 
 def test_every_value_reaches_represent_through_compounds():
-    """Descendants of a deferred compound (dataclass, set) still reach
-    ``represent``, so a callback that restyles nested values is not silently
-    skipped inside those shapes."""
+    """Descendants of a deferred compound."""
     from dataclasses import dataclass
 
     @dataclass
@@ -494,8 +457,7 @@ def test_deferred_compounds_match_plain_dumps(doc_factory):
 
 
 def test_shared_custom_object_aliases():
-    """A custom object the host represents as a mapping is deduped with an anchor
-    and alias when it appears more than once, not duplicated."""
+    """A custom object represented as a mapping is deduped with an anchor/alias when repeated."""
 
     class Box:
         def __init__(self, value):
@@ -513,8 +475,7 @@ def test_shared_custom_object_aliases():
 
 
 def test_cycle_through_custom_object_resolves_to_alias():
-    """A reference cycle through a custom (represented) object resolves to an
-    alias instead of hitting the depth limit."""
+    """A reference cycle through a custom object resolves to an alias."""
 
     class Node:
         def __init__(self):
@@ -533,9 +494,7 @@ def test_cycle_through_custom_object_resolves_to_alias():
 
 
 def test_flow_sequence_downgrades_block_scalar_child():
-    """A block scalar inside a flow collection is invalid YAML, so a
-    ``style="literal"`` child of a ``flow=True`` sequence is downgraded to a
-    quoted scalar rather than emitted as a block."""
+    """A block scalar inside a flow collection is invalid YAML."""
 
     def rep(value):
         if isinstance(value, list):
@@ -551,8 +510,7 @@ def test_flow_sequence_downgrades_block_scalar_child():
 
 
 def test_descriptor_tag_is_validated():
-    """A descriptor tag is checked with the emit-side tag rules, so a malformed
-    tag raises rather than corrupting the output."""
+    """A descriptor tag is checked with the emit-side tag rules."""
     with pytest.raises(yamlrocks.YAMLRocksEncodeError):
         yamlrocks.dumps(
             {"k": "v"},
@@ -573,8 +531,7 @@ def test_descriptor_tag_is_validated():
     ],
 )
 def test_emit_options_compose_with_represent(option):
-    """Deferring on everything under an emit option matches a plain `dumps` with
-    that option: `represent` composes with the emit-shaping flags."""
+    """Deferring under an emit option matches a plain dumps with that option."""
     doc = {"b": [1, 2], "a": 3}
     opt = 0 if option is None else getattr(yamlrocks, option)
     assert yamlrocks.dumps(
@@ -583,8 +540,7 @@ def test_emit_options_compose_with_represent(option):
 
 
 def test_shared_nested_sequence_emits_anchor():
-    """A shared list nested inside a sequence emits its anchor on the dash line,
-    so the later alias has a definition (previously the anchor was dropped)."""
+    """A shared list nested inside a sequence emits its anchor on the dash line."""
     shared = [1]
     out = yamlrocks.dumps([shared, shared], represent=lambda v: None)
     assert out == b"- &id001\n  - 1\n- *id001\n"
@@ -594,9 +550,7 @@ def test_shared_nested_sequence_emits_anchor():
 
 
 def test_default_only_catches_unserializable_type_not_encode_errors():
-    """`default` is a fallback for an unrecognized type only; a genuine encode
-    error (non-UTF-8 bytes) propagates instead of being masked, matching plain
-    `dumps`."""
+    """`default` is a fallback for an unrecognized type only; a genuine encode error."""
     doc = {"b": b"\xff\xfe"}
     with pytest.raises(yamlrocks.YAMLRocksEncodeError):
         yamlrocks.dumps(doc, default=lambda o: "x", represent=lambda v: None)
@@ -606,9 +560,7 @@ def test_default_only_catches_unserializable_type_not_encode_errors():
 
 
 def test_non_progressing_default_raises_cleanly():
-    """A `default` that returns its argument is a value defined only in terms of
-    itself: it raises cleanly rather than recursing into a native stack overflow
-    or emitting a malformed anchored alias."""
+    """A default that returns its own argument raises cleanly instead of overflowing."""
 
     class Unserializable:
         pass
@@ -618,9 +570,7 @@ def test_non_progressing_default_raises_cleanly():
 
 
 def test_canonical_tags_are_normalized():
-    """A canonical `tag:yaml.org,2002:*` tag (as PyYAML representers use) is
-    accepted and gets the same shorthand handling as `!!*`: an implicit bool
-    elides, and a str tag on a number quotes to stay a string."""
+    """A canonical `tag:yaml.org,2002:*` tag."""
 
     def rep(v):
         if v == "b":
@@ -634,8 +584,7 @@ def test_canonical_tags_are_normalized():
 
 
 def test_self_referential_serializer_raises():
-    """A serializer that tags its own input (a non-progressing result) raises
-    rather than recursing without bound."""
+    """A serializer that tags its own input."""
 
     class Thing:
         pass
@@ -649,9 +598,7 @@ def test_self_referential_serializer_raises():
 
 
 def test_default_result_shared_elsewhere_anchors_correctly():
-    """When `default` returns an object that is also present directly, the shared
-    object keeps its own anchor (a transparent delegation must not overwrite it),
-    so the alias has a definition and the output reloads."""
+    """When `default` returns an object that is also present directly."""
 
     class Custom:
         pass
@@ -665,9 +612,7 @@ def test_default_result_shared_elsewhere_anchors_correctly():
 
 
 def test_shared_mapping_as_sequence_item_anchors_correctly():
-    """A shared mapping nested as a sequence item carries its anchor on the dash
-    line (`- &id001` then the indented keys), not inline where it would bind to
-    the first key, so it reloads to two equal mappings."""
+    """A shared mapping nested as a sequence item carries its anchor on the dash line."""
     shared = {"x": 1}
     out = yamlrocks.dumps([shared, shared], represent=lambda v: None)
     assert out == b"- &id001\n  x: 1\n- *id001\n"
@@ -675,8 +620,7 @@ def test_shared_mapping_as_sequence_item_anchors_correctly():
 
 
 def test_chained_default_raises_like_plain_dumps():
-    """A `default` whose result is itself unsupported raises, matching plain
-    `dumps`: `default` is not re-invoked on its own result."""
+    """A `default` whose result is itself unsupported raises."""
 
     class A:
         pass
@@ -701,9 +645,7 @@ def test_chained_default_raises_like_plain_dumps():
     ],
 )
 def test_mapping_descriptor_pair_must_be_a_two_tuple(bad):
-    """A `YAMLRocksMapping` entry must be a 2-item `(key, value)` tuple; a longer
-    tuple, a list, or a 2-character string is rejected rather than silently
-    misread or dropping items."""
+    """A `YAMLRocksMapping` entry must be a 2-item `(key."""
     with pytest.raises(ValueError, match="key, value"):
         yamlrocks.dumps(
             "m",
@@ -712,9 +654,7 @@ def test_mapping_descriptor_pair_must_be_a_two_tuple(bad):
 
 
 def test_default_returning_container_with_original_raises():
-    """A `default` that returns a container referencing the original object has no
-    node to anchor the back-reference to, so it raises rather than emitting an
-    orphan alias (a plain `dumps` raises here too)."""
+    """A default returning a container that references the original object raises."""
 
     class C:
         pass
@@ -724,9 +664,7 @@ def test_default_returning_container_with_original_raises():
 
 
 def test_primitive_subclass_serializer_matches_plain_dumps():
-    """A `str`/`int` subclass registered in `serializers` is emitted as its
-    builtin (the serializer is not consulted), matching the fast path's dispatch
-    order, so a fully-deferred callback stays byte-identical."""
+    """A `str`/`int` subclass registered in `serializers` is emitted as its builtin."""
 
     class MyStr(str):
         pass
@@ -739,8 +677,7 @@ def test_primitive_subclass_serializer_matches_plain_dumps():
 
 
 def test_single_newline_string_keeps_chomping():
-    """A one-character `"\\n"` value keeps its trailing newline via a `|+` block,
-    matching plain `dumps`, rather than a clip `|` that would reload as empty."""
+    """A one-character `" "` value keeps its trailing newline via a `|+` block."""
     doc = {"k": "\n"}
     out = yamlrocks.dumps(doc, represent=lambda v: None)
     assert out == yamlrocks.dumps(doc)
@@ -748,9 +685,7 @@ def test_single_newline_string_keeps_chomping():
 
 
 def test_control_char_scalar_double_quotes_not_single():
-    """A value with a control character cannot be single-quoted (single quotes
-    escape nothing), so both a custom-tagged auto scalar and a deferred value
-    fall back to double quotes and reload correctly, matching plain `dumps`."""
+    """A value with a control character cannot be single-quoted."""
     tagged = yamlrocks.dumps(
         {"k": "v"},
         represent=lambda v: (
@@ -768,9 +703,7 @@ def test_control_char_scalar_double_quotes_not_single():
 
 
 def test_integers_beyond_i64_tie_like_plain_dumps():
-    """Integer keys past `i64` compare as `f64` (as the fast path treats a
-    BigInt), so two that round to the same float keep insertion order, matching
-    plain `dumps` rather than reordering."""
+    """Integer keys past `i64` compare as `f64`."""
     doc = {10**20: "a", 10**20 + 1: "b"}
     assert yamlrocks.dumps(
         doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda v: None
@@ -778,9 +711,7 @@ def test_integers_beyond_i64_tie_like_plain_dumps():
 
 
 def test_integer_keys_past_f64_range_still_sort_numeric():
-    """An integer key past `f64`'s range keeps the numeric rank (ahead of string
-    keys) instead of overflowing to the 'other' rank, and two that saturate to
-    the same infinity keep insertion order, matching plain `dumps`."""
+    """An integer key past `f64`'s range keeps the numeric rank."""
     doc = {10**400: "a", "z": "b", 10**400 + 1: "c"}
     assert yamlrocks.dumps(
         doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda v: None
@@ -788,8 +719,7 @@ def test_integer_keys_past_f64_range_still_sort_numeric():
 
 
 def test_large_integer_keys_sort_exactly():
-    """Integer keys keep their exact value when sorting, so two large `i64`s do
-    not collide (as they would if coerced to `f64`), matching plain `dumps`."""
+    """Integer keys keep their exact value when sorting."""
     doc = {9007199254740993: "a", 9007199254740992: "b"}
     assert yamlrocks.dumps(
         doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda v: None
@@ -797,10 +727,7 @@ def test_large_integer_keys_sort_exactly():
 
 
 def test_sort_keys_does_not_double_invoke_serializers():
-    """Sorting a mapping with serialized keys must not run the serializer an extra
-    time: the sort ranks such keys directly (they lower to a tagged node, which
-    sorts in input order), so each key's serializer is called exactly once, as in
-    a plain `dumps`."""
+    """Sorting a mapping with serialized keys must not invoke the serializer twice."""
 
     class Custom:
         def __init__(self, name: str) -> None:
@@ -830,10 +757,7 @@ def test_sort_keys_does_not_double_invoke_serializers():
 
 
 def test_sort_keys_deferred_bad_key_still_raises():
-    """A deferred key whose conversion genuinely errors (a non-UTF-8 `bytes` key)
-    still raises, matching a plain `dumps`. Sorting ranks it in input order rather
-    than deciding its fate, but lowering it (where `represent` deferred) then
-    raises, so the error is not swallowed."""
+    """A deferred key whose conversion genuinely errors."""
     doc = {b"\xff\xfe": 1, "a": 2}
     with pytest.raises(yamlrocks.YAMLRocksEncodeError):
         yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS, represent=lambda _: None)
@@ -842,10 +766,7 @@ def test_sort_keys_deferred_bad_key_still_raises():
 
 
 def test_sort_keys_lets_represent_rescue_an_unconvertible_key():
-    """`represent` runs first, so under `OPT_SORT_KEYS` a key the built-in
-    conversion cannot handle (a non-UTF-8 `bytes` key) is ranked in input order
-    for sorting and then rescued by the callback when lowered, rather than raising
-    during the sort pass."""
+    """`represent` runs first."""
 
     def rescue(v):
         return yamlrocks.YAMLRocksScalar("safe") if isinstance(v, bytes) else None
@@ -857,9 +778,7 @@ def test_sort_keys_lets_represent_rescue_an_unconvertible_key():
 
 
 def test_sort_keys_int_subclass_key_sorts_by_numeric_value():
-    """A large `int` subclass key that overrides `__str__` sorts by its real
-    numeric value (reduced through a base `int`), not the overridden text, matching
-    plain `dumps`."""
+    """A large `int` subclass key that overrides `__str__` sorts by its real numeric value."""
 
     class Weird(int):
         def __str__(self) -> str:
@@ -872,9 +791,7 @@ def test_sort_keys_int_subclass_key_sorts_by_numeric_value():
 
 
 def test_deferred_root_tagged_collection_indents_under_tag():
-    """A tagged block collection at the document root indents its body one step
-    under the tag (so the tag binds to the collection on reload), matching plain
-    `dumps` rather than emitting the body flush against the tag line."""
+    """A tagged block collection at the document root indents its body one step under the tag."""
     for doc in (
         yamlrocks.YAMLRocksTag("!foo", [1, 2, 3]),
         yamlrocks.YAMLRocksTag("!foo", {"k": "v"}),
@@ -889,9 +806,7 @@ def test_deferred_root_tagged_collection_indents_under_tag():
 
 
 def test_width_with_represent_raises():
-    """`width` line-wrapping is not implemented on the represent path, so passing
-    it raises rather than silently ignoring it (which would diverge from a plain
-    `dumps`)."""
+    """`width` line-wrapping is not implemented on the represent path."""
     with pytest.raises(ValueError, match="width is not supported"):
         yamlrocks.dumps({"k": "x" * 200}, width=80, represent=lambda _: None)
 
@@ -1013,8 +928,7 @@ _PARITY_OPTIONS = {
 
 @pytest.mark.parametrize("option_name", _PARITY_OPTIONS)
 def test_deferred_output_matches_plain_dumps(option_name):
-    """A fully deferred callback reproduces plain `dumps` byte-for-byte across a
-    broad corpus of types and structural positions, for each option combination."""
+    """A fully deferred callback reproduces plain dumps byte-for-byte across a broad corpus."""
     option = _PARITY_OPTIONS[option_name]
     for base in _parity_bases():
         try:

@@ -970,6 +970,14 @@ fn node_style(flow: bool) -> NodeStyle {
 /// content line, so a leading space or tab there would be swallowed (this emitter
 /// writes no explicit indentation indicator). A non-block style never applies.
 fn block_style_lossiness(value: &str, style: ScalarStyle) -> Option<&'static str> {
+    // Only block scalars are constrained here. A double-quoted scalar escapes a
+    // carriage return and every control character, and `plain`/`single` are the
+    // caller's explicit non-block choice, so none of them are rejected.
+    if !matches!(style, ScalarStyle::Literal | ScalarStyle::Folded) {
+        return None;
+    }
+    // A block scalar normalizes line endings and cannot hold a `\r` or a
+    // non-printable control.
     if value.contains('\r') {
         return Some("it contains a carriage return");
     }

@@ -232,6 +232,8 @@ def dumps(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], YAMLRocksScalar | YAMLRocksSequence | YAMLRocksMapping | None]
+    | None = None,
 ) -> bytes: ...
 ```
 
@@ -252,7 +254,14 @@ not `str`; decode with `.decode()` if you need text.
 - `width`: a best-effort maximum line length. `None` (the default) leaves lines
   unwrapped; an integer folds long scalars and flow collections at safe points
   (never changing the decoded value). See
-  [line width](/guides/dumping/#line-width-width).
+  [line width](/guides/dumping/#line-width-width). Not supported together with
+  `represent` (raises).
+- `represent`: a callback invoked for every value, returning a
+  [`YAMLRocksScalar`](#yamlrocksscalar) / [`YAMLRocksSequence`](#yamlrockssequence) /
+  [`YAMLRocksMapping`](#yamlrocksmapping) node descriptor to control how it emits,
+  or `None` to defer to the built-in rendering (byte-for-byte a plain `dumps`,
+  save for a few documented corners). The write-side equivalent of a PyYAML
+  representer. See [full control with `represent`](/guides/dumping/#full-control-with-represent).
 
 `dumps` also accepts a [`YAMLRocksDocument`](#yamlrocksdocument) to re-emit a round-tripped
 document.
@@ -279,6 +288,8 @@ def dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], YAMLRocksScalar | YAMLRocksSequence | YAMLRocksMapping | None]
+    | None = None,
 ) -> None: ...
 ```
 
@@ -641,6 +652,32 @@ tag.value   # '5'
 ```
 
 See the [custom tags guide](/guides/tags/).
+
+### `YAMLRocksScalar`
+
+A node descriptor returned by a [`dumps`](#dumps) `represent` callback to emit a
+value as a scalar. `YAMLRocksScalar(value, *, tag=None, style="auto")`.
+
+| Member             | Description                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
+| `value: str`       | The scalar text to emit.                                                                          |
+| `tag: str \| None` | An optional explicit tag (including its leading `!`).                                             |
+| `style: str`       | `"auto"` (let the emitter choose), `"plain"`, `"single"`, `"double"`, `"literal"`, or `"folded"`. |
+
+### `YAMLRocksSequence`
+
+A node descriptor returned by a `represent` callback to emit a value as a
+sequence. `YAMLRocksSequence(items, *, tag=None, flow=None)`. `items` is an
+iterable of host objects, each re-dispatched through `represent`; `flow=True`
+forces flow (`[a, b]`) style. See
+[full control with `represent`](/guides/dumping/#full-control-with-represent).
+
+### `YAMLRocksMapping`
+
+A node descriptor returned by a `represent` callback to emit a value as a
+mapping. `YAMLRocksMapping(pairs, *, tag=None, flow=None)`. `pairs` is an
+iterable of `(key, value)` tuples, each re-dispatched through `represent`;
+`flow=True` forces flow (`{a: b}`) style.
 
 ### `YAMLRocksTags`
 

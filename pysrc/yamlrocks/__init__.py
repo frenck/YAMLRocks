@@ -708,6 +708,7 @@ async def async_dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], Any] | None = None,
 ) -> None:
     """Serialize and write YAML off the event loop thread; see :func:`dump`.
 
@@ -723,4 +724,5 @@ async def async_dump(
         option=option,
         serializers=serializers,
         width=width,
+        represent=represent,
     )

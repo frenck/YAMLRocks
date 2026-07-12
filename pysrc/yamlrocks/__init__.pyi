@@ -500,6 +500,7 @@ async def async_dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], _Node | None] | None = None,
 ) -> None: ...
 def dump_includes(
     doc: YAMLRocksDocument,

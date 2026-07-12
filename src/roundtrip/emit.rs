@@ -277,8 +277,9 @@ impl RoundTripEmitter {
     fn emit_explicit_key_pair(&mut self, key: &YamlNode, val: &YamlNode, indent: usize) {
         // The cursor already sits at the key column (the caller wrote the
         // indentation or a `- ` dash). Emit `? <key>` then `: <value>`, with both
-        // indicators at `indent` and the key/value blocks one step deeper.
-        let child = indent + STEP;
+        // indicators at `indent` and the key/value blocks one configured step
+        // deeper (so `OPT_INDENT_4` applies to a represented block-collection key).
+        let child = indent + self.step();
         self.buf.push(b'?');
         match &key.kind {
             YamlNodeKind::Mapping(m) if key.style == NodeStyle::Block && !m.is_empty() => {
@@ -371,21 +372,19 @@ impl RoundTripEmitter {
             }
             // A `key:` with no value: emitted empty for a loaded null (preserving
             // it) and for a synthetic null whose style is `empty`. A synthetic
-            // null styled `null`/`~` falls through to the inline arm below. A tag
-            // is kept as a bare `key: !x` (never collapsed to `key:`, which drops
-            // it, nor expanded to `key: !x null`, which reloads as the string
-            // "null" rather than an empty value); this matches the fast path.
+            // null styled `null`/`~` falls through to the inline arm below. Any
+            // tag and/or anchor is kept as bare properties (`key: !x`,
+            // `key: !x &id001`, `key: &id001`), never collapsed to `key:` (which
+            // drops them) nor expanded to `key: !x null` (which reloads as the
+            // string "null" rather than an empty value); this matches the fast
+            // path and keeps a shared tagged empty value lossless under aliasing.
             _ if is_empty_scalar(val)
                 && val.comments.inline.is_none()
-                && val.anchor.is_none()
                 && self
                     .synthetic_null(val)
                     .map_or(true, |s| s == NullStyle::Empty) =>
             {
-                if let Some(ref tag) = val.tag {
-                    self.buf.push(b' ');
-                    self.buf.extend_from_slice(tag.as_bytes());
-                }
+                self.emit_anchor_tag_compact(val);
                 self.buf.push(b'\n');
             }
             _ => {
@@ -461,20 +460,18 @@ impl RoundTripEmitter {
         // A bare `-` (an empty entry) re-emits as a bare `-`: a loaded null
         // (originally written `-`, not `- null`), or a synthetic null whose
         // style is empty. An explicit `- null`/`- ~` is a scalar, not a null
-        // node, so it falls through and keeps its spelling. A tag is kept as a
-        // bare `- !x` (never expanded to `- !x null`, which reloads as the
-        // string "null" rather than an empty value); this matches the fast path.
+        // node, so it falls through and keeps its spelling. Any tag and/or anchor
+        // is kept as bare properties (`- !x`, `- !x &id001`, `- &id001`), never
+        // expanded to `- !x null` (which reloads as the string "null" rather than
+        // an empty value); this matches the fast path and keeps a shared tagged
+        // empty item lossless under aliasing.
         if is_empty_scalar(item)
             && item.comments.inline.is_none()
-            && item.anchor.is_none()
             && self
                 .synthetic_null(item)
                 .map_or(true, |style| style == NullStyle::Empty)
         {
-            if let Some(ref tag) = item.tag {
-                self.buf.push(b' ');
-                self.buf.extend_from_slice(tag.as_bytes());
-            }
+            self.emit_anchor_tag_compact(item);
             self.buf.push(b'\n');
             return;
         }

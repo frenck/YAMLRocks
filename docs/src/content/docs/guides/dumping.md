@@ -591,10 +591,12 @@ deferred values alike.
 
 Deferred output is byte-for-byte identical to a plain `dumps` in all but a few
 documented corners: a shared object gets a PyYAML-style anchor/alias where a
-plain `dumps` duplicates it; a non-primitive mapping key (a `datetime`, `UUID`,
-`Path`, or custom object) keeps insertion order under `OPT_SORT_KEYS` rather than
-being sorted by its rendered string; and `width` line-wrapping is not implemented
-(passing `width` with `represent` raises rather than silently ignoring it).
+plain `dumps` duplicates it (and a shared _tagged collection_ raises, since a
+YAML alias cannot carry the tag, where a plain `dumps` duplicates it); a
+non-primitive mapping key (a `datetime`, `UUID`, `Path`, or custom object) keeps
+insertion order under `OPT_SORT_KEYS` rather than being sorted by its rendered
+string; and `width` line-wrapping is not implemented (passing `width` with
+`represent` raises rather than silently ignoring it).
 
 ## Writing to a file with `dump`
 

@@ -100,6 +100,35 @@ def test_deferred_tagged_null_keeps_tag_without_null_token():
     assert yamlrocks.dumps([tag], represent=lambda _: None) == b"- !x\n"
 
 
+def test_shared_tagged_empty_value_keeps_tag_and_anchor_losslessly():
+    """A shared tagged empty value anchors the first occurrence and aliases the
+    rest, keeping the tag as a bare `!x &id001` (never `!x &id001 null`, which
+    would reload as the string "null"), so it reloads to the empty value."""
+    tag = yamlrocks.YAMLRocksTag("!x", None)
+    mapping = yamlrocks.dumps({"a": tag, "b": tag}, represent=lambda _: None)
+    assert mapping == b"a: !x &id001\nb: *id001\n"
+    assert yamlrocks.loads(mapping) == {"a": "", "b": ""}
+    sequence = yamlrocks.dumps([tag, tag], represent=lambda _: None)
+    assert sequence == b"- !x &id001\n- *id001\n"
+    assert yamlrocks.loads(sequence) == ["", ""]
+
+
+def test_indent_4_applies_to_a_represented_block_collection_key():
+    """`OPT_INDENT_4` indents a represented block-collection key (a custom key
+    whose `default` renders as a mapping) by four spaces, like other nodes."""
+
+    class Key:
+        pass
+
+    out = yamlrocks.dumps(
+        {Key(): 1},
+        option=yamlrocks.OPT_INDENT_4,
+        default=lambda o: {"x": {"y": 1}},
+        represent=lambda _: None,
+    )
+    assert out == b"?\n    x:\n        y: 1\n: 1\n"
+
+
 def test_deferred_non_first_tagged_key_uses_explicit_form():
     """A non-first tagged key is emitted in the explicit ``? key`` form, matching
     plain ``dumps``. An inline ``!tag key:`` after a previous entry binds its tag
@@ -240,6 +269,26 @@ def test_dump_forwards_represent_to_a_stream():
         ),
     )
     assert buffer.getvalue() == b"key: !extend 'my_id'\n"
+
+
+def test_async_dump_forwards_represent_to_a_stream():
+    """The async file wrapper ``async_dump`` forwards ``represent`` to ``dump``,
+    so the protocol is usable from async file writes like the sync ``dump``."""
+    import asyncio
+    import io
+
+    async def run() -> bytes:
+        buffer = io.BytesIO()
+        await yamlrocks.async_dump(
+            {"key": "my_id"},
+            buffer,
+            represent=lambda v: (
+                yamlrocks.YAMLRocksScalar(v, tag="!extend") if v == "my_id" else None
+            ),
+        )
+        return buffer.getvalue()
+
+    assert asyncio.run(run()) == b"key: !extend 'my_id'\n"
 
 
 def test_empty_tuple_is_not_aliased():
@@ -985,7 +1034,14 @@ def test_deferred_output_matches_plain_dumps(option_name):
                 if "shared value" in str(err):
                     continue
                 raise
-            # Accepted aliasing divergence: anchors on a shared object.
+            # Accepted aliasing divergence: the represent path anchors a shared
+            # object where plain `dumps` duplicates it, so the bytes differ. The
+            # reloaded value must still match, though: this is what catches a lossy
+            # anchor (e.g. a shared tagged null that emitted `!x &id001 null` and
+            # reloaded as the string "null" instead of an empty value).
             if b"&id" in deferred and b"&id" not in plain:
+                assert yamlrocks.loads(deferred) == yamlrocks.loads(plain), (
+                    f"aliasing reload mismatch: {base!r} in {doc!r} [{option_name}]"
+                )
                 continue
             assert deferred == plain, f"{base!r} in {doc!r} [{option_name}]"

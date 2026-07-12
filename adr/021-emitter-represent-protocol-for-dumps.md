@@ -83,14 +83,17 @@ following ship in v0.7 except line width:
 5. **Anchors for shared objects.** An `id()`-keyed pass emits a shared object
    once with `&idNNN` and aliases the repeats (`*idNNN`), and resolves a cycle to
    an alias rather than looping. Aliasability matches PyYAML's `ignore_aliases`
-   (everything except `None`/`bool`/`int`/`float`/`str`/`bytes`), so a shared
-   set, dataclass, or custom object represented as a mapping is deduped too.
-   Known limitation: a shared value that renders _under a tag_ cannot carry that
-   tag onto its alias (a YAML alias takes no tag), so a shared tagged value (a
-   repeated `YAMLRocksTag`, or a `serializers` result that tags a shared object)
-   raises rather than emitting it. A plain `dumps`, which never aliases, emits it
-   twice instead. This is the one place the accepted anchor divergence surfaces as
-   an error rather than differing bytes; it is safe (no silent data change).
+   (everything except `None`/`bool`/`int`/`float`/`str`/`bytes`/`()`), so a shared
+   set, dataclass, or custom object represented as a mapping is deduped too. A
+   shared _tagged_ value carries the tag on the anchored first occurrence and the
+   repeats become bare aliases: a shared tagged scalar or empty value works
+   (`!x &id001 v` … `*id001`). Known limitation: a shared tagged _collection_
+   raises, because the collection's own repeats already lower to an alias and a
+   YAML alias cannot take the tag; a `serializers` result that tags a shared
+   mapping/sequence is the usual trigger. A plain `dumps`, which never aliases,
+   emits it twice instead. This is the one place the accepted anchor divergence
+   surfaces as an error rather than differing bytes; it is safe (no silent data
+   change).
 6. **Every value, composed with `default`/`serializers`.** A deferred compound is
    decomposed into its child objects, which recurse through `represent`, so no
    value is skipped inside a set/dataclass/enum/numpy/`default` result; a deferred

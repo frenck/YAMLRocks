@@ -288,66 +288,21 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// Whether a multi-line string can be emitted as a literal block scalar (`|`)
-    /// that reads back identically. A literal block is the dominant real-world
-    /// style for multi-line content, so it is the default; strings it cannot
-    /// represent faithfully fall back to a double-quoted scalar.
-    ///
-    /// It cannot represent: a single-line string; a carriage return or other C0
-    /// control character (only `\n` and `\t` are allowed in block content); or a
-    /// first content line that begins with whitespace (the block's indentation is
-    /// auto-detected from it, which would silently swallow the leading spaces).
+    /// Whether a multi-line string can be emitted as a literal block scalar.
+    /// Delegates to the shared [`crate::emit_util::use_literal_block`] so the fast
+    /// encoder and the round-trip `represent` path agree.
     fn use_literal_block(value: &str) -> bool {
-        if !value.contains('\n') {
-            return false;
-        }
-        // A block scalar carries its content raw, so it cannot hold a carriage
-        // return (block line breaks are normalized) nor any non-printable
-        // character (a C0/C1 control, DEL, or a non-character); such a string
-        // falls back to a double-quoted scalar that can escape them.
-        if value
-            .chars()
-            .any(|c| c == '\r' || crate::emit_util::is_non_printable(c))
-        {
-            return false;
-        }
-        let first_content = value.split('\n').find(|line| !line.is_empty());
-        !matches!(first_content, Some(line) if line.starts_with([' ', '\t']))
+        crate::emit_util::use_literal_block(value)
     }
 
     /// Emit a string as a literal block scalar (`|`), choosing the chomping
     /// indicator from the value's trailing newlines so it round-trips exactly:
-    /// none → strip (`|-`), one → clip (`|`), two or more → keep (`|+`).
+    /// none → strip (`|-`), one → clip (`|`), two or more → keep (`|+`). The
+    /// writer is shared with the round-trip emitter
+    /// ([`crate::emit_util::push_block_scalar`]) so the chomping rules cannot
+    /// drift between the two.
     fn emit_literal_block(&mut self, value: &str, indent: usize) {
-        let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
-        let body = value.trim_end_matches('\n');
-
-        self.buf.push(b'|');
-        match trailing {
-            0 => self.buf.push(b'-'),
-            // Clip (a single trailing newline) cannot represent an all-newline
-            // value whose body is empty (`"\n"`): the body collapses to nothing
-            // and the lone newline is chomped away on re-read. Keep (`+`) so the
-            // trailing newline survives.
-            1 if body.is_empty() => self.buf.push(b'+'),
-            1 => {}
-            _ => self.buf.push(b'+'),
-        }
-        self.buf.push(b'\n');
-
-        for line in body.split('\n') {
-            if line.is_empty() {
-                self.buf.push(b'\n');
-            } else {
-                self.write_indent(indent);
-                self.buf.extend_from_slice(line.as_bytes());
-                self.buf.push(b'\n');
-            }
-        }
-        // For "keep", emit the blank lines beyond the single implicit newline.
-        for _ in 1..trailing {
-            self.buf.push(b'\n');
-        }
+        crate::emit_util::push_block_scalar(&mut self.buf, value, b'|', indent);
     }
 
     // -- Block sequence --
@@ -504,15 +459,7 @@ impl<'a> Emitter<'a> {
         // when the value can be represented that way (a single-quoted scalar
         // cannot contain a line break, nor escape a control character), otherwise
         // fall back to double.
-        let single_ok = !self.options.double_quotes
-            && !value.contains('\'')
-            && !value.contains('\n')
-            && !value.contains('\r')
-            && !value.bytes().any(|b| b < 0x20 || b == 0x7f)
-            // A single-quoted scalar cannot escape anything, so a C1 control or a
-            // non-character (which the byte check above misses) forces double
-            // quotes, where it can be escaped.
-            && !value.chars().any(crate::emit_util::is_non_printable);
+        let single_ok = crate::emit_util::single_quotable(value, self.options.double_quotes);
         if self.options.width > 0 && !self.emitting_key {
             // Fold the (already-escaped) body between the quotes. A space in the
             // body folds the same way as in a plain scalar; the surrounding

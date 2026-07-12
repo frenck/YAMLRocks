@@ -61,6 +61,29 @@ pub(crate) fn single_quoted_body(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+/// Whether a value that needs quoting can be single-quoted, or must be
+/// double-quoted. A value containing a single quote takes double quotes here
+/// (doubling every `'` reads noisier than one pair of double quotes), and
+/// `double_quotes` (the document preference) forces double directly. Shared by
+/// the fast encoder and the round-trip quoting rules so both choose the same
+/// quote character.
+pub(crate) fn single_quotable(value: &str, double_quotes: bool) -> bool {
+    !double_quotes && !value.contains('\'') && single_capable(value)
+}
+
+/// Whether single quotes can hold `value` at all: they cannot span a line break
+/// nor escape anything, so a `\n`/`\r`, a C0/DEL control, a C1 control, or a
+/// non-character rules them out. An apostrophe does *not*: single quotes
+/// represent it by doubling (`'it''s'`), which [`push_single_quoted`] applies.
+/// Callers that mirror PyYAML's tagged-scalar style use this directly, since
+/// PyYAML keeps single quotes for apostrophe-carrying values.
+pub(crate) fn single_capable(value: &str) -> bool {
+    !value.contains('\n')
+        && !value.contains('\r')
+        && !value.bytes().any(|b| b < 0x20 || b == 0x7f)
+        && !value.chars().any(is_non_printable)
+}
+
 /// Whether `c` falls outside YAML 1.2's `c-printable` set and so cannot appear
 /// raw in a scalar: it forces a plain scalar to be quoted and must be escaped
 /// inside a double-quoted one. This is the emitter's mirror of the scanner's
@@ -77,6 +100,29 @@ pub(crate) fn is_non_printable(c: char) -> bool {
         0xfffe | 0xffff => true,     // the two non-characters
         _ => false,
     }
+}
+
+/// Whether a multi-line string can be emitted as a literal block scalar (`|`)
+/// that reads back identically. A literal block is the dominant real-world style
+/// for multi-line content, so it is the default; strings it cannot represent
+/// faithfully fall back to a double-quoted scalar.
+///
+/// It cannot represent: a single-line string; a carriage return or other C0
+/// control character (only `\n` and `\t` are allowed in block content); or a
+/// first content line that begins with whitespace (the block's indentation is
+/// auto-detected from it, which would silently swallow the leading spaces).
+///
+/// Shared by the fast encoder and the round-trip `represent` path so both choose
+/// a literal block under exactly the same conditions.
+pub(crate) fn use_literal_block(value: &str) -> bool {
+    if !value.contains('\n') {
+        return false;
+    }
+    if value.chars().any(|c| c == '\r' || is_non_printable(c)) {
+        return false;
+    }
+    let first_content = value.split('\n').find(|line| !line.is_empty());
+    !matches!(first_content, Some(line) if line.starts_with([' ', '\t']))
 }
 
 /// The body of a double-quoted scalar (no surrounding quotes), with the escapes
@@ -107,6 +153,47 @@ pub(crate) fn double_quoted_body(value: &str) -> String {
         }
     }
     out
+}
+
+/// Append `value` to `buf` as a block scalar (`|` or `>` per `marker`), body
+/// lines at the absolute column `body_indent`. The chomping indicator is
+/// reverse-engineered from the value's trailing newlines, since chomping was
+/// already applied when the value was produced:
+///
+/// - 0 trailing → strip (`-`)
+/// - 1 trailing → clip (default, no indicator) — except an all-newline value
+///   whose body is empty (`"\n"`), where clip would chomp the lone newline away
+///   on re-read, so keep (`+`) preserves it
+/// - 2+ trailing → keep (`+`), preserving the extra blank lines
+///
+/// Shared by the fast encoder and the round-trip emitter so both write block
+/// scalars, and their chomping edge cases, identically.
+pub(crate) fn push_block_scalar(buf: &mut Vec<u8>, value: &str, marker: u8, body_indent: usize) {
+    let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
+    let body = value.trim_end_matches('\n');
+
+    buf.push(marker);
+    match trailing {
+        0 => buf.push(b'-'),
+        1 if body.is_empty() => buf.push(b'+'),
+        1 => {}
+        _ => buf.push(b'+'),
+    }
+    buf.push(b'\n');
+
+    for line in body.split('\n') {
+        if line.is_empty() {
+            buf.push(b'\n');
+        } else {
+            buf.resize(buf.len() + body_indent, b' ');
+            buf.extend_from_slice(line.as_bytes());
+            buf.push(b'\n');
+        }
+    }
+    // For "keep", emit the blank lines beyond the single implicit newline.
+    for _ in 1..trailing {
+        buf.push(b'\n');
+    }
 }
 
 /// Append `value` to `buf` as a single-quoted YAML scalar, doubling any `'`.

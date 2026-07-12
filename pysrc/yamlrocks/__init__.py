@@ -46,7 +46,10 @@ from yamlrocks._yamlrocks import (
     YAMLRocksAnnotatedList,
     YAMLRocksDocument,
     YAMLRocksDocumentView,
+    YAMLRocksMapping,
     YAMLRocksNode,
+    YAMLRocksScalar,
+    YAMLRocksSequence,
     YAMLRocksTag,
     dump_includes,
     dump_includes_map,
@@ -375,11 +378,14 @@ __all__ = [
     "YAMLRocksIncludeDepthError",
     "YAMLRocksIncludeError",
     "YAMLRocksIncludeNotFoundError",
+    "YAMLRocksMapping",
     "YAMLRocksNode",
     "YAMLRocksParseError",
+    "YAMLRocksScalar",
     "YAMLRocksSchemaError",
     "YAMLRocksSecretError",
     "YAMLRocksSecretNotFoundError",
+    "YAMLRocksSequence",
     "YAMLRocksTag",
     "YAMLRocksTags",
     "YAMLRocksUnserializableError",
@@ -532,6 +538,7 @@ def dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], Any] | None = None,
 ) -> None:
     """Serialize ``obj`` as YAML to a filesystem path or file-like object.
 
@@ -556,6 +563,7 @@ def dump(
         option=option,
         serializers=serializers,
         width=width,
+        represent=represent,
     )
     if hasattr(target, "write"):
         try:
@@ -700,6 +708,7 @@ async def async_dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], Any] | None = None,
 ) -> None:
     """Serialize and write YAML off the event loop thread; see :func:`dump`.
 
@@ -715,4 +724,5 @@ async def async_dump(
         option=option,
         serializers=serializers,
         width=width,
+        represent=represent,
     )

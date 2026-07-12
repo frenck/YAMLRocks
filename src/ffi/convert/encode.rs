@@ -186,7 +186,7 @@ fn python_to_value_inner(
 /// reload as the tag `!foo` on a (broken) value `,bar v`. A verbatim tag
 /// (`!<...>`) is delimited by its closing `>` and may carry such characters
 /// (URI commas), so it is exempt from the flow-indicator check but must close.
-fn validate_tag(tag: &str) -> PyResult<()> {
+pub(crate) fn validate_tag(tag: &str) -> PyResult<()> {
     if tag.is_empty() || !tag.starts_with('!') {
         return Err(errors::encode_error(format!(
             "invalid tag {tag:?}: a tag must start with '!'"
@@ -205,10 +205,26 @@ fn validate_tag(tag: &str) -> PyResult<()> {
                 "invalid tag {tag:?}: a verbatim tag must be '!<...>' with non-empty content"
             )));
         }
-    } else if let Some(bad) = tag.chars().find(|c| matches!(c, ',' | ']' | '}')) {
-        return Err(errors::encode_error(format!(
-            "invalid tag {tag:?}: a shorthand tag cannot contain a flow indicator (found {bad:?})"
-        )));
+    } else {
+        // A shorthand tag is `!suffix` (primary handle) or `!!suffix`
+        // (secondary handle). A *named* handle (`!h!suffix`) needs a
+        // `%TAG !h! ...` directive, which `dumps` never writes, so the output
+        // would not reload ("undefined tag handle"); reject it, along with any
+        // other stray `!` (a literal `!` inside a suffix must be URI-escaped
+        // as `%21` per the spec).
+        let suffix_start = if tag.starts_with("!!") { 2 } else { 1 };
+        if tag[suffix_start..].contains('!') {
+            return Err(errors::encode_error(format!(
+                "invalid tag {tag:?}: a named tag handle (!name!suffix) needs a %TAG directive, \
+                 which dumps does not emit; use a primary (!suffix), secondary (!!suffix), or \
+                 verbatim (!<uri>) tag"
+            )));
+        }
+        if let Some(bad) = tag.chars().find(|c| matches!(c, ',' | ']' | '}')) {
+            return Err(errors::encode_error(format!(
+                "invalid tag {tag:?}: a shorthand tag cannot contain a flow indicator (found {bad:?})"
+            )));
+        }
     }
     Ok(())
 }
@@ -227,7 +243,7 @@ fn tagged_to_value(
     };
     validate_tag(&tag)?;
     let inner = python_to_value(py, value.bind(py), ctx)?;
-    Ok(Value::Tagged(tag, Box::new(inner)))
+    attach_tag(tag, inner)
 }
 
 /// Interpret a `tags` callback's return value, which may be a [`YAMLRocksTag`]
@@ -245,12 +261,38 @@ fn tag_callback_result(
             let tag: String = tuple.get_item(0)?.extract()?;
             validate_tag(&tag)?;
             let inner = python_to_value(py, &tuple.get_item(1)?, ctx)?;
-            return Ok(Value::Tagged(tag, Box::new(inner)));
+            return attach_tag(tag, inner);
         }
     }
-    Err(errors::encode_error(
+    Err(bad_serializer_result())
+}
+
+/// The error for a `serializers` callback result that is neither a
+/// [`YAMLRocksTag`] nor a `(tag, value)` tuple. One constructor shared by the
+/// fast path and the represent lowering, so both raise the same type and
+/// message for the same malformed registry.
+pub(crate) fn bad_serializer_result() -> PyErr {
+    errors::encode_error(
         "a tags callback must return a YAMLRocksTag or a (tag, value) tuple".to_string(),
-    ))
+    )
+}
+
+/// The error for a tag wrapped around a value that already carries one. One
+/// constructor shared by the fast path and the represent lowering.
+pub(crate) fn nested_tag_error() -> PyErr {
+    errors::encode_error("cannot attach a tag to a value that already carries a tag".to_string())
+}
+
+/// Wrap a converted inner value in a tag. One node carries one tag: wrapping an
+/// already-tagged value (a nested `YAMLRocksTag`, or an inner value whose type
+/// serializes tagged) is rejected — the old double-tag output (`!a !b v`) was
+/// YAML that `loads` itself refuses. The represent path rejects the same shapes.
+fn attach_tag(tag: String, inner: Value<'static>) -> PyResult<Value<'static>> {
+    if matches!(inner, Value::Tagged(..)) {
+        crate::stack::drop_value_tree(inner);
+        return Err(nested_tag_error());
+    }
+    Ok(Value::Tagged(tag, Box::new(inner)))
 }
 
 /// Convert a Python `int` to a [`Value`], falling back to a big integer (the
@@ -332,7 +374,7 @@ fn dict_to_pairs(
 /// Convert a `datetime`/`date`/`time` to an ISO 8601 string, applying the
 /// datetime formatting options. Returns `None` when `obj` is not datetime-like
 /// or when datetimes are being passed through to `default`.
-fn datetime_to_value(
+pub(crate) fn datetime_to_value(
     obj: &Bound<'_, PyAny>,
     ctx: EncodeCtx<'_>,
 ) -> PyResult<Option<Value<'static>>> {
@@ -516,25 +558,22 @@ fn decimal_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<V
 }
 
 /// Whether `obj` is an `enum.Enum` instance (detected via its metaclass).
-fn is_enum(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub(crate) fn is_enum(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
     let metaclass = obj.get_type().get_type();
     let name = metaclass.name()?.to_string();
     Ok(name == "EnumType" || name == "EnumMeta")
 }
 
-/// Cached `numpy.ndarray` / `numpy.generic` types, resolved once. `None` means
-/// numpy is not importable, so nothing can be a numpy object.
-static NUMPY_TYPES: OnceLock<Option<(Py<PyAny>, Py<PyAny>)>> = OnceLock::new();
-
-/// Convert a numpy array (`tolist`) or scalar (`item`), but only for genuine
-/// numpy objects. The type is checked with `isinstance` against numpy's exported
-/// `ndarray`/`generic` classes rather than a `__module__` string prefix, so a
-/// look-alike from another module (e.g. `numpycompat`) does not take this path.
-fn numpy_to_value(
-    py: Python<'_>,
-    obj: &Bound<'_, PyAny>,
-    ctx: EncodeCtx<'_>,
-) -> PyResult<Option<Value<'static>>> {
+/// The child object a numpy value decomposes to: an array's `tolist()` (a nested
+/// list) or a scalar's `item()` (a Python scalar), or `None` when `obj` is not a
+/// genuine numpy object (checked with `isinstance` against numpy's exported
+/// `ndarray`/`generic`, so a look-alike from another module is not caught). The
+/// represent path re-dispatches this child so its elements still reach the
+/// callback, where the fast path would convert it straight to a `Value`.
+pub(crate) fn numpy_child<'py>(
+    py: Python<'py>,
+    obj: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
     let types = NUMPY_TYPES.get_or_init(|| {
         let numpy = py.import("numpy").ok()?;
         let ndarray = numpy.getattr("ndarray").ok()?.unbind();
@@ -548,10 +587,28 @@ fn numpy_to_value(
         return Ok(None);
     }
     if let Ok(list) = obj.call_method0("tolist") {
-        return Ok(Some(python_to_value(py, &list, ctx)?));
+        return Ok(Some(list));
     }
     if let Ok(item) = obj.call_method0("item") {
-        return Ok(Some(python_to_value(py, &item, ctx)?));
+        return Ok(Some(item));
     }
     Ok(None)
+}
+
+/// Cached `numpy.ndarray` / `numpy.generic` types, resolved once. `None` means
+/// numpy is not importable, so nothing can be a numpy object.
+static NUMPY_TYPES: OnceLock<Option<(Py<PyAny>, Py<PyAny>)>> = OnceLock::new();
+
+/// Convert a numpy array (`tolist`) or scalar (`item`), but only for genuine
+/// numpy objects. Detection and decomposition live in [`numpy_child`], shared
+/// with the represent path, so both classify numpy objects identically.
+fn numpy_to_value(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    ctx: EncodeCtx<'_>,
+) -> PyResult<Option<Value<'static>>> {
+    match numpy_child(py, obj)? {
+        Some(child) => Ok(Some(python_to_value(py, &child, ctx)?)),
+        None => Ok(None),
+    }
 }

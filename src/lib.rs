@@ -343,6 +343,9 @@ fn _yamlrocks(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ffi::YAMLRocksTag>()?;
     m.add_class::<ffi::YAMLRocksAnnotatedDict>()?;
     m.add_class::<ffi::YAMLRocksAnnotatedList>()?;
+    m.add_class::<ffi::YAMLRocksScalar>()?;
+    m.add_class::<ffi::YAMLRocksSequence>()?;
+    m.add_class::<ffi::YAMLRocksMapping>()?;
 
     Ok(())
 }

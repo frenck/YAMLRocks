@@ -327,6 +327,17 @@ def test_dumps_shorthand_tag_with_bracket_or_brace_is_allowed():
     assert yamlrocks.dumps(yamlrocks.YAMLRocksTag("!foo[bar", "v")) == b"!foo[bar v\n"
 
 
+def test_dumps_named_tag_handle_is_rejected():
+    """A named handle (`!h!x`) needs a `%TAG` directive dumps never writes, so emitting it would produce YAML `loads` rejects."""
+    import pytest
+
+    for bad in ["!h!x", "!e!foo", "!!str!x"]:
+        with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="named tag handle"):
+            yamlrocks.dumps(yamlrocks.YAMLRocksTag(bad, "v"))
+        with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="named tag handle"):
+            yamlrocks.dumps(object(), serializers={object: lambda o, _t=bad: (_t, "v")})
+
+
 def test_dumps_malformed_verbatim_tag_is_rejected():
     """A verbatim tag must be `!<...>` with non-empty content and a closing `>`."""
     import pytest

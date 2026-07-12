@@ -541,7 +541,11 @@ fn python_to_node_depth_inner(
 /// plain; otherwise the document's quote preference (double by default). A
 /// single-quoted scalar cannot hold a line break or a literal quote, so those
 /// fall back to double even in single-quote mode, mirroring the fast encoder.
-fn assigned_string_style(value: &str, double_quotes: bool, schema: Schema) -> ScalarStyle {
+pub(crate) fn assigned_string_style(
+    value: &str,
+    double_quotes: bool,
+    schema: Schema,
+) -> ScalarStyle {
     // Use the fast encoder's quoting rules verbatim rather than a second,
     // weaker check: a divergent copy let edited values (newlines, `...`, number
     // and bool/null look-alikes, leading indicators) emit unquoted and reparse
@@ -550,10 +554,12 @@ fn assigned_string_style(value: &str, double_quotes: bool, schema: Schema) -> Sc
     // that only 1.1 would re-read as a non-string.
     if !crate::encode::needs_quoting(value, schema) {
         ScalarStyle::Plain
-    } else if double_quotes || value.contains('\'') || value.contains('\n') || value.contains('\r')
-    {
-        ScalarStyle::DoubleQuoted
-    } else {
+    } else if crate::emit_util::single_quotable(value, double_quotes) {
         ScalarStyle::SingleQuoted
+    } else {
+        // A line break or a control/non-printable character cannot be single
+        // quoted, so double-quote it (where it can be escaped), matching the
+        // fast encoder.
+        ScalarStyle::DoubleQuoted
     }
 }

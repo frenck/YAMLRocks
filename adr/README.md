@@ -24,3 +24,4 @@ Each record captures what was chosen, the alternatives considered, and why.
 | [ADR-018](018-anchor-alias-creation-with-validity-guards.md)                    | Anchor/alias creation with validity guards                              |
 | [ADR-019](019-in-file-schema-references-yaml-language-server-directive.md)      | In-file schema references (yaml-language-server directive)              |
 | [ADR-020](020-annotated-mode-and-the-node-cursor-stay-separate-apis.md)         | Annotated mode and the `YAMLRocksNode` cursor stay separate APIs        |
+| [ADR-021](021-emitter-represent-protocol-for-dumps.md)                          | Emitter `represent` protocol for `dumps`                                |

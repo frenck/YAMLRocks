@@ -491,6 +491,137 @@ fallback. If you enable a passthrough flag without a `default` that handles the
 diverted type, YAMLRocks raises `YAMLRocksEncodeError`.
 :::
 
+## Full control with `represent`
+
+`default` and `serializers` shape _unknown_ types. When you need to control how
+**any** value emits, builtins included, with a specific tag or scalar style, pass
+a `represent` callback. YAMLRocks calls it for every value it is about to emit.
+Return a node descriptor to say exactly how to render that value, or `None` to
+defer to the built-in rendering:
+
+```python
+import yamlrocks
+
+class Secret:
+    def __init__(self, name):
+        self.name = name
+
+def represent(value):
+    if isinstance(value, Secret):
+        return yamlrocks.YAMLRocksScalar(value.name, tag="!secret")
+    return None
+
+yamlrocks.dumps({"password": Secret("wifi"), "ssid": "home"}, represent=represent)
+# b"password: !secret 'wifi'\nssid: home\n"
+```
+
+The value that returned `None` (`"home"`) rendered exactly as a plain `dumps`
+would. The `Secret` became a `!secret` node. Note the single quotes: a scalar
+carrying a custom tag is quoted automatically. This is PyYAML's default style for
+a tagged scalar (the `!secret` tag survives a plain `!secret wifi` too; the
+quoting is the style, not what preserves the tag), so a host's representers port
+across without hand-annotating quote styles.
+
+### The node descriptors
+
+`represent` returns one of three descriptors, or `None`:
+
+<!-- verify: skip -->
+
+```python
+yamlrocks.YAMLRocksScalar(value, *, tag=None, style="auto")
+yamlrocks.YAMLRocksSequence(items, *, tag=None, flow=None)
+yamlrocks.YAMLRocksMapping(pairs, *, tag=None, flow=None)
+```
+
+- `tag` writes an explicit tag. A standard tag the value already resolves to
+  (`!!bool` on `true`, `!!float` on `1.0e17`) is elided; a custom tag is kept.
+- `style` is one of `"auto"`, `"plain"`, `"single"`, `"double"`, `"literal"`
+  (a `|` block), or `"folded"` (a `>` block). `"auto"` lets the emitter quote as
+  needed. An explicit style is honored, but one the value cannot survive a
+  reload in raises `ValueError` instead of silently corrupting the output: a
+  `"plain"` with a line break, a leading indicator, or a `': '`/`' #'` sequence;
+  a `"single"` with a control character; a `"literal"`/`"folded"` with content a
+  block scalar cannot hold. `"double"` can escape anything and is never
+  rejected. A plain rendering that merely re-reads as another _type_ (forcing
+  `"plain"` on `"true"` or `"1.5"`) is allowed; that type change is the point of
+  forcing it. Two positional downgrades apply after that validation: a block
+  style inside a flow collection, or on a mapping key, is emitted quoted
+  (block scalars are invalid there), and a plain style whose value cannot
+  stand plain inside a flow collection (it contains a flow indicator such as
+  `,`) is emitted quoted in that position too. Both keep the value intact.
+- `items` and `pairs` hold your **original** objects, not pre-rendered nodes.
+  YAMLRocks re-dispatches each child through `represent`, so you only ever
+  describe one level. Indentation, flow, `sort_keys`, and shared-object anchoring
+  stay with the library. A one-shot iterable (a generator, `dict.items()`) is
+  snapshotted when the descriptor is constructed, so returning the same
+  descriptor for several values emits the same items every time.
+- A collection-valued mapping key emits inline as a flow collection
+  (`{x: 1}: v`), matching a plain `dumps`; a descriptor with `flow=False`
+  opts a key into the explicit `? ` block form instead.
+
+A forced block scalar, for example, is just a style:
+
+```python
+import yamlrocks
+
+def represent(value):
+    if isinstance(value, str) and value.startswith("return"):
+        return yamlrocks.YAMLRocksScalar(value, tag="!lambda", style="literal")
+    return None
+
+yamlrocks.dumps({"on_press": "return x + 1;"}, represent=represent)
+# b'on_press: !lambda |-\n  return x + 1;\n'
+```
+
+### Shared objects become anchors
+
+Because the emitter drives the recursion, it sees the whole object graph. A value
+that appears more than once emits once with an anchor and aliases the repeats, so
+the YAML stays compact and the anchor/alias structure is preserved:
+
+```python
+import yamlrocks
+
+shared = {"host": "localhost", "port": 8080}
+yamlrocks.dumps({"primary": shared, "backup": shared}, represent=lambda v: None)
+# b'primary: &id001\n  host: localhost\n  port: 8080\nbackup: *id001\n'
+```
+
+On a plain `loads`, an alias reloads as an equal but distinct object (the fast
+loader copies the anchored value); load with `OPT_ANNOTATED` if you need the
+reloaded Python objects to share identity the way the anchors imply.
+
+Anchoring follows the object that actually produces the emitted node. A value
+that only renders through a per-occurrence conversion (a `default` callback
+minting a fresh result each call, a NumPy array's `tolist()`) emits an
+independent copy per occurrence, exactly as a plain `dumps` does; when the
+conversion returns the _same_ object every time (a cached result), that shared
+result is anchored and aliased as usual.
+
+`represent` composes with everything else. It runs first; a value it defers on
+(`None`) falls through to the normal pipeline, so `default`, `serializers`, and
+the datetime/dataclass/numpy handling still apply, and a deferred value renders
+as it would from a plain `dumps`. `represent` is offered every value, including
+those nested inside a deferred set, dataclass, or `default` result. `OPT_SORT_KEYS`
+(by type and value, numbers numerically), `OPT_FLOW_STYLE`, `OPT_EXPLICIT_START`,
+`OPT_EXPLICIT_END`, `OPT_INDENT_4`, `OPT_INDENTLESS_SEQUENCES`, the null-style
+flags, and the quote-style flag all apply, to what `represent` returns and to
+deferred values alike.
+
+Deferred output is byte-for-byte identical to a plain `dumps` in all but a few
+documented corners: a shared object gets a PyYAML-style anchor/alias where a
+plain `dumps` duplicates it (and a tag wrapping an already-anchored shared value
+raises, since a YAML alias cannot carry the tag); a mapping key that needs a
+conversion (a `datetime`, `UUID`, `Path`, `Decimal`, `Enum`, or custom object)
+keeps insertion order under `OPT_SORT_KEYS` rather than being sorted by its
+converted form (`bytes` keys sort with the strings, as a plain `dumps` does);
+`width` line-wrapping is not implemented (passing `width` with `represent`
+raises rather than silently ignoring it); and because the lowering re-enters
+Python for every value, the supported nesting depth is bounded by the thread's
+stack (hundreds of levels; deeper raises a clean error where a plain `dumps`
+goes further).
+
 ## Writing to a file with `dump`
 
 `dump` is the file-oriented counterpart to `dumps`. Give it a path or an open

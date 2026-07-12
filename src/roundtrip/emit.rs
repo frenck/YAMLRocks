@@ -59,8 +59,58 @@ pub fn emit_roundtrip(node: &YamlNode) -> Vec<u8> {
     emit_roundtrip_with(node, NullStyle::Null)
 }
 
+/// Dump-shaping options for a *synthetic* tree emitted through the round-trip
+/// emitter (the `dumps(represent=...)` path). They only affect edited-in nodes
+/// with no source layout to preserve, so the fidelity guarantee for loaded
+/// documents (which use [`emit_roundtrip_with`], leaving these at their default)
+/// is untouched.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DumpConfig {
+    /// Indent a block sequence a step under its key (`k:\n  - a`, the PyYAML
+    /// style) rather than at the key's own column. Synthetic sequences have no
+    /// recorded source column, so without this they emit flush.
+    pub indent_sequences: bool,
+    /// Emit an explicit `...` end marker after the document (`OPT_EXPLICIT_END`).
+    /// The `---` start marker is carried on the root node's `explicit_start`.
+    pub explicit_end: bool,
+    /// Spaces per nesting level for mappings and block scalars under a key: the
+    /// default two, or four when `OPT_INDENT_4` is set. Zero means "unset", read
+    /// through [`RoundTripEmitter::step`] as the default [`STEP`]. Block-sequence
+    /// item content is always two columns past the dash regardless, matching the
+    /// fast encoder.
+    pub indent: usize,
+    /// Align a block sequence under a key with the key's own column instead of
+    /// indenting it a step (`OPT_INDENTLESS_SEQUENCES`). Only consulted on the
+    /// dump path (`indent_sequences`).
+    pub indentless: bool,
+    /// Prefer single quotes when the emitter must quote a scalar on its own (a
+    /// flow-unsafe or BOM-leading plain), mirroring `OPT_SINGLE_QUOTES` and the
+    /// fast encoder's quote preference. The default (off) keeps the loaded-
+    /// document behavior: double quotes, which can escape anything.
+    pub single_quotes: bool,
+}
+
+/// Emit a single synthetic document tree with dump-shaping options applied. Used
+/// by the `represent` emitter path, which builds edited-in nodes and wants a
+/// PyYAML-style dump rather than round-trip fidelity.
+pub fn emit_roundtrip_dump(node: &YamlNode, null_style: NullStyle, dump: DumpConfig) -> Vec<u8> {
+    let mut emitter = RoundTripEmitter::new(null_style);
+    emitter.dump = dump;
+    if node.leading_bom {
+        emitter.buf.extend_from_slice(BOM);
+    }
+    emitter.emit_document(node);
+    if dump.explicit_end {
+        emitter.buf.extend_from_slice(b"...\n");
+    }
+    emitter.buf
+}
+
 struct RoundTripEmitter {
     buf: Vec<u8>,
+    /// Dump-shaping options for a synthetic tree (the `represent` path). Default
+    /// (all off) preserves the fidelity behavior for loaded documents.
+    dump: DumpConfig,
     /// How a synthetic (edited-in) null is rendered. Loaded nulls ignore this and
     /// re-emit in their original form.
     null_style: NullStyle,
@@ -77,8 +127,21 @@ impl RoundTripEmitter {
     fn new(null_style: NullStyle) -> Self {
         Self {
             buf: Vec::with_capacity(256),
+            dump: DumpConfig::default(),
             null_style,
             flow_depth: 0,
+        }
+    }
+
+    /// Spaces per nesting level for mappings and block scalars under a key: the
+    /// dump config's indent when set (four for `OPT_INDENT_4`), else the default
+    /// [`STEP`] of two. Block-sequence item content is always `+2` past the dash
+    /// (the fast encoder's fixed offset) and does not go through here.
+    fn step(&self) -> usize {
+        if self.dump.indent > 0 {
+            self.dump.indent
+        } else {
+            STEP
         }
     }
 
@@ -114,20 +177,50 @@ impl RoundTripEmitter {
             self.emit_foot(&node.comments, 0);
             return;
         }
+        // A synthetic (dump-path) root block collection that carries a tag emits
+        // the tag on its own line, then its body indented one step under it, so
+        // the tag binds to the collection on reload, matching the fast encoder's
+        // `!tag` + `emit_value_after_colon(inner, 0)`. A loaded collection keeps
+        // its source column (body at 0 here), and an untagged root sits flush.
+        let tagged_root = node.synthetic && node.tag.is_some();
         match &node.kind {
             YamlNodeKind::Mapping(pairs) if node.style == NodeStyle::Block && !pairs.is_empty() => {
                 self.emit_anchor_tag_line(node, 0);
-                self.emit_block_mapping(pairs, 0);
+                let body = if tagged_root { self.step() } else { 0 };
+                self.emit_block_mapping(pairs, body);
             }
             YamlNodeKind::Sequence(items)
                 if node.style == NodeStyle::Block && !items.is_empty() =>
             {
                 self.emit_anchor_tag_line(node, 0);
-                self.emit_block_sequence(items, 0);
+                // Indentless keeps the dashes flush with the tag even for a tagged
+                // root sequence, as the fast encoder does.
+                let body = if tagged_root && !self.dump.indentless {
+                    self.step()
+                } else {
+                    0
+                };
+                self.emit_block_sequence(items, body);
+            }
+            // A synthetic tagged empty null at the root keeps just its tag on its
+            // own line (`!t`), matching the fast path's Tagged + empty-null
+            // handling; the `null` token (`!t null`) would reload as the string
+            // "null" rather than an empty value. A bare (untagged) null still
+            // renders as the `null` keyword via the inline arm below.
+            YamlNodeKind::Null
+                if node.synthetic
+                    && node.tag.is_some()
+                    && node.comments.inline.is_none()
+                    && node.anchor.is_none()
+                    && matches!(self.synthetic_null(node), Some(NullStyle::Empty)) =>
+            {
+                self.emit_anchor_tag_line(node, 0);
             }
             _ => {
                 self.emit_anchor_tag(node);
-                self.emit_inline_content(node, 0);
+                // A root block scalar's body sits one step in, matching the fast
+                // encoder's `emit_literal_block(s, step())`.
+                self.emit_inline_content(node, self.step());
                 self.emit_inline_comment(&node.comments);
                 self.end_line();
             }
@@ -146,17 +239,17 @@ impl RoundTripEmitter {
     }
 
     fn emit_block_mapping(&mut self, pairs: &[(YamlNode, YamlNode)], indent: usize) {
-        for (key, val) in pairs {
+        for (i, (key, val)) in pairs.iter().enumerate() {
             self.emit_blank_before(&key.comments);
             self.emit_head(&key.comments, indent);
             self.write_indent(indent);
-            if key_needs_explicit(key) {
+            if key_needs_explicit(key) || synthetic_key_needs_explicit(key, i == 0) {
                 self.emit_explicit_key_pair(key, val, indent);
                 continue;
             }
             self.emit_anchor_tag(key);
             self.emit_inline_content(key, indent);
-            self.buf.push(b':');
+            self.end_inline_key(key);
             self.emit_value_after_colon(val, indent);
         }
     }
@@ -173,15 +266,26 @@ impl RoundTripEmitter {
                 self.emit_head(&key.comments, indent);
                 self.write_indent(indent);
             }
-            if key_needs_explicit(key) {
+            if key_needs_explicit(key) || synthetic_key_needs_explicit(key, i == 0) {
                 self.emit_explicit_key_pair(key, val, indent);
                 continue;
             }
             self.emit_anchor_tag(key);
             self.emit_inline_content(key, indent);
-            self.buf.push(b':');
+            self.end_inline_key(key);
             self.emit_value_after_colon(val, indent);
         }
+    }
+
+    /// Write the `:` that closes an inline mapping key. An alias key needs a
+    /// space before it: anchor and alias names may contain `:` (the scanner is
+    /// spec-strict here, per the YAML test suite's W5VH), so a glued `*id001:`
+    /// would scan as the alias "id001:" and the document could not reload.
+    fn end_inline_key(&mut self, key: &YamlNode) {
+        if matches!(key.kind, YamlNodeKind::Alias(_)) {
+            self.buf.push(b' ');
+        }
+        self.buf.push(b':');
     }
 
     /// Emit one mapping pair in explicit `?`/`:` block form, for a complex key
@@ -189,8 +293,9 @@ impl RoundTripEmitter {
     fn emit_explicit_key_pair(&mut self, key: &YamlNode, val: &YamlNode, indent: usize) {
         // The cursor already sits at the key column (the caller wrote the
         // indentation or a `- ` dash). Emit `? <key>` then `: <value>`, with both
-        // indicators at `indent` and the key/value blocks one step deeper.
-        let child = indent + STEP;
+        // indicators at `indent` and the key/value blocks one configured step
+        // deeper (so `OPT_INDENT_4` applies to a represented block-collection key).
+        let child = indent + self.step();
         self.buf.push(b'?');
         match &key.kind {
             YamlNodeKind::Mapping(m) if key.style == NodeStyle::Block && !m.is_empty() => {
@@ -209,7 +314,7 @@ impl RoundTripEmitter {
             _ => {
                 self.buf.push(b' ');
                 self.emit_anchor_tag(key);
-                self.emit_inline_content(key, indent);
+                self.emit_inline_content(key, indent + self.step());
                 self.end_line();
             }
         }
@@ -227,7 +332,7 @@ impl RoundTripEmitter {
     }
 
     fn emit_value_after_colon_inner(&mut self, val: &YamlNode, indent: usize) {
-        let child = indent + STEP;
+        let child = indent + self.step();
         if let Some(ref source) = val.source {
             self.buf.push(b' ');
             self.emit_directive(source);
@@ -256,7 +361,21 @@ impl RoundTripEmitter {
                 // indented a step further. The composer records the `-` column on
                 // the sequence node's span, so re-emit it where it was written
                 // instead of always indenting (which would reflow every list).
-                let seq_indent = if (val.span.column as usize) <= indent {
+                // On the dump path (`represent`), synthetic sequences have no
+                // source column, so indent a step under the key (the PyYAML style)
+                // instead of the flush default, unless indentless is requested
+                // (`OPT_INDENTLESS_SEQUENCES`), which aligns the dashes with the
+                // key's own column, matching the fast encoder. A tagged sequence
+                // always indents under its tag even in indentless mode (as the
+                // fast path does): the tag sits on the line above, so flush dashes
+                // would not bind to it and the tag would be lost on reload.
+                let seq_indent = if self.dump.indent_sequences {
+                    if self.dump.indentless && val.tag.is_none() {
+                        indent
+                    } else {
+                        child
+                    }
+                } else if (val.span.column as usize) <= indent {
                     indent
                 } else {
                     child
@@ -269,14 +388,19 @@ impl RoundTripEmitter {
             }
             // A `key:` with no value: emitted empty for a loaded null (preserving
             // it) and for a synthetic null whose style is `empty`. A synthetic
-            // null styled `null`/`~` falls through to the inline arm below.
+            // null styled `null`/`~` falls through to the inline arm below. Any
+            // tag and/or anchor is kept as bare properties (`key: !x`,
+            // `key: !x &id001`, `key: &id001`), never collapsed to `key:` (which
+            // drops them) nor expanded to `key: !x null` (which reloads as the
+            // string "null" rather than an empty value); this matches the fast
+            // path and keeps a shared tagged empty value lossless under aliasing.
             _ if is_empty_scalar(val)
                 && val.comments.inline.is_none()
-                && val.anchor.is_none()
                 && self
                     .synthetic_null(val)
                     .map_or(true, |s| s == NullStyle::Empty) =>
             {
+                self.emit_anchor_tag_compact(val);
                 self.buf.push(b'\n');
             }
             _ => {
@@ -286,7 +410,9 @@ impl RoundTripEmitter {
                     self.buf.push(b' ');
                 }
                 self.emit_anchor_tag(val);
-                self.emit_inline_content(val, indent);
+                // A block-scalar value's body sits one step past the key, matching
+                // the fast encoder (`emit_literal_block(s, indent + step())`).
+                self.emit_inline_content(val, indent + self.step());
                 self.emit_inline_comment(&val.comments);
                 // Block scalars already end with their own newline(s).
                 self.end_line();
@@ -350,30 +476,54 @@ impl RoundTripEmitter {
         // A bare `-` (an empty entry) re-emits as a bare `-`: a loaded null
         // (originally written `-`, not `- null`), or a synthetic null whose
         // style is empty. An explicit `- null`/`- ~` is a scalar, not a null
-        // node, so it falls through and keeps its spelling.
+        // node, so it falls through and keeps its spelling. Any tag and/or anchor
+        // is kept as bare properties (`- !x`, `- !x &id001`, `- &id001`), never
+        // expanded to `- !x null` (which reloads as the string "null" rather than
+        // an empty value); this matches the fast path and keeps a shared tagged
+        // empty item lossless under aliasing.
         if is_empty_scalar(item)
             && item.comments.inline.is_none()
-            && item.anchor.is_none()
-            && item.tag.is_none()
             && self
                 .synthetic_null(item)
                 .map_or(true, |style| style == NullStyle::Empty)
         {
+            self.emit_anchor_tag_compact(item);
             self.buf.push(b'\n');
             return;
         }
         match &item.kind {
             YamlNodeKind::Mapping(m) if item.style == NodeStyle::Block && !m.is_empty() => {
-                self.buf.push(b' ');
-                self.emit_anchor_tag(item);
-                self.emit_block_mapping_after_dash(m, child);
+                if item.anchor.is_some() || item.tag.is_some() {
+                    // An anchored/tagged block mapping carries its marker on the
+                    // dash line, then breaks to the indented keys. Emitting it
+                    // inline (`- &a key: value`) would bind the marker to the
+                    // first key rather than the mapping. The body indents by the
+                    // configured step (like the fast path, which routes a tagged
+                    // item through `emit_value_after_colon`), not the fixed +2 of
+                    // the compact inline form below.
+                    self.emit_anchor_tag_compact(item);
+                    self.buf.push(b'\n');
+                    self.emit_block_mapping(m, indent + self.step());
+                } else {
+                    self.buf.push(b' ');
+                    self.emit_block_mapping_after_dash(m, child);
+                }
                 // A trailing comment block at the end of this item's mapping.
                 self.emit_foot(&item.comments, child);
             }
             YamlNodeKind::Sequence(s) if item.style == NodeStyle::Block && !s.is_empty() => {
-                // A compact nested sequence (`- - 1`) keeps its first item on
-                // this dash line; otherwise it breaks to the next, indented.
-                if item.comments.compact {
+                if item.anchor.is_some() || item.tag.is_some() {
+                    // An anchored/tagged nested block sequence carries its marker
+                    // on the dash line, then breaks to the indented items (the
+                    // compact `- -` form cannot hold a leading `&anchor`/tag). A
+                    // nested sequence's items sit two columns past the dash (the
+                    // fast path's fixed offset), unlike a mapping item above.
+                    self.emit_anchor_tag_compact(item);
+                    self.buf.push(b'\n');
+                    self.emit_block_sequence(s, child);
+                } else if item.comments.compact {
+                    // A compact nested sequence (`- - 1`) keeps its first item on
+                    // this dash line; otherwise it breaks to the next, indented.
                     self.buf.push(b' ');
                     self.emit_block_sequence_after_dash(s, child);
                 } else {
@@ -441,7 +591,7 @@ impl RoundTripEmitter {
         }
     }
 
-    fn emit_scalar(&mut self, value: &str, style: ScalarStyle, indent: usize) {
+    fn emit_scalar(&mut self, value: &str, style: ScalarStyle, body_indent: usize) {
         match style {
             // A plain scalar whose first character is U+FEFF cannot be emitted
             // verbatim: if it lands at the start of the stream, the scanner
@@ -453,7 +603,7 @@ impl RoundTripEmitter {
             // produces a plain scalar starting with a bare indicator. Found by
             // the `roundtrip` fuzz target.
             ScalarStyle::Plain if value.starts_with('\u{feff}') => {
-                crate::emit_util::push_double_quoted(&mut self.buf, value);
+                self.push_quoted(value);
             }
             // Inside a flow collection a bare `,`/`[`/`]`/`{`/`}`/`: ` would end
             // the entry or collection early, so a plain scalar carrying one must
@@ -461,48 +611,43 @@ impl RoundTripEmitter {
             // never contains a bare flow indicator (the scanner would not produce
             // it). See [`plain_unsafe_in_flow`].
             ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => {
-                crate::emit_util::push_double_quoted(&mut self.buf, value);
+                self.push_quoted(value);
             }
             ScalarStyle::Plain => self.buf.extend_from_slice(value.as_bytes()),
             ScalarStyle::SingleQuoted => crate::emit_util::push_single_quoted(&mut self.buf, value),
             ScalarStyle::DoubleQuoted => crate::emit_util::push_double_quoted(&mut self.buf, value),
-            ScalarStyle::Literal => self.emit_block_scalar(value, indent, b'|'),
-            ScalarStyle::Folded => self.emit_block_scalar(value, indent, b'>'),
+            // Defensive: a block scalar is invalid inside a flow collection. The
+            // producers downgrade these before they get here (the represent
+            // lowering, the assignment style rules); if a future producer misses
+            // that, emit valid YAML rather than an unparsable `[|`.
+            ScalarStyle::Literal | ScalarStyle::Folded if self.flow_depth > 0 => {
+                crate::emit_util::push_double_quoted(&mut self.buf, value);
+            }
+            ScalarStyle::Literal => self.emit_block_scalar(value, body_indent, b'|'),
+            ScalarStyle::Folded => self.emit_block_scalar(value, body_indent, b'>'),
         }
     }
 
-    fn emit_block_scalar(&mut self, value: &str, indent: usize, marker: u8) {
-        let body_indent = indent + STEP;
-
-        // The scanner already applied chomping when producing `value`, so we
-        // reverse-engineer the indicator from its trailing newlines:
-        //   0 trailing  → strip  (`-`)
-        //   1 trailing  → clip   (default, no indicator)
-        //   2+ trailing → keep   (`+`), preserving the extra blank lines
-        let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
-        let body = value.trim_end_matches('\n');
-
-        self.buf.push(marker);
-        match trailing {
-            0 => self.buf.push(b'-'),
-            1 => {}
-            _ => self.buf.push(b'+'),
+    /// Quote a scalar the emitter must quote on its own (a flow-unsafe or
+    /// BOM-leading plain): double quotes by default, single when the dump
+    /// prefers them and the value allows it, mirroring the fast encoder's
+    /// `emit_quoted_string`.
+    fn push_quoted(&mut self, value: &str) {
+        if self.dump.single_quotes && crate::emit_util::single_quotable(value, false) {
+            crate::emit_util::push_single_quoted(&mut self.buf, value);
+        } else {
+            crate::emit_util::push_double_quoted(&mut self.buf, value);
         }
-        self.buf.push(b'\n');
+    }
 
-        for line in body.split('\n') {
-            if line.is_empty() {
-                self.buf.push(b'\n');
-            } else {
-                self.write_indent(body_indent);
-                self.buf.extend_from_slice(line.as_bytes());
-                self.buf.push(b'\n');
-            }
-        }
-        // For "keep", emit the blank lines beyond the single implicit newline.
-        for _ in 1..trailing {
-            self.buf.push(b'\n');
-        }
+    /// Emit a block scalar whose body lines sit at the absolute column
+    /// `body_indent`. The caller computes that column for its context (a mapping
+    /// value: `key + step`; a sequence item: `dash + 2`; the document root:
+    /// `step`), matching the fast encoder. The writer itself is shared with the
+    /// fast encoder ([`crate::emit_util::push_block_scalar`]) so the chomping
+    /// rules cannot drift between the two.
+    fn emit_block_scalar(&mut self, value: &str, body_indent: usize, marker: u8) {
+        crate::emit_util::push_block_scalar(&mut self.buf, value, marker, body_indent);
     }
 
     fn emit_flow_sequence(&mut self, items: &[YamlNode], indent: usize) {
@@ -528,7 +673,8 @@ impl RoundTripEmitter {
             }
             self.emit_anchor_tag(key);
             self.emit_inline_content(key, indent);
-            self.buf.extend_from_slice(b": ");
+            self.end_inline_key(key);
+            self.buf.push(b' ');
             self.emit_anchor_tag(val);
             self.emit_inline_content(val, indent);
         }
@@ -776,6 +922,18 @@ fn key_needs_explicit(key: &YamlNode) -> bool {
         YamlNodeKind::Scalar(_, ScalarStyle::Literal | ScalarStyle::Folded) => true,
         _ => false,
     }
+}
+
+/// Whether a synthetic (dump-path) key must switch to the explicit `? key` form
+/// because it is not the first entry and carries a tag or anchor. An inline
+/// `!tag key:` (or `&a key:`) after a previous entry has its property read as the
+/// preceding value's node property, which is a reparse error when that value was
+/// empty (`k:\n!tag key: v`) and a silent parity break otherwise. The explicit
+/// `?` indicator opens a fresh key the preceding value cannot absorb, matching
+/// the fast emitter. A loaded key is never synthetic, so its inline tag/anchor is
+/// left untouched for byte-for-byte fidelity.
+fn synthetic_key_needs_explicit(key: &YamlNode, is_first: bool) -> bool {
+    !is_first && key.synthetic && (key.tag.is_some() || key.anchor.is_some())
 }
 
 #[cfg(test)]

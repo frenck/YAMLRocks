@@ -1,5 +1,6 @@
 pub(crate) mod convert;
 mod errors;
+mod represent;
 mod types;
 
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ use convert::{
     annotate_node, node_to_python_with_tags, python_to_value, value_to_python_stream,
     value_to_python_with, EncodeCtx, TagPolicy,
 };
+pub use represent::{YAMLRocksMapping, YAMLRocksScalar, YAMLRocksSequence};
 pub use types::{YAMLRocksAnnotatedDict, YAMLRocksAnnotatedList, YAMLRocksTag};
 
 #[derive(Clone, Copy)]
@@ -581,7 +583,7 @@ pub fn yaml_version(py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
 }
 
 #[pyfunction]
-#[pyo3(signature = (obj, /, *, default=None, option=None, serializers=None, width=None))]
+#[pyo3(signature = (obj, /, *, default=None, option=None, serializers=None, width=None, represent=None))]
 pub fn dumps(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
@@ -589,12 +591,13 @@ pub fn dumps(
     option: Option<u64>,
     serializers: Option<Py<PyDict>>,
     width: Option<usize>,
+    represent: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let opts = option.unwrap_or(0);
 
     // A round-trip document re-emits from its own preserved layout, so the
-    // emit-shaping arguments (option, width, serializers, default) do not
-    // apply here and are intentionally ignored; round-trip styles win.
+    // emit-shaping arguments (option, width, serializers, default, represent)
+    // do not apply here and are intentionally ignored; round-trip styles win.
     if let Ok(doc) = obj.cast::<YAMLRocksDocument>() {
         return doc.borrow().to_yaml(py);
     }
@@ -610,11 +613,10 @@ pub fn dumps(
         obj
     };
 
-    let mut emit_options = build_emit_options(opts);
-    // The null style comes from the option flags (OPT_NULL_AS_KEYWORD / _TILDE).
-    emit_options.null_style = null_style_from_opts(opts)?;
-    // Best-effort line wrapping; 0 (the default) leaves lines unwrapped.
-    emit_options.width = width.unwrap_or(0);
+    // The encode context is shared by the represent branch and the plain path
+    // below, built once so a new encode option cannot be wired into one and
+    // silently missed in the other (which would break the deferred byte-for-byte
+    // parity between the two).
     let ctx = EncodeCtx {
         default: default.as_ref(),
         serialize_numpy: opts & OPT_SERIALIZE_NUMPY != 0,
@@ -626,6 +628,65 @@ pub fn dumps(
         tags: serializers.as_ref(),
         depth: 0,
     };
+
+    // A `represent` callback shapes how the host's own objects emit, including
+    // builtins, with per-value style and tags. Lower the object into a synthetic
+    // round-trip node tree and emit it through the round-trip emitter, which
+    // speaks per-node style/tag/flow; the fast `Value` emitter does not. See
+    // ADR-021.
+    if let Some(represent) = represent {
+        // Width-based line folding is not implemented on the represent path (the
+        // round-trip emitter does not wrap). Rather than silently ignore a
+        // requested `width` and diverge from a plain `dumps`, reject the
+        // combination explicitly.
+        if width.unwrap_or(0) > 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "width is not supported together with represent yet",
+            ));
+        }
+        let double_quotes = opts & OPT_SINGLE_QUOTES == 0;
+        let schema = Schema::new(opts & OPT_YAML_1_1 != 0, opts & OPT_PYYAML_COMPAT != 0);
+        let null_style = null_style_from_opts(opts)?;
+        let mut node = represent::represent_to_node(
+            py,
+            obj,
+            represent.bind(py),
+            ctx,
+            opts & OPT_SORT_KEYS != 0,
+            opts & OPT_FLOW_STYLE != 0,
+            double_quotes,
+            schema,
+        )?;
+        // The `---` start marker rides on the root node; the `...` end marker is
+        // appended by the emitter.
+        node.explicit_start = opts & OPT_EXPLICIT_START != 0;
+        let dump = crate::roundtrip::emit::DumpConfig {
+            // Synthetic sequences have no source column; indent them a step under
+            // their key (the PyYAML dump style) rather than flush.
+            indent_sequences: true,
+            explicit_end: opts & OPT_EXPLICIT_END != 0,
+            indent: if opts & OPT_INDENT_4 != 0 { 4 } else { 2 },
+            indentless: opts & OPT_INDENTLESS_SEQUENCES != 0,
+            single_quotes: opts & OPT_SINGLE_QUOTES != 0,
+        };
+        let bytes = py.detach(|| {
+            let bytes = crate::roundtrip::emit::emit_roundtrip_dump(&node, null_style, dump);
+            // Dismantle the synthetic AST iteratively, with the GIL still
+            // detached, so a deeply nested represent tree (bounded by
+            // `MAX_REPRESENT_DEPTH`) cannot overflow the native stack on its
+            // recursive drop. Mirrors the loaded-document teardown. See
+            // [`crate::stack`].
+            crate::stack::drop_node_tree(node);
+            bytes
+        });
+        return Ok(PyBytes::new(py, &bytes).into_any().unbind());
+    }
+
+    let mut emit_options = build_emit_options(opts);
+    // The null style comes from the option flags (OPT_NULL_AS_KEYWORD / _TILDE).
+    emit_options.null_style = null_style_from_opts(opts)?;
+    // Best-effort line wrapping; 0 (the default) leaves lines unwrapped.
+    emit_options.width = width.unwrap_or(0);
     let value = python_to_value(py, obj, ctx)?;
     // Emission is pure Rust over an owned value tree, so release the GIL for it;
     // this is what makes `async_dumps` non-blocking on the event loop.

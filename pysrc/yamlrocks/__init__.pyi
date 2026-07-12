@@ -1,8 +1,8 @@
 """Type stubs for YAMLRocks."""
 
 import os
-from collections.abc import Callable, Sequence
-from typing import Any, Protocol
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any, Literal, Protocol
 
 # The exception hierarchy is defined (and typed) in yamlrocks.exceptions; re-export
 # it here so `yamlrocks.YAMLRocks*Error` resolves through the package.
@@ -325,6 +325,48 @@ class YAMLRocksTag:
     value: Any
     def __init__(self, tag: str, value: Any) -> None: ...
 
+# Node descriptors returned by a ``dumps(represent=...)`` callback.
+_Style = Literal["auto", "plain", "single", "double", "literal", "folded"]
+
+class YAMLRocksScalar:
+    def __init__(
+        self, value: str, *, tag: str | None = None, style: _Style = "auto"
+    ) -> None: ...
+    @property
+    def value(self) -> str: ...
+    @property
+    def tag(self) -> str | None: ...
+    @property
+    def style(self) -> _Style: ...
+
+class YAMLRocksSequence:
+    def __init__(
+        self, items: Iterable[Any], *, tag: str | None = None, flow: bool | None = None
+    ) -> None: ...
+    @property
+    def items(self) -> list[Any] | tuple[Any, ...]: ...
+    @property
+    def tag(self) -> str | None: ...
+    @property
+    def flow(self) -> bool | None: ...
+
+class YAMLRocksMapping:
+    def __init__(
+        self,
+        pairs: Iterable[tuple[Any, Any]],
+        *,
+        tag: str | None = None,
+        flow: bool | None = None,
+    ) -> None: ...
+    @property
+    def pairs(self) -> list[tuple[Any, Any]] | tuple[tuple[Any, Any], ...]: ...
+    @property
+    def tag(self) -> str | None: ...
+    @property
+    def flow(self) -> bool | None: ...
+
+_Node = YAMLRocksScalar | YAMLRocksSequence | YAMLRocksMapping
+
 class YAMLRocksTags(dict[str, Callable[[Any], Any]]):
     def register(
         self,
@@ -394,6 +436,7 @@ def dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], _Node | None] | None = None,
 ) -> None: ...
 def loads_all(
     data: bytes | bytearray | memoryview | str,
@@ -411,6 +454,7 @@ def dumps(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], _Node | None] | None = None,
 ) -> bytes: ...
 def to_json(
     obj: Any,
@@ -474,6 +518,7 @@ async def async_dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], _Node | None] | None = None,
 ) -> None: ...
 def dump_includes(
     doc: YAMLRocksDocument,

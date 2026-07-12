@@ -38,6 +38,22 @@ pub(crate) fn guard<R>(f: impl FnOnce() -> R) -> R {
     stacker::maybe_grow(RED_ZONE, STACK_SIZE, f)
 }
 
+/// Whether enough native stack remains to recurse one more level of a descent
+/// that re-enters Python (the `represent` lowering, where every level may call
+/// the callback, `default`, or a serializer).
+///
+/// Such a descent must *not* grow onto a new segment the way [`guard`] does:
+/// CPython validates its C stack against the thread's original stack bounds,
+/// and Python code running on a detached segment trips a fatal "Unrecoverable
+/// stack overflow" abort instead of raising. The caller checks headroom per
+/// level and raises a clean depth error when it runs low. An unknown remaining
+/// size (no platform stack bounds) counts as headroom: that is the pre-guard
+/// status quo, and every tier-one platform reports bounds.
+#[inline]
+pub(crate) fn python_call_headroom() -> bool {
+    stacker::remaining_stack().map_or(true, |remaining| remaining > RED_ZONE)
+}
+
 use crate::decode::Value;
 use crate::roundtrip::ast::{YamlNode, YamlNodeKind};
 

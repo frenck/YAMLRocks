@@ -252,6 +252,7 @@ pub fn represent_to_node(
         schema,
         seen: HashSet::new(),
         aliased: HashSet::new(),
+        delegated: false,
         retained: Vec::new(),
     };
     let mut root = ctx.lower(obj, 0, false, false)?;
@@ -276,6 +277,15 @@ struct Lower<'py, 'r, 'c> {
     schema: Schema,
     seen: HashSet<usize>,
     aliased: HashSet<usize>,
+    /// Whether the node just produced by [`Lower::render`] came from lowering a
+    /// *different* Python object in the rendered object's place (an Enum's
+    /// value, a numpy `tolist()`/`item()`, a `default` result). Set by the
+    /// delegating branches immediately before they return and consumed
+    /// (`mem::take`) by `lower_inner` right after `render`, so it is `false`
+    /// outside that window. A field rather than a `(YamlNode, bool)` return
+    /// value on purpose: the wider return type measurably fattened every
+    /// recursion frame in debug builds and shrank the supported nesting depth.
+    delegated: bool,
     /// A strong reference to every object recorded in `seen`, so its `id()`
     /// (a raw pointer) stays valid for the whole lowering. Without this a
     /// temporary from `default`/numpy could be freed and its address reused by a
@@ -344,15 +354,20 @@ impl Lower<'_, '_, '_> {
         }
 
         let mut node = self.render(obj, depth, in_flow, in_key)?;
+        // Consume the delegation flag unconditionally, so it can never leak
+        // past this render into a sibling's bookkeeping.
+        let delegated_child = std::mem::take(&mut self.delegated);
         if !aliasable {
             return Ok(node);
         }
         // `render` either materializes a *new* node for this object (a
         // container/scalar it built, with no anchor yet) or delegates
-        // transparently to a child (enum value, numpy, a `default`/serializer
-        // result), returning the child's node, which already carries the child's
-        // anchor or is an alias.
-        let delegated = matches!(node.kind, YamlNodeKind::Alias(_)) || node.anchor.is_some();
+        // transparently to a child (enum value, numpy, a `default` result),
+        // reported explicitly by `delegated_child`. The node-shape checks stay
+        // as a defensive backstop: a delegated child's node may carry the
+        // child's anchor or be an alias, and neither may ever be re-owned here.
+        let delegated =
+            delegated_child || matches!(node.kind, YamlNodeKind::Alias(_)) || node.anchor.is_some();
         if !delegated {
             // A node this object materialized itself: stamp its id, which
             // `name_anchors` later turns into a real anchor name (or strips if it
@@ -383,6 +398,15 @@ impl Lower<'_, '_, '_> {
 
     /// The node for `obj`: the representer's result, or the built-in rendering
     /// when the host defers. Alias bookkeeping is the caller's ([`lower_inner`]).
+    ///
+    /// Delegation (the node came from lowering *another* Python object in this
+    /// object's place: an Enum's value, a numpy `tolist()`/`item()`, a `default`
+    /// result) is reported through [`Lower::delegated`], set by those branches
+    /// in [`Lower::deferred_node`]. A delegating object must not claim the
+    /// node's identity, so a per-occurrence conversion reruns for a repeat,
+    /// exactly as a plain `dumps` does; inferring delegation from the node shape
+    /// instead would misclassify a scalar `default` result (no anchor to see)
+    /// and alias the wrapper, caching a stateful `default`'s first result.
     fn render(
         &mut self,
         obj: &Bound<'_, PyAny>,
@@ -392,6 +416,7 @@ impl Lower<'_, '_, '_> {
     ) -> PyResult<YamlNode> {
         let described = self.represent.call1((obj,))?;
         if !described.is_none() {
+            // A descriptor describes *this* object, which owns the node.
             return self.descriptor_to_node(&described, depth, in_flow, in_key);
         }
         self.deferred_node(obj, depth, in_flow, in_key)
@@ -447,7 +472,10 @@ impl Lower<'_, '_, '_> {
         if let Ok(set) = obj.cast::<PyFrozenSet>() {
             return self.sequence_node(set.iter().collect(), depth, None, None, in_flow, in_key);
         }
-        // A load-side custom-tagged value (`OPT_PASSTHROUGH_TAG` output).
+        // A load-side custom-tagged value (`OPT_PASSTHROUGH_TAG` output). The
+        // wrapper owns the tagged node it produces (the inner value's identity
+        // is untracked by `tagged_node`), so a repeated wrapper aliases: the
+        // same tag either way, losslessly.
         if let Ok(tag_obj) = obj.cast::<YAMLRocksTag>() {
             let (tag, inner) = {
                 let borrowed = tag_obj.borrow();
@@ -455,7 +483,9 @@ impl Lower<'_, '_, '_> {
             };
             return self.tagged_node(tag, inner.bind(self.py), depth, in_flow, in_key);
         }
-        // A `serializers` entry for this exact type: a custom `!tag value`.
+        // A `serializers` entry for this exact type: a custom `!tag value`. The
+        // registry is keyed on the type, so the serialized object owns its
+        // tagged node and a repeat aliases to the same (deterministic) result.
         if let Some(registry) = self.encode.tags {
             if let Some(func) = registry.bind(self.py).get_item(obj.get_type())? {
                 let result = func.call1((obj,))?;
@@ -467,14 +497,18 @@ impl Lower<'_, '_, '_> {
         // dataclass that also exposes `isoformat()` serializes as that scalar, not
         // as its members or fields. Honors `OPT_PASSTHROUGH_DATETIME` (the
         // converter returns `None` when passthrough is on, falling through to the
-        // Enum/dataclass/`default` handling exactly as the fast path does).
+        // Enum/dataclass/`default` handling exactly as the fast path does). The
+        // datetime itself owns the scalar (a rendering, not a delegation).
         if let Some(value) = crate::ffi::convert::datetime_to_value(obj, self.encode)? {
             return Ok(self.value_to_node(value, in_flow || in_key));
         }
-        // Enum: its value, re-dispatched. Through `lower` (not `render`) so the
-        // depth increments and the stack headroom check applies.
+        // Enum: its value, re-dispatched — a delegation, so the member never
+        // claims the value's node. Through `lower` (not `render`) so the depth
+        // increments and the stack headroom check applies.
         if is_enum(obj)? {
-            return self.lower(&obj.getattr("value")?, depth + 1, in_flow, in_key);
+            let node = self.lower(&obj.getattr("value")?, depth + 1, in_flow, in_key)?;
+            self.delegated = true;
+            return Ok(node);
         }
         // Dataclass instance: a mapping of its fields.
         if !self.encode.passthrough_dataclass
@@ -491,10 +525,13 @@ impl Lower<'_, '_, '_> {
             return self.mapping_node(entries, depth, None, None, in_flow, in_key);
         }
         // numpy array/scalar (opt-in): re-dispatch its list/scalar form through
-        // `lower` (depth-bounded, headroom-checked).
+        // `lower` (depth-bounded, headroom-checked) — a delegation, since
+        // `tolist()`/`item()` mint a fresh child per call.
         if self.encode.serialize_numpy {
             if let Some(child) = numpy_child(self.py, obj)? {
-                return self.lower(&child, depth + 1, in_flow, in_key);
+                let node = self.lower(&child, depth + 1, in_flow, in_key)?;
+                self.delegated = true;
+                return Ok(node);
             }
         }
         // A scalar leaf (str/int/float/bool/None/datetime/Decimal/UUID/Path/...).
@@ -509,7 +546,11 @@ impl Lower<'_, '_, '_> {
             // fast path; a genuine encode error (non-UTF-8 bytes, a lone
             // surrogate) is propagated unchanged rather than masked by `default`.
             // The result re-dispatches through `lower` so its children reach
-            // `represent` and a non-progressing `default` is depth-bounded.
+            // `represent` and a non-progressing `default` is depth-bounded. A
+            // delegation: the callback may mint a fresh result per occurrence
+            // (even a stateful scalar), so the original object never claims the
+            // result's node and a repeat re-invokes `default`, as a plain
+            // `dumps` does.
             Err(err) if err.is_instance_of::<YAMLRocksUnserializableError>(self.py) => {
                 match self.encode.default {
                     Some(default) => {
@@ -522,7 +563,9 @@ impl Lower<'_, '_, '_> {
                         let prev = self.encode.default.take();
                         let lowered = self.lower(result.bind(self.py), depth + 1, in_flow, in_key);
                         self.encode.default = prev;
-                        lowered
+                        let node = lowered?;
+                        self.delegated = true;
+                        Ok(node)
                     }
                     None => Err(err),
                 }

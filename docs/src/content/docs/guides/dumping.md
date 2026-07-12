@@ -545,8 +545,11 @@ yamlrocks.YAMLRocksMapping(pairs, *, tag=None, flow=None)
   block scalar cannot hold. `"double"` can escape anything and is never
   rejected. A plain rendering that merely re-reads as another _type_ (forcing
   `"plain"` on `"true"` or `"1.5"`) is allowed; that type change is the point of
-  forcing it. A block style inside a flow collection, or on a mapping key, is
-  downgraded to a quoted style, since block scalars are invalid there.
+  forcing it. Two positional downgrades apply after that validation: a block
+  style inside a flow collection, or on a mapping key, is emitted quoted
+  (block scalars are invalid there), and a plain style whose value cannot
+  stand plain inside a flow collection (it contains a flow indicator such as
+  `,`) is emitted quoted in that position too. Both keep the value intact.
 - `items` and `pairs` hold your **original** objects, not pre-rendered nodes.
   YAMLRocks re-dispatches each child through `represent`, so you only ever
   describe one level. Indentation, flow, `sort_keys`, and shared-object anchoring

@@ -1081,6 +1081,53 @@ def test_wrapper_tag_on_self_referential_value_raises():
         yamlrocks.dumps([tag, cyclic], represent=lambda _: None)
 
 
+def test_stateful_scalar_default_runs_per_occurrence_like_plain_dumps():
+    """A repeated object whose `default` returns fresh scalars re-invokes the callback per occurrence, matching plain dumps."""
+
+    class Box:
+        pass
+
+    box = Box()
+
+    def make_default():
+        counter = {"n": 0}
+
+        def default(obj):
+            counter["n"] += 1
+            return str(counter["n"])
+
+        return default
+
+    deferred = yamlrocks.dumps(
+        [box, box], default=make_default(), represent=lambda _: None
+    )
+    assert deferred == yamlrocks.dumps([box, box], default=make_default())
+    assert deferred == b'- "1"\n- "2"\n'
+
+
+def test_explicit_plain_style_in_flow_downgrades_to_quotes():
+    """An explicit plain style whose value cannot stand plain in flow is emitted quoted there, keeping the value intact."""
+
+    def rep(v):
+        if v == "s":
+            return yamlrocks.YAMLRocksSequence(["m"], flow=True)
+        if v == "m":
+            return yamlrocks.YAMLRocksScalar("a,b", style="plain")
+        return None
+
+    out = yamlrocks.dumps({"k": "s"}, represent=rep)
+    assert out == b'k: ["a,b"]\n'
+    assert yamlrocks.loads(out) == {"k": ["a,b"]}
+    # In block context the same explicit plain is honored verbatim.
+    block = yamlrocks.dumps(
+        {"k": "m"},
+        represent=lambda v: (
+            yamlrocks.YAMLRocksScalar("a,b", style="plain") if v == "m" else None
+        ),
+    )
+    assert block == b"k: a,b\n"
+
+
 def test_shared_object_behind_fresh_default_results_matches_plain_dumps():
     """A repeated object whose `default` mints a fresh result per occurrence emits independent copies, byte-identical to plain dumps."""
 

@@ -48,9 +48,10 @@ emitted by `emit_roundtrip_*`.
 
 **Route chosen (and why the first instinct was wrong):** the initial plan was to
 add a per-scalar style override to the fast `Value` emitter. Investigation killed
-it. The fast emitter cannot emit a literal `|` block at all, has no per-node style
-or per-node flow, and always shows a tag; adding all of that to the hot emitter is
-large and risky. Worse, a style channel on the decode-shared `Value` enum pollutes
+it. The fast emitter auto-selects a literal `|` block only for eligible multi-line
+strings; it has no caller-selected per-node style, no per-node flow, and always
+shows a tag; adding all of that to the hot emitter is large and risky. Worse, a
+style channel on the decode-shared `Value` enum pollutes
 ~10 exhaustive match sites in decode/resolver/schema that must never see an
 encode-only node. The round-trip `YamlNode` already models style (plain/single/
 double/literal/folded), per-node tag, per-node flow, and anchors, and there is
@@ -83,6 +84,12 @@ following ship in v0.7 except line width:
    an alias rather than looping. Aliasability matches PyYAML's `ignore_aliases`
    (everything except `None`/`bool`/`int`/`float`/`str`/`bytes`), so a shared
    set, dataclass, or custom object represented as a mapping is deduped too.
+   Known limitation: a shared value that renders _under a tag_ cannot carry that
+   tag onto its alias (a YAML alias takes no tag), so a shared tagged value (a
+   repeated `YAMLRocksTag`, or a `serializers` result that tags a shared object)
+   raises rather than emitting it. A plain `dumps`, which never aliases, emits it
+   twice instead. This is the one place the accepted anchor divergence surfaces as
+   an error rather than differing bytes; it is safe (no silent data change).
 6. **Every value, composed with `default`/`serializers`.** A deferred compound is
    decomposed into its child objects, which recurse through `represent`, so no
    value is skipped inside a set/dataclass/enum/numpy/`default` result; a deferred

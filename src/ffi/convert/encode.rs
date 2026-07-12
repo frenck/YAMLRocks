@@ -248,9 +248,23 @@ fn tag_callback_result(
             return attach_tag(tag, inner);
         }
     }
-    Err(errors::encode_error(
+    Err(bad_serializer_result())
+}
+
+/// The error for a `serializers` callback result that is neither a
+/// [`YAMLRocksTag`] nor a `(tag, value)` tuple. One constructor shared by the
+/// fast path and the represent lowering, so both raise the same type and
+/// message for the same malformed registry.
+pub(crate) fn bad_serializer_result() -> PyErr {
+    errors::encode_error(
         "a tags callback must return a YAMLRocksTag or a (tag, value) tuple".to_string(),
-    ))
+    )
+}
+
+/// The error for a tag wrapped around a value that already carries one. One
+/// constructor shared by the fast path and the represent lowering.
+pub(crate) fn nested_tag_error() -> PyErr {
+    errors::encode_error("cannot attach a tag to a value that already carries a tag".to_string())
 }
 
 /// Wrap a converted inner value in a tag. One node carries one tag: wrapping an
@@ -260,9 +274,7 @@ fn tag_callback_result(
 fn attach_tag(tag: String, inner: Value<'static>) -> PyResult<Value<'static>> {
     if matches!(inner, Value::Tagged(..)) {
         crate::stack::drop_value_tree(inner);
-        return Err(errors::encode_error(
-            "cannot attach a tag to a value that already carries a tag".to_string(),
-        ));
+        return Err(nested_tag_error());
     }
     Ok(Value::Tagged(tag, Box::new(inner)))
 }

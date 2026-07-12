@@ -184,7 +184,7 @@ def test_represent_deep_nesting_raises_cleanly():
         child: list = []
         cursor.append(child)
         cursor = child
-    with pytest.raises(ValueError, match="too deeply nested"):
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="too deeply nested"):
         yamlrocks.dumps(deep, represent=lambda _: None)
 
 
@@ -891,7 +891,7 @@ def test_nested_tag_raises_on_both_paths():
     nested = yamlrocks.YAMLRocksTag("!outer", yamlrocks.YAMLRocksTag("!inner", "v"))
     with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="already carries a tag"):
         yamlrocks.dumps(nested)
-    with pytest.raises(ValueError, match="already carries a tag"):
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="already carries a tag"):
         yamlrocks.dumps(nested, represent=lambda _: None)
 
 
@@ -1047,6 +1047,23 @@ def test_descriptor_reference_cycle_is_collectable():
     del items, descriptor, canary
     gc.collect()
     assert ref() is None
+
+
+def test_malformed_serializer_result_raises_the_same_error_on_both_paths():
+    """A serializers callback returning neither a tag nor a (tag, value) tuple raises the same encode error with and without represent."""
+
+    class Marker:
+        pass
+
+    serializers = {Marker: lambda v: 42}
+    with pytest.raises(
+        yamlrocks.YAMLRocksEncodeError, match="tags callback must return"
+    ):
+        yamlrocks.dumps(Marker(), serializers=serializers)
+    with pytest.raises(
+        yamlrocks.YAMLRocksEncodeError, match="tags callback must return"
+    ):
+        yamlrocks.dumps(Marker(), serializers=serializers, represent=lambda _: None)
 
 
 def test_document_dump_ignores_represent():

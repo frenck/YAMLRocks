@@ -28,7 +28,10 @@ use pyo3::types::{
 };
 
 use crate::decode::Value;
-use crate::ffi::convert::{is_enum, numpy_child, python_to_value, validate_tag, EncodeCtx};
+use crate::ffi::convert::{
+    bad_serializer_result, is_enum, nested_tag_error, numpy_child, python_to_value, validate_tag,
+    EncodeCtx,
+};
 use crate::ffi::YAMLRocksTag;
 use crate::resolver::{ScalarKind, Schema};
 use crate::roundtrip::ast::{NodeStyle, YamlNode, YamlNodeKind};
@@ -312,11 +315,10 @@ impl Lower<'_, '_, '_> {
         // stack against the thread's original bounds, and Python code running on
         // a grown segment aborts with a fatal "Unrecoverable stack overflow"
         // instead of raising. When headroom runs low, fail with the same clean
-        // error the depth cap gives.
+        // error the depth cap gives (the type and message the fast path raises
+        // for the same too-deep input).
         if !crate::stack::python_call_headroom() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "object is too deeply nested to serialize (possible self-reference)",
-            ));
+            return Err(too_deep_error());
         }
         self.lower_inner(obj, depth, in_flow, in_key)
     }
@@ -329,9 +331,7 @@ impl Lower<'_, '_, '_> {
         in_key: bool,
     ) -> PyResult<YamlNode> {
         if depth >= MAX_REPRESENT_DEPTH {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "object is too deeply nested to serialize (possible self-reference)",
-            ));
+            return Err(too_deep_error());
         }
 
         // A non-scalar object (matching PyYAML's `ignore_aliases`) is aliasable: a
@@ -743,12 +743,11 @@ impl Lower<'_, '_, '_> {
         }
         // One node carries one tag: wrapping an already-tagged value (a nested
         // `YAMLRocksTag`, or an inner value whose type serializes tagged) would
-        // silently drop one of the two, so it is rejected on both paths.
+        // silently drop one of the two, so it is rejected on both paths with
+        // the same shared error.
         if node.tag.is_some() {
             crate::stack::drop_node_tree(node);
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "cannot attach a tag to a value that already carries a tag",
-            ));
+            return Err(nested_tag_error());
         }
         // The tag belongs to *this* occurrence (the wrapper), not to the inner
         // value: untrack the inner value so a later occurrence lowers a fresh
@@ -796,9 +795,9 @@ impl Lower<'_, '_, '_> {
                 return self.tagged_node(tag, &value, depth, in_flow, in_key);
             }
         }
-        Err(pyo3::exceptions::PyTypeError::new_err(
-            "a serializers callback must return a yamlrocks.YAMLRocksTag or a (tag, value) tuple",
-        ))
+        // The shared error the fast path raises for the same malformed registry,
+        // so `represent` never changes the `serializers` error contract.
+        Err(bad_serializer_result())
     }
 
     /// Whether a collection emits in flow style: forced when already inside a flow
@@ -1128,6 +1127,15 @@ fn drop_node_pairs(pairs: Vec<(YamlNode, YamlNode)>) {
         crate::stack::drop_node_tree(key);
         crate::stack::drop_node_tree(val);
     }
+}
+
+/// The error for input nested too deeply to lower: the same type and message
+/// the fast path raises for the same input (`convert::encode`'s depth guard),
+/// so the two paths keep one error contract for deep nesting.
+fn too_deep_error() -> PyErr {
+    crate::ffi::errors::unserializable_error(
+        "object is too deeply nested to serialize (possible self-reference)".to_string(),
+    )
 }
 
 /// Block or flow layout for a collection node.

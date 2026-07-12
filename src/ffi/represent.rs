@@ -254,8 +254,11 @@ impl Lower<'_, '_, '_> {
         // the delegated subtree aliased back to *this* object, there is no node
         // bearing its identity for that alias to resolve to (a `default` that
         // returns a container holding the original, or a value that resolves only
-        // to itself). Raise, as a plain `dumps` does for such input.
+        // to itself). Raise, as a plain `dumps` does for such input. Dismantle the
+        // delegated node iteratively first: it may be deeply nested, and the early
+        // return would otherwise drop it recursively and could overflow the stack.
         if self.aliased.contains(&id) {
+            crate::stack::drop_node_tree(node);
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "cannot serialize a value that refers only to itself",
             ));
@@ -707,28 +710,33 @@ impl Lower<'_, '_, '_> {
 
 /// Whether `obj` is aliasable: shared occurrences should emit an anchor and
 /// alias rather than duplicate. Mirrors PyYAML's `ignore_aliases`, which never
-/// aliases `None`, `bool`, `int`, `float`, `str`, or `bytes` (interned/immutable
-/// scalars whose `id()` would collide spuriously), and aliases everything else,
-/// so a shared mapping/sequence/set or a custom object represented as one is
-/// deduped, and a cycle through any of them resolves to an alias.
+/// aliases `None`, `bool`, `int`, `float`, `str`, `bytes`, or the empty tuple
+/// (interned/immutable scalars and the `()` singleton, whose `id()` would collide
+/// spuriously), and aliases everything else, so a shared mapping/sequence/set or a
+/// custom object represented as one is deduped, and a cycle through any of them
+/// resolves to an alias.
 fn is_aliasable(obj: &Bound<'_, PyAny>) -> bool {
     !(obj.is_none()
         || obj.is_instance_of::<PyBool>()
         || obj.is_instance_of::<PyInt>()
         || obj.is_instance_of::<PyFloat>()
         || obj.is_instance_of::<PyString>()
-        || obj.is_instance_of::<PyBytes>())
+        || obj.is_instance_of::<PyBytes>()
+        // The empty tuple is a CPython singleton, so `[(), ()]` would otherwise
+        // alias spuriously; PyYAML excludes it too.
+        || obj.cast::<PyTuple>().is_ok_and(|t| t.is_empty()))
 }
 
 /// A total-ordered sort key for a mapping key under `sort_keys`, derived directly
-/// from the Python key object. Mirrors the fast path's `compare_keys` ranking
-/// (null, bool, number, string, then everything else) so the represent path sorts
-/// scalar keys identically to a plain `dumps`: integers within `i64` compare
-/// exactly and larger ones as `f64` (as `compare_keys` treats a `BigInt`), and
-/// integers and floats share one numeric rank compared numerically. A key that is
-/// not a plain scalar (a custom object, or a special type like `datetime`/`UUID`
-/// that the fast path would stringify) falls into `Other`, tie-broken by input
-/// index to stay a stable no-op with a total order.
+/// from the Python key object. Mirrors the fast path's `compare_keys` ranking for
+/// primitives (null, bool, number, string): integers within `i64` compare exactly
+/// and larger ones as `f64` (as `compare_keys` treats a `BigInt`), and integers
+/// and floats share one numeric rank compared numerically, so a primitive key
+/// sorts identically to a plain `dumps`. Every other key (a custom object, a
+/// container, or a special type like `datetime`/`UUID`/`Path` that the fast path
+/// would stringify) falls into `Other`, tie-broken by input index to keep input
+/// order; ranking those by their rendered form would require converting the key
+/// twice (see `sorted_pairs`), so it is deliberately not done.
 #[derive(PartialEq)]
 enum SortKey {
     Null,

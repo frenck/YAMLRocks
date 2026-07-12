@@ -200,6 +200,39 @@ def test_explicit_block_style_rejects_lossy_values():
     assert yamlrocks.loads(out) == {"k": "line1\nline2"}
 
 
+def test_default_self_reference_after_deep_subtree_raises_cleanly():
+    """A ``default`` result that both nests deeply and refers back to the original
+    object is unrepresentable (a value referring only to itself), so it raises;
+    the deep delegated node is dismantled iteratively, so the error propagates
+    instead of overflowing the stack on its recursive drop."""
+
+    class Box:
+        pass
+
+    box = Box()
+
+    def default(obj):
+        deep: dict = {}
+        cursor = deep
+        for _ in range(300):
+            child: dict = {}
+            cursor["k"] = child
+            cursor = child
+        cursor["k"] = "leaf"
+        return {"deep": deep, "self": obj}
+
+    with pytest.raises(ValueError, match="refers only to itself"):
+        yamlrocks.dumps(box, default=default, represent=lambda _: None)
+
+
+def test_empty_tuple_is_not_aliased():
+    """An empty tuple is the CPython `()` singleton, so it must not be treated as
+    a shared object; `[(), ()]` emits two empty flow sequences like plain `dumps`
+    (and PyYAML's ``ignore_aliases``), not an anchor/alias pair."""
+    out = yamlrocks.dumps([(), ()], represent=lambda _: None)
+    assert out == yamlrocks.dumps([(), ()]) == b"- []\n- []\n"
+
+
 def test_sequence_flow_override():
     """``flow=True`` emits a flow sequence."""
     out = yamlrocks.dumps(
@@ -856,6 +889,7 @@ def _parity_bases():
         [1, 2, 3],
         {"a": 1, "b": 2},
         (1, 2),
+        (),
         frozenset([1]),
         # Tagged values, including collections that at the document root must
         # indent their body under the tag rather than emit it flush.

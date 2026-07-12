@@ -1019,7 +1019,7 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - [aho-corasick 1.1.4](https://crates.io/crates/aho-corasick)
-- [memchr 2.8.2](https://crates.io/crates/memchr)
+- [memchr 2.8.3](https://crates.io/crates/memchr)
 
 ```
 The MIT License (MIT)

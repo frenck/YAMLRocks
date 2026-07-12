@@ -137,6 +137,69 @@ def test_deeply_nested_represent_tree_tears_down_without_overflow():
     assert yamlrocks.loads(out) is not None
 
 
+def test_mapping_error_after_deep_value_tears_down_iteratively():
+    """When a later mapping entry fails to lower after a deeply nested earlier
+    value, the partially built pairs are dismantled iteratively, so the error
+    propagates cleanly instead of overflowing the stack on their recursive drop."""
+    deep: dict = {}
+    cursor = deep
+    for _ in range(300):
+        child: dict = {}
+        cursor["k"] = child
+        cursor = child
+    cursor["k"] = "leaf"
+    # `object()` has no scalar rendering and no `default`, so lowering "bad" fails
+    # after "deep" is already built.
+    doc = {"deep": deep, "bad": object()}
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError):
+        yamlrocks.dumps(doc, represent=lambda _: None)
+
+
+def test_sequence_error_after_deep_item_tears_down_iteratively():
+    """The sequence path likewise dismantles already-built items iteratively when
+    a later item fails to lower, so a deep earlier item cannot overflow the stack
+    on teardown."""
+    deep: dict = {}
+    cursor = deep
+    for _ in range(300):
+        child: dict = {}
+        cursor["k"] = child
+        cursor = child
+    cursor["k"] = "leaf"
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError):
+        yamlrocks.dumps([deep, object()], represent=lambda _: None)
+
+
+def test_explicit_block_style_rejects_lossy_values():
+    """An explicit ``literal``/``folded`` style that cannot round-trip the value
+    is rejected rather than silently emitting YAML that reloads differently: a
+    folded value with line breaks, a literal whose first line is indented, and any
+    block scalar carrying a carriage return or control character."""
+    scalar = yamlrocks.YAMLRocksScalar
+    cases = [
+        ("a\nb", "folded"),
+        ("  indented\nrest", "literal"),
+        ("a\rb", "literal"),
+        ("a\x00b", "folded"),
+    ]
+    for value, style in cases:
+        with pytest.raises(ValueError, match="cannot represent this value"):
+            yamlrocks.dumps(
+                {"k": value},
+                represent=lambda v, _val=value, _st=style: (
+                    scalar(_val, style=_st) if v == _val else None
+                ),
+            )
+    # A lossless literal (single or multi-line, no leading whitespace) is fine and
+    # reloads unchanged.
+    out = yamlrocks.dumps(
+        {"k": "line1\nline2"},
+        represent=lambda v: scalar(v, style="literal") if v == "line1\nline2" else None,
+    )
+    assert out == b"k: |-\n  line1\n  line2\n"
+    assert yamlrocks.loads(out) == {"k": "line1\nline2"}
+
+
 def test_sequence_flow_override():
     """``flow=True`` emits a flow sequence."""
     out = yamlrocks.dumps(

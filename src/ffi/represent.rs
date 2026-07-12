@@ -478,17 +478,37 @@ impl Lower<'_, '_, '_> {
         }
         let flow = self.flowing(flow, in_flow);
         let ordered = self.sorted_pairs(entries);
-        let mut pairs = Vec::with_capacity(ordered.len());
+        let mut pairs: Vec<(YamlNode, YamlNode)> = Vec::with_capacity(ordered.len());
         for (key, val) in &ordered {
             // A collection used as a key is emitted inline as a flow collection
             // (`[1, 2]: x`), never a block collection under an explicit `?`, so
             // lower it in flow context (matching the fast path, which has no
             // explicit-key form). A scalar key stays in block context; a
             // multi-line one is double-quoted by `keyify_scalar` below.
+            //
+            // If lowering a key or value errors, dismantle the pairs already built
+            // iteratively before returning: their derived recursive `Drop` would
+            // otherwise overflow the native stack when an earlier value was deeply
+            // nested. Mirrors the success-path teardown in `dumps`.
             let key_flow = flow || is_container(key);
-            let mut key_node = self.lower(key, depth + 1, key_flow)?;
-            keyify_scalar(&mut key_node);
-            pairs.push((key_node, self.lower(val, depth + 1, flow)?));
+            let key_node = match self.lower(key, depth + 1, key_flow) {
+                Ok(mut node) => {
+                    keyify_scalar(&mut node);
+                    node
+                }
+                Err(err) => {
+                    drop_node_pairs(pairs);
+                    return Err(err);
+                }
+            };
+            match self.lower(val, depth + 1, flow) {
+                Ok(val_node) => pairs.push((key_node, val_node)),
+                Err(err) => {
+                    crate::stack::drop_node_tree(key_node);
+                    drop_node_pairs(pairs);
+                    return Err(err);
+                }
+            }
         }
         Ok(synthetic(
             YamlNodeKind::Mapping(pairs),
@@ -512,9 +532,20 @@ impl Lower<'_, '_, '_> {
             validate_tag(tag)?;
         }
         let flow = self.flowing(flow, in_flow);
-        let mut out = Vec::with_capacity(items.len());
+        let mut out: Vec<YamlNode> = Vec::with_capacity(items.len());
         for item in &items {
-            out.push(self.lower(item, depth + 1, flow)?);
+            // On error, dismantle the items already built iteratively before
+            // returning, so a deeply nested earlier item cannot overflow the stack
+            // via its recursive `Drop`. Mirrors the success-path teardown.
+            match self.lower(item, depth + 1, flow) {
+                Ok(node) => out.push(node),
+                Err(err) => {
+                    for node in out {
+                        crate::stack::drop_node_tree(node);
+                    }
+                    return Err(err);
+                }
+            }
         }
         Ok(synthetic(
             YamlNodeKind::Sequence(out),
@@ -926,6 +957,16 @@ fn synthetic(kind: YamlNodeKind, style: NodeStyle, tag: Option<String>) -> YamlN
     node
 }
 
+/// Dismantle already-built mapping pairs iteratively, for the error path of
+/// [`Lower::mapping_node`]: a partially built mapping's derived recursive `Drop`
+/// could overflow the native stack if an earlier value was deeply nested.
+fn drop_node_pairs(pairs: Vec<(YamlNode, YamlNode)>) {
+    for (key, val) in pairs {
+        crate::stack::drop_node_tree(key);
+        crate::stack::drop_node_tree(val);
+    }
+}
+
 /// Whether `obj` is a built-in collection (dict/list/tuple/set/frozenset), the
 /// values that render as a collection and so, as a mapping key, must be emitted
 /// inline as a flow collection rather than a block one.
@@ -961,6 +1002,37 @@ fn node_style(flow: bool) -> NodeStyle {
         NodeStyle::Flow
     } else {
         NodeStyle::Block
+    }
+}
+
+/// Why an explicit block scalar `style` cannot losslessly represent `value`, or
+/// `None` if it can. A block scalar normalizes line endings and cannot hold a
+/// `\r` or a non-printable control; a `folded` scalar rewrites interior newlines
+/// (a single newline folds to a space, blank lines collapse), so any newline
+/// makes it lossy; a `literal` auto-detects its indentation from the first
+/// content line, so a leading space or tab there would be swallowed (this emitter
+/// writes no explicit indentation indicator). A non-block style never applies.
+fn block_style_lossiness(value: &str, style: ScalarStyle) -> Option<&'static str> {
+    if value.contains('\r') {
+        return Some("it contains a carriage return");
+    }
+    if value.chars().any(crate::emit_util::is_non_printable) {
+        return Some("it contains a non-printable control character");
+    }
+    match style {
+        ScalarStyle::Folded if value.contains('\n') => {
+            Some("folding would rewrite its line breaks")
+        }
+        ScalarStyle::Literal => {
+            let first = value.split('\n').find(|line| !line.is_empty());
+            match first {
+                Some(line) if line.starts_with([' ', '\t']) => {
+                    Some("its first line begins with whitespace")
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1010,8 +1082,22 @@ fn scalar_node(
     }
     let tag = tag.as_deref();
     if let Some(style) = style {
+        let style = flow_safe_style(style, in_flow);
+        // A block scalar (`literal`/`folded`) that cannot round-trip the value is
+        // rejected rather than silently emitted lossy: folding rewrites interior
+        // newlines, a literal auto-detects indentation from a leading-whitespace
+        // first line, and neither can hold a `\r` or a non-printable control. A
+        // flow context has already downgraded the style to double-quoted above, so
+        // this only fires for a real block scalar.
+        if let Some(reason) = block_style_lossiness(&value, style) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "a {} scalar cannot represent this value without changing it on \
+                 reload ({reason}); use \"double\"/\"single\" or the default style",
+                style.name(),
+            )));
+        }
         return Ok(synthetic(
-            YamlNodeKind::Scalar(value, flow_safe_style(style, in_flow)),
+            YamlNodeKind::Scalar(value, style),
             NodeStyle::Block,
             tag.map(str::to_owned),
         ));

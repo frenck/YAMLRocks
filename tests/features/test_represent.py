@@ -226,6 +226,22 @@ def test_default_self_reference_after_deep_subtree_raises_cleanly():
         yamlrocks.dumps(box, default=default, represent=lambda _: None)
 
 
+def test_dump_forwards_represent_to_a_stream():
+    """The file-oriented ``dump`` forwards ``represent`` to ``dumps``, so the
+    protocol is usable when writing to a path or stream, not only ``dumps``."""
+    import io
+
+    buffer = io.BytesIO()
+    yamlrocks.dump(
+        {"key": "my_id"},
+        buffer,
+        represent=lambda v: (
+            yamlrocks.YAMLRocksScalar(v, tag="!extend") if v == "my_id" else None
+        ),
+    )
+    assert buffer.getvalue() == b"key: !extend 'my_id'\n"
+
+
 def test_empty_tuple_is_not_aliased():
     """An empty tuple is the CPython `()` singleton, so it must not be treated as
     a shared object; `[(), ()]` emits two empty flow sequences like plain `dumps`

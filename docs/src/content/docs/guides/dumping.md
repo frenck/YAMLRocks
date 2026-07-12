@@ -582,14 +582,19 @@ reloaded Python objects to share identity the way the anchors imply.
 `represent` composes with everything else. It runs first; a value it defers on
 (`None`) falls through to the normal pipeline, so `default`, `serializers`, and
 the datetime/dataclass/numpy handling still apply, and a deferred value renders
-byte-for-byte as it would from a plain `dumps`. `represent` is offered every
-value, including those nested inside a deferred set, dataclass, or `default`
-result. `OPT_SORT_KEYS` (by type and value, numbers numerically),
-`OPT_FLOW_STYLE`, `OPT_EXPLICIT_START`, `OPT_EXPLICIT_END`, `OPT_INDENT_4`,
-`OPT_INDENTLESS_SEQUENCES`, the null-style flags, and the quote-style flag all
-apply, to what `represent` returns and to deferred values alike. Only `width`
-line-wrapping is not implemented on this path yet; passing a `width` together
-with `represent` raises rather than silently ignoring it.
+as it would from a plain `dumps`. `represent` is offered every value, including
+those nested inside a deferred set, dataclass, or `default` result. `OPT_SORT_KEYS`
+(by type and value, numbers numerically), `OPT_FLOW_STYLE`, `OPT_EXPLICIT_START`,
+`OPT_EXPLICIT_END`, `OPT_INDENT_4`, `OPT_INDENTLESS_SEQUENCES`, the null-style
+flags, and the quote-style flag all apply, to what `represent` returns and to
+deferred values alike.
+
+Deferred output is byte-for-byte identical to a plain `dumps` in all but a few
+documented corners: a shared object gets a PyYAML-style anchor/alias where a
+plain `dumps` duplicates it; a non-primitive mapping key (a `datetime`, `UUID`,
+`Path`, or custom object) keeps insertion order under `OPT_SORT_KEYS` rather than
+being sorted by its rendered string; and `width` line-wrapping is not implemented
+(passing `width` with `represent` raises rather than silently ignoring it).
 
 ## Writing to a file with `dump`
 

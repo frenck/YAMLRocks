@@ -418,6 +418,7 @@ def dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], _Node | None] | None = None,
 ) -> None: ...
 def loads_all(
     data: bytes | bytearray | memoryview | str,

@@ -538,6 +538,7 @@ def dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
+    represent: Callable[[Any], Any] | None = None,
 ) -> None:
     """Serialize ``obj`` as YAML to a filesystem path or file-like object.
 
@@ -562,6 +563,7 @@ def dump(
         option=option,
         serializers=serializers,
         width=width,
+        represent=represent,
     )
     if hasattr(target, "write"):
         try:

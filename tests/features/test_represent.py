@@ -880,11 +880,18 @@ def _parity_positions(value, hashable):
     yield [[value]]
     yield {"list": [value]}
     yield [{"k": value}]
-    # A tagged value used as a mapping key is pathological: the fast path emits it
-    # inline (`!t [1, 2]: x`) while the represent path emits a valid explicit
-    # `? !t ...` block key. Both reload identically, so this is an accepted (not
-    # byte-identical) rendering rather than a bug; skip such keys in the sweep.
-    if hashable and not isinstance(value, yamlrocks.YAMLRocksTag):
+    # Two accepted, non-byte-identical renderings are skipped as keys:
+    #  - A tagged value: the fast path emits it inline (`!t [1, 2]: x`) while the
+    #    represent path emits a valid explicit `? !t ...` block key.
+    #  - A datetime/date/time: under `OPT_SORT_KEYS` the represent path keeps such
+    #    a non-scalar key in input order rather than ranking it by its rendered
+    #    string (ranking would double-run the conversion; see `sorted_pairs`),
+    #    while the fast path orders it by that string.
+    # Both reload identically; they are documented limitations, not bugs.
+    keyable = not isinstance(
+        value, (yamlrocks.YAMLRocksTag, datetime.date, datetime.time)
+    )
+    if hashable and keyable:
         yield {value: "x"}
         yield {"a": 1, value: "x"}
 

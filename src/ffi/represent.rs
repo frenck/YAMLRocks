@@ -615,12 +615,21 @@ impl Lower<'_, '_, '_> {
     }
 
     /// Order a mapping's `(key, value)` pairs for emission. With `sort_keys` set,
-    /// sort by a key derived from the Python key object, matching the fast path's
-    /// `compare_keys`: null, then booleans, then numbers numerically, then strings
-    /// lexically, then everything else in input order. Sorting happens here,
-    /// before the values are lowered, so anchor detection follows the final
-    /// emission order (sorting after would risk emitting an alias before its
-    /// anchor).
+    /// sort by a key derived directly from the Python key object ([`SortKey::of`]):
+    /// null, then booleans, then numbers numerically, then strings lexically, then
+    /// everything else in input order. Sorting happens here, before the values are
+    /// lowered, so anchor detection follows the final emission order (sorting after
+    /// would risk emitting an alias before its anchor).
+    ///
+    /// A non-scalar key (a `datetime`/`UUID`/`Path`, a container, a custom object)
+    /// keeps input order rather than being ranked by its rendered form. Ranking it
+    /// would mean running the conversion here and again when the key is lowered
+    /// (a double call, observable for a stateful `isoformat`/`__fspath__`), and
+    /// the sort must precede lowering for anchor ordering, so the two cannot share
+    /// one conversion. A plain `dumps` orders a `datetime`/`UUID`/`Path` key by its
+    /// string and a container key by input order; this matches the container case
+    /// and diverges only for the stringy special types, an accepted limitation for
+    /// the exotic case of a mapping keyed on such objects under `sort_keys`.
     fn sorted_pairs<'a>(
         &self,
         pairs: Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)>,
@@ -631,51 +640,10 @@ impl Lower<'_, '_, '_> {
         let mut keyed: Vec<(SortKey, Bound<'a, PyAny>, Bound<'a, PyAny>)> = pairs
             .into_iter()
             .enumerate()
-            .map(|(i, (k, v))| (self.sort_key(&k, i), k, v))
+            .map(|(i, (k, v))| (SortKey::of(&k, i), k, v))
             .collect();
         keyed.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
         keyed.into_iter().map(|(_, k, v)| (k, v)).collect()
-    }
-
-    /// The sort key for a mapping key under `sort_keys`. A primitive
-    /// (null/bool/number/string) is ranked directly. Any other key is ranked by
-    /// the scalar the fast path would emit for it, so a `datetime`/`UUID`/`Path`
-    /// key sorts by its rendered string exactly as a plain `dumps` does (rather
-    /// than dropping to `Other` and reordering).
-    ///
-    /// The conversion disables both `default` and `serializers`: sorting must not
-    /// invoke a user callback, since it would run again when the key is lowered
-    /// and a stateful one must not observe a double call. A key those callbacks or
-    /// the built-in conversion cannot render as a plain scalar (a custom object, a
-    /// non-UTF-8 `bytes` key) ranks `Other` (input order): this is not the point
-    /// to decide its fate, because `represent` runs first when the key is lowered
-    /// and may rescue it, and if it does not, lowering raises then. That also
-    /// matches how `compare_keys` ranks a tagged/complex key.
-    fn sort_key(&self, key: &Bound<'_, PyAny>, index: usize) -> SortKey {
-        if key.is_none()
-            || key.is_instance_of::<PyBool>()
-            || key.is_instance_of::<PyInt>()
-            || key.is_instance_of::<PyFloat>()
-            || key.is_instance_of::<PyString>()
-        {
-            return SortKey::of(key, index);
-        }
-        let scalar_only = EncodeCtx {
-            default: None,
-            tags: None,
-            ..self.encode
-        };
-        match python_to_value(self.py, key, scalar_only) {
-            Ok(value) => {
-                let rank = SortKey::from_value(&value, index);
-                // Dismantle the temporary iteratively: a deeply nested key (a
-                // nested tuple) would otherwise drop recursively on return and
-                // could overflow a small native stack. See [`crate::stack`].
-                crate::stack::drop_value_tree(value);
-                rank
-            }
-            Err(_) => SortKey::Other(index),
-        }
     }
 
     /// Bridge a fast-path [`Value`] (from the deferred scalar-leaf pipeline) into a
@@ -821,25 +789,6 @@ impl SortKey {
             }
         }
         SortKey::Other(index)
-    }
-
-    /// Derive a sort key from the fast-path [`Value`] a non-primitive key
-    /// converts to, mirroring `compare_keys`: a rendered scalar (a stringified
-    /// `datetime`/`UUID`/... lands in `String`/`Timestamp`) ranks by its scalar
-    /// value; a complex value (mapping/sequence/tagged) has no scalar order and
-    /// keeps input order via `Other`.
-    fn from_value(value: &Value<'_>, index: usize) -> Self {
-        use crate::decode::Value as V;
-        match value {
-            V::Null => SortKey::Null,
-            V::Bool(b) => SortKey::Bool(*b),
-            V::Int(i) => SortKey::Int(*i),
-            V::BigInt(s) => SortKey::Float(s.replace('_', "").parse().unwrap_or(f64::NAN)),
-            V::Float(f) => SortKey::Float(*f),
-            V::String(s) => SortKey::Str(s.to_string()),
-            V::Timestamp(ts) => SortKey::Str(ts.to_iso()),
-            _ => SortKey::Other(index),
-        }
     }
 
     fn rank(&self) -> u8 {

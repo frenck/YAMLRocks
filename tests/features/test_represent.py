@@ -1066,6 +1066,19 @@ def test_malformed_serializer_result_raises_the_same_error_on_both_paths():
         yamlrocks.dumps(Marker(), serializers=serializers, represent=lambda _: None)
 
 
+def test_named_tag_handle_descriptor_is_rejected():
+    """A descriptor tag with a named handle (`!h!x`) is rejected on both paths: dumps writes no `%TAG` directive, so the output could not reload."""
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="named tag handle"):
+        yamlrocks.dumps(
+            {"k": "s"},
+            represent=lambda v: (
+                yamlrocks.YAMLRocksScalar("x", tag="!h!x") if v == "s" else None
+            ),
+        )
+    with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="named tag handle"):
+        yamlrocks.dumps(yamlrocks.YAMLRocksTag("!h!x", "x"), represent=lambda _: None)
+
+
 def test_document_dump_ignores_represent():
     """Dumping a round-trip document re-emits its preserved layout; `represent` (like the other emit-shaping arguments) is ignored."""
     doc = yamlrocks.loads(b"a: 1\n", option=yamlrocks.OPT_ROUND_TRIP)
@@ -1238,6 +1251,17 @@ def _parity_bases():
         datetime.date(2020, 1, 2),
         datetime.datetime(2020, 1, 2, 3, 4, 5),
         datetime.datetime(2020, 1, 2, 3, 4, 5, 123456),
+        datetime.datetime(
+            2020,
+            1,
+            2,
+            3,
+            4,
+            5,
+            123456,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=2)),
+        ),
+        datetime.datetime(2020, 1, 2, 3, 4, 5, tzinfo=datetime.UTC),
         datetime.time(3, 4, 5),
         _ParityEnum.TUPLE,
         _ParityEnum.NUMBER,
@@ -1312,6 +1336,16 @@ _PARITY_OPTIONS = {
     # Flow forces the emitters' own quoting fallbacks; combined with the quote
     # preference it pins the seam where they must pick the same quote character.
     "flow_single": yamlrocks.OPT_FLOW_STYLE | yamlrocks.OPT_SINGLE_QUOTES,
+    # Schema flags drive needs_quoting, which both paths must consult the same
+    # way (y/n, sexagesimals, 1.1 numerics in the corpus exercise it).
+    "yaml_1_1": yamlrocks.OPT_YAML_1_1,
+    "pyyaml_compat": yamlrocks.OPT_PYYAML_COMPAT,
+    "yaml_1_1_single": yamlrocks.OPT_YAML_1_1 | yamlrocks.OPT_SINGLE_QUOTES,
+    # Datetime formatting flags feed the shared converter; the tz-aware and
+    # microsecond bases exercise every arm.
+    "omit_microseconds": yamlrocks.OPT_OMIT_MICROSECONDS,
+    "naive_utc": yamlrocks.OPT_NAIVE_UTC,
+    "utc_z": yamlrocks.OPT_UTC_Z,
 }
 
 

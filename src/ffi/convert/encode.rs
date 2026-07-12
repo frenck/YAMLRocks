@@ -205,10 +205,26 @@ pub(crate) fn validate_tag(tag: &str) -> PyResult<()> {
                 "invalid tag {tag:?}: a verbatim tag must be '!<...>' with non-empty content"
             )));
         }
-    } else if let Some(bad) = tag.chars().find(|c| matches!(c, ',' | ']' | '}')) {
-        return Err(errors::encode_error(format!(
-            "invalid tag {tag:?}: a shorthand tag cannot contain a flow indicator (found {bad:?})"
-        )));
+    } else {
+        // A shorthand tag is `!suffix` (primary handle) or `!!suffix`
+        // (secondary handle). A *named* handle (`!h!suffix`) needs a
+        // `%TAG !h! ...` directive, which `dumps` never writes, so the output
+        // would not reload ("undefined tag handle"); reject it, along with any
+        // other stray `!` (a literal `!` inside a suffix must be URI-escaped
+        // as `%21` per the spec).
+        let suffix_start = if tag.starts_with("!!") { 2 } else { 1 };
+        if tag[suffix_start..].contains('!') {
+            return Err(errors::encode_error(format!(
+                "invalid tag {tag:?}: a named tag handle (!name!suffix) needs a %TAG directive, \
+                 which dumps does not emit; use a primary (!suffix), secondary (!!suffix), or \
+                 verbatim (!<uri>) tag"
+            )));
+        }
+        if let Some(bad) = tag.chars().find(|c| matches!(c, ',' | ']' | '}')) {
+            return Err(errors::encode_error(format!(
+                "invalid tag {tag:?}: a shorthand tag cannot contain a flow indicator (found {bad:?})"
+            )));
+        }
     }
     Ok(())
 }

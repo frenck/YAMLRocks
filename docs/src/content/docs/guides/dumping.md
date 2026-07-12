@@ -517,9 +517,10 @@ yamlrocks.dumps({"password": Secret("wifi"), "ssid": "home"}, represent=represen
 
 The value that returned `None` (`"home"`) rendered exactly as a plain `dumps`
 would. The `Secret` became a `!secret` node. Note the single quotes: a scalar
-carrying a custom tag is quoted automatically, because a plain `!secret wifi`
-would reload as a plain string and lose the tag. This mirrors PyYAML, so a host's
-representers port across without hand-annotating quote styles.
+carrying a custom tag is quoted automatically. This is PyYAML's default style for
+a tagged scalar (the `!secret` tag survives a plain `!secret wifi` too; the
+quoting is the style, not what preserves the tag), so a host's representers port
+across without hand-annotating quote styles.
 
 ### The node descriptors
 

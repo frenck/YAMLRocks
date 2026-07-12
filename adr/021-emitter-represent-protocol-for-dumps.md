@@ -73,9 +73,10 @@ following ship in v0.7 except line width:
 3. **PyYAML-faithful auto styling.** Under `style="auto"`, a standard tag the
    plain value already resolves to is elided, so a `!!float`-tagged `1.0e17`
    emits bare; a `!!str` on a number-looking value is quoted to stay a string;
-   and a custom tag (`!extend`) is kept but force-quoted, because a plain form
-   would resolve to a different tag and lose it (so `!extend my_id` emits as
-   `!extend 'my_id'`). This lets a host's representers port verbatim.
+   and a custom tag (`!extend`) is kept but force-quoted, matching PyYAML's
+   default style for a tagged scalar (the tag survives a plain form too; quoting
+   is the style, not what preserves the tag), so `!extend my_id` emits as
+   `!extend 'my_id'`. This lets a host's representers port verbatim.
 4. **Multiline literal default.** A deferred multi-line string defaults to a `|`
    literal block, matching the fast encoder (the literal-block decision is shared
    through `emit_util` so both agree).

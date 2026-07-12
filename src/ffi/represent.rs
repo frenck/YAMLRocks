@@ -1018,9 +1018,10 @@ fn flow_safe_style(style: ScalarStyle, in_flow: bool) -> ScalarStyle {
 /// - `!!str` on a value that would plainly resolve to a non-string (`"true"`):
 ///   quote it so it stays a string, and elide the (now-implied) tag.
 /// - Any other tag, including every custom tag (`!extend`, `!secret`, ...):
-///   keep the tag and force quotes, because a plain form would resolve to a
-///   different tag and lose it. This is why `!extend my_id` emits as
-///   `!extend 'my_id'`.
+///   keep the tag and force quotes, matching PyYAML's default style for a tagged
+///   scalar. The tag survives a plain scalar too (`!extend my_id` keeps
+///   `!extend`); the quoting is the style PyYAML emits, not what preserves the
+///   tag. This is why `!extend my_id` emits as `!extend 'my_id'`.
 ///
 /// A block scalar style inside a flow collection is downgraded to a quoted style
 /// (`in_flow`), since block scalars are invalid there.
@@ -1089,7 +1090,9 @@ fn scalar_node(
             None,
         ),
         // A custom tag (or a standard one the value does not match): keep the tag
-        // and force quotes so a plain form cannot silently drop or re-resolve it.
+        // and force quotes to match PyYAML's default style for a tagged scalar.
+        // The tag survives a plain scalar too, so this is styling for parity, not
+        // a tag-preservation requirement.
         _ => synthetic(
             YamlNodeKind::Scalar(value.clone(), forced_quote_style(&value)),
             NodeStyle::Block,

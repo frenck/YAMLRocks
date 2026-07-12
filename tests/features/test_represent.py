@@ -17,8 +17,9 @@ import yamlrocks
 
 
 def test_scalar_with_custom_tag_forces_single_quotes():
-    """A custom-tagged scalar under auto style is force-quoted, matching PyYAML:
-    a plain form would reload without the tag."""
+    """A custom-tagged scalar under auto style is force-quoted, matching PyYAML's
+    default style for a tagged scalar (the tag survives a plain form too; the
+    quote is the selected auto style, not a tag-preservation requirement)."""
     out = yamlrocks.dumps(
         {"key": "my_id"},
         represent=lambda v: (

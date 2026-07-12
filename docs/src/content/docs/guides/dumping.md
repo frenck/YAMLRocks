@@ -587,7 +587,8 @@ result. `OPT_SORT_KEYS` (by type and value, numbers numerically),
 `OPT_FLOW_STYLE`, `OPT_EXPLICIT_START`, `OPT_EXPLICIT_END`, `OPT_INDENT_4`,
 `OPT_INDENTLESS_SEQUENCES`, the null-style flags, and the quote-style flag all
 apply, to what `represent` returns and to deferred values alike. Only `width`
-line-wrapping is not implemented on this path yet.
+line-wrapping is not implemented on this path yet; passing a `width` together
+with `represent` raises rather than silently ignoring it.
 
 ## Writing to a file with `dump`
 

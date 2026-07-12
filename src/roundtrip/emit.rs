@@ -172,16 +172,44 @@ impl RoundTripEmitter {
             self.emit_foot(&node.comments, 0);
             return;
         }
+        // A synthetic (dump-path) root block collection that carries a tag emits
+        // the tag on its own line, then its body indented one step under it, so
+        // the tag binds to the collection on reload, matching the fast encoder's
+        // `!tag` + `emit_value_after_colon(inner, 0)`. A loaded collection keeps
+        // its source column (body at 0 here), and an untagged root sits flush.
+        let tagged_root = node.synthetic && node.tag.is_some();
         match &node.kind {
             YamlNodeKind::Mapping(pairs) if node.style == NodeStyle::Block && !pairs.is_empty() => {
                 self.emit_anchor_tag_line(node, 0);
-                self.emit_block_mapping(pairs, 0);
+                let body = if tagged_root { self.step() } else { 0 };
+                self.emit_block_mapping(pairs, body);
             }
             YamlNodeKind::Sequence(items)
                 if node.style == NodeStyle::Block && !items.is_empty() =>
             {
                 self.emit_anchor_tag_line(node, 0);
-                self.emit_block_sequence(items, 0);
+                // Indentless keeps the dashes flush with the tag even for a tagged
+                // root sequence, as the fast encoder does.
+                let body = if tagged_root && !self.dump.indentless {
+                    self.step()
+                } else {
+                    0
+                };
+                self.emit_block_sequence(items, body);
+            }
+            // A synthetic tagged empty null at the root keeps just its tag on its
+            // own line (`!t`), matching the fast path's Tagged + empty-null
+            // handling; the `null` token (`!t null`) would reload as the string
+            // "null" rather than an empty value. A bare (untagged) null still
+            // renders as the `null` keyword via the inline arm below.
+            YamlNodeKind::Null
+                if node.synthetic
+                    && node.tag.is_some()
+                    && node.comments.inline.is_none()
+                    && node.anchor.is_none()
+                    && matches!(self.synthetic_null(node), Some(NullStyle::Empty)) =>
+            {
+                self.emit_anchor_tag_line(node, 0);
             }
             _ => {
                 self.emit_anchor_tag(node);
@@ -320,9 +348,12 @@ impl RoundTripEmitter {
                 // source column, so indent a step under the key (the PyYAML style)
                 // instead of the flush default, unless indentless is requested
                 // (`OPT_INDENTLESS_SEQUENCES`), which aligns the dashes with the
-                // key's own column, matching the fast encoder.
+                // key's own column, matching the fast encoder. A tagged sequence
+                // always indents under its tag even in indentless mode (as the
+                // fast path does): the tag sits on the line above, so flush dashes
+                // would not bind to it and the tag would be lost on reload.
                 let seq_indent = if self.dump.indent_sequences {
-                    if self.dump.indentless {
+                    if self.dump.indentless && val.tag.is_none() {
                         indent
                     } else {
                         child
@@ -453,10 +484,13 @@ impl RoundTripEmitter {
                     // An anchored/tagged block mapping carries its marker on the
                     // dash line, then breaks to the indented keys. Emitting it
                     // inline (`- &a key: value`) would bind the marker to the
-                    // first key rather than the mapping.
+                    // first key rather than the mapping. The body indents by the
+                    // configured step (like the fast path, which routes a tagged
+                    // item through `emit_value_after_colon`), not the fixed +2 of
+                    // the compact inline form below.
                     self.emit_anchor_tag_compact(item);
                     self.buf.push(b'\n');
-                    self.emit_block_mapping(m, child);
+                    self.emit_block_mapping(m, indent + self.step());
                 } else {
                     self.buf.push(b' ');
                     self.emit_block_mapping_after_dash(m, child);
@@ -468,7 +502,9 @@ impl RoundTripEmitter {
                 if item.anchor.is_some() || item.tag.is_some() {
                     // An anchored/tagged nested block sequence carries its marker
                     // on the dash line, then breaks to the indented items (the
-                    // compact `- -` form cannot hold a leading `&anchor`/tag).
+                    // compact `- -` form cannot hold a leading `&anchor`/tag). A
+                    // nested sequence's items sit two columns past the dash (the
+                    // fast path's fixed offset), unlike a mapping item above.
                     self.emit_anchor_tag_compact(item);
                     self.buf.push(b'\n');
                     self.emit_block_sequence(s, child);

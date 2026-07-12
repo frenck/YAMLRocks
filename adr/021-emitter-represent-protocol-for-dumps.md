@@ -96,7 +96,8 @@ following ship in v0.7 except line width:
 8. **No line width yet (deferred).** `OPT_INDENT_4` and
    `OPT_INDENTLESS_SEQUENCES` apply on this path (threaded through the dump
    config), so indentation matches a plain `dumps`. Only `width` line-wrapping is
-   not wired; it is the most negotiable per the reference consumer and lands later
+   not wired; passing `width` with `represent` raises rather than silently
+   diverging. It is the most negotiable per the reference consumer and lands later
    if needed.
 
 **Rationale**:

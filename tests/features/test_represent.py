@@ -709,6 +709,31 @@ def test_sort_keys_int_subclass_key_sorts_by_numeric_value():
     ) == yamlrocks.dumps(doc, option=yamlrocks.OPT_SORT_KEYS)
 
 
+def test_deferred_root_tagged_collection_indents_under_tag():
+    """A tagged block collection at the document root indents its body one step
+    under the tag (so the tag binds to the collection on reload), matching plain
+    `dumps` rather than emitting the body flush against the tag line."""
+    for doc in (
+        yamlrocks.YAMLRocksTag("!foo", [1, 2, 3]),
+        yamlrocks.YAMLRocksTag("!foo", {"k": "v"}),
+    ):
+        assert yamlrocks.dumps(doc, represent=lambda _: None) == yamlrocks.dumps(doc)
+    assert (
+        yamlrocks.dumps(
+            yamlrocks.YAMLRocksTag("!foo", [1, 2]), represent=lambda _: None
+        )
+        == b"!foo\n  - 1\n  - 2\n"
+    )
+
+
+def test_width_with_represent_raises():
+    """`width` line-wrapping is not implemented on the represent path, so passing
+    it raises rather than silently ignoring it (which would diverge from a plain
+    `dumps`)."""
+    with pytest.raises(ValueError, match="width is not supported"):
+        yamlrocks.dumps({"k": "x" * 200}, width=80, represent=lambda _: None)
+
+
 # --- Byte-for-byte parity sweep: dumps(x, represent=lambda _: None) == dumps(x) ---
 #
 # A callback that defers on every value must reproduce a plain `dumps` exactly.
@@ -769,6 +794,13 @@ def _parity_bases():
         {"a": 1, "b": 2},
         (1, 2),
         frozenset([1]),
+        # Tagged values, including collections that at the document root must
+        # indent their body under the tag rather than emit it flush.
+        yamlrocks.YAMLRocksTag("!t", "scalar"),
+        yamlrocks.YAMLRocksTag("!t", None),
+        yamlrocks.YAMLRocksTag("!t", [1, 2, 3]),
+        yamlrocks.YAMLRocksTag("!t", {"k": "v"}),
+        yamlrocks.YAMLRocksTag("!t", {"a": [1, 2]}),
     ]
 
 
@@ -785,7 +817,11 @@ def _parity_positions(value, hashable):
     yield [[value]]
     yield {"list": [value]}
     yield [{"k": value}]
-    if hashable:
+    # A tagged value used as a mapping key is pathological: the fast path emits it
+    # inline (`!t [1, 2]: x`) while the represent path emits a valid explicit
+    # `? !t ...` block key. Both reload identically, so this is an accepted (not
+    # byte-identical) rendering rather than a bug; skip such keys in the sweep.
+    if hashable and not isinstance(value, yamlrocks.YAMLRocksTag):
         yield {value: "x"}
         yield {"a": 1, value: "x"}
 
@@ -818,8 +854,17 @@ def test_deferred_output_matches_plain_dumps(option_name):
             hashable = False
         for doc in _parity_positions(base, hashable):
             plain = yamlrocks.dumps(doc, option=option)
-            deferred = yamlrocks.dumps(doc, option=option, represent=lambda _: None)
-            # Skip the accepted aliasing divergence (anchors on shared objects).
+            try:
+                deferred = yamlrocks.dumps(doc, option=option, represent=lambda _: None)
+            except ValueError as err:
+                # Accepted aliasing divergence: a shared tagged value cannot carry
+                # its tag onto an alias, so the represent path raises where plain
+                # (which never aliases) emits it twice. Only that specific edge is
+                # tolerated; any other error is a real failure.
+                if "shared value" in str(err):
+                    continue
+                raise
+            # Accepted aliasing divergence: anchors on a shared object.
             if b"&id" in deferred and b"&id" not in plain:
                 continue
             assert deferred == plain, f"{base!r} in {doc!r} [{option_name}]"

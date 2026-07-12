@@ -710,14 +710,20 @@ impl Lower<'_, '_, '_> {
         // The tag belongs to *this* occurrence (the wrapper), not to the inner
         // value: untrack the inner value so a later occurrence lowers a fresh
         // copy instead of aliasing the tagged node (an alias would silently
-        // inherit the tag). A value that already aliased back into this subtree
-        // (a self-reference) keeps its anchor — its inner aliases resolve to it.
+        // inherit the tag). A value that aliased back into this subtree (a
+        // self-reference) cannot be untracked, and keeping its anchor is no
+        // better: every inner self-alias, and any later bare occurrence, would
+        // resolve to the *tagged* node and inherit the tag. Unrepresentable.
         if let Some(marker) = node.anchor.as_deref() {
             if let Ok(id) = marker.parse::<usize>() {
-                if !self.aliased.contains(&id) {
-                    node.anchor = None;
-                    self.seen.remove(&id);
+                if self.aliased.contains(&id) {
+                    crate::stack::drop_node_tree(node);
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "cannot attach a tag to a self-referential or shared value",
+                    ));
                 }
+                node.anchor = None;
+                self.seen.remove(&id);
             }
         }
         node.tag = Some(tag);
@@ -1369,11 +1375,12 @@ fn kind_matches(kind: ScalarKind, std: StdKind) -> bool {
 
 /// The quote style for a scalar that must be quoted (a custom-tagged value, or a
 /// string that would otherwise reparse as another type). Single quotes, matching
-/// PyYAML's default, unless the value cannot be single-quoted (a line break, a
-/// literal single quote, or a control/non-printable character), which forces
-/// double quotes, where it can be escaped.
+/// PyYAML's tagged-scalar style, unless single quotes cannot hold the value (a
+/// line break or a control/non-printable character), which forces double quotes,
+/// where it can be escaped. An apostrophe stays single-quoted by doubling
+/// (`!x 'it''s'`), exactly as PyYAML emits it.
 fn forced_quote_style(value: &str) -> ScalarStyle {
-    if crate::emit_util::single_quotable(value, false) {
+    if crate::emit_util::single_capable(value) {
         ScalarStyle::SingleQuoted
     } else {
         ScalarStyle::DoubleQuoted

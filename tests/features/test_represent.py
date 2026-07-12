@@ -667,7 +667,7 @@ def test_chained_default_raises_like_plain_dumps():
     ],
 )
 def test_mapping_descriptor_pair_must_be_a_two_tuple(bad):
-    """A `YAMLRocksMapping` entry must be a 2-item `(key."""
+    """A `YAMLRocksMapping` entry must be a `(key, value)` tuple of exactly two items."""
     with pytest.raises(ValueError, match="key, value"):
         yamlrocks.dumps(
             "m",
@@ -699,7 +699,7 @@ def test_primitive_subclass_serializer_matches_plain_dumps():
 
 
 def test_single_newline_string_keeps_chomping():
-    """A one-character `" "` value keeps its trailing newline via a `|+` block."""
+    """A bare `"\\n"` value keeps its trailing newline via a `|+` block."""
     doc = {"k": "\n"}
     out = yamlrocks.dumps(doc, represent=lambda v: None)
     assert out == yamlrocks.dumps(doc)
@@ -1056,6 +1056,48 @@ def test_document_dump_ignores_represent():
     out = yamlrocks.dumps(doc, represent=lambda v: calls.append(v))
     assert out == b"a: 1\n"
     assert calls == []
+
+
+def test_apostrophe_in_custom_tagged_scalar_keeps_single_quotes():
+    """A custom-tagged scalar with an apostrophe single-quotes by doubling it, as PyYAML does."""
+    out = yamlrocks.dumps(
+        {"k": "s"},
+        represent=lambda v: (
+            yamlrocks.YAMLRocksScalar("it's", tag="!x") if v == "s" else None
+        ),
+    )
+    assert out == b"k: !x 'it''s'\n"
+    assert yamlrocks.loads(out) == {"k": "it's"}
+
+
+def test_wrapper_tag_on_self_referential_value_raises():
+    """A wrapper tag on a self-referential value raises: its self-aliases (and any later bare occurrence) would inherit the tag."""
+    cyclic: dict = {}
+    cyclic["self"] = cyclic
+    tag = yamlrocks.YAMLRocksTag("!x", cyclic)
+    with pytest.raises(ValueError, match="self-referential or shared"):
+        yamlrocks.dumps(tag, represent=lambda _: None)
+    with pytest.raises(ValueError, match="self-referential or shared"):
+        yamlrocks.dumps([tag, cyclic], represent=lambda _: None)
+
+
+def test_shared_object_behind_fresh_default_results_matches_plain_dumps():
+    """A repeated object whose `default` mints a fresh result per occurrence emits independent copies, byte-identical to plain dumps."""
+
+    class Box:
+        pass
+
+    box = Box()
+    doc = [box, box]
+    default = lambda o: [1]  # noqa: E731
+    deferred = yamlrocks.dumps(doc, default=default, represent=lambda _: None)
+    assert deferred == yamlrocks.dumps(doc, default=default)
+    # A default that returns the *same* object still aliases: identity follows
+    # the node the delegation produced, not the wrapper.
+    cached = {"x": 1}
+    shared = yamlrocks.dumps(doc, default=lambda o: cached, represent=lambda _: None)
+    assert shared == b"- &id001\n  x: 1\n- *id001\n"
+    assert yamlrocks.loads(shared) == [{"x": 1}, {"x": 1}]
 
 
 # --- Byte-for-byte parity sweep: dumps(x, represent=lambda _: None) == dumps(x) ---

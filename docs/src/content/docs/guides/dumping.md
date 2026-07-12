@@ -589,6 +589,13 @@ On a plain `loads`, an alias reloads as an equal but distinct object (the fast
 loader copies the anchored value); load with `OPT_ANNOTATED` if you need the
 reloaded Python objects to share identity the way the anchors imply.
 
+Anchoring follows the object that actually produces the emitted node. A value
+that only renders through a per-occurrence conversion (a `default` callback
+minting a fresh result each call, a NumPy array's `tolist()`) emits an
+independent copy per occurrence, exactly as a plain `dumps` does; when the
+conversion returns the _same_ object every time (a cached result), that shared
+result is anchored and aliased as usual.
+
 `represent` composes with everything else. It runs first; a value it defers on
 (`None`) falls through to the normal pipeline, so `default`, `serializers`, and
 the datetime/dataclass/numpy handling still apply, and a deferred value renders

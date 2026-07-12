@@ -205,7 +205,11 @@ yamlrocks.dumps(
 
 The registry is matched by **exact type** and is consulted before a dataclass
 would otherwise be auto-serialized to a mapping, so a registered type always
-wins. Pair it with the load-side `tags` to round-trip a custom type cleanly:
+wins. A YAML node carries exactly one tag, so a result whose inner value is
+itself tagged (a `YAMLRocksTag` wrapping a `YAMLRocksTag`, or a serializer
+firing on the inner value too) raises rather than emitting a double-tagged
+scalar no parser accepts. Pair the registry with the load-side `tags` to
+round-trip a custom type cleanly:
 
 ```python
 import yamlrocks

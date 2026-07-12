@@ -144,4 +144,9 @@ following ship in v0.7 except line width:
   is byte-for-byte pinned against plain `dumps` in a conformance suite (mirroring
   the host's dumper) to catch drift.
 - New public surface: `represent=` plus `YAMLRocksScalar`/`YAMLRocksSequence`/
-  `YAMLRocksMapping` and a style literal. Additive; no existing behavior changes.
+  `YAMLRocksMapping` and a style literal. Additive, with one deliberate
+  tightening of the existing API: a nested tag (a `YAMLRocksTag` wrapping a
+  `YAMLRocksTag`, or a serializer result whose inner value serializes tagged)
+  now raises on the plain path too. It used to emit `!a !b v`, a double-tagged
+  scalar `loads` itself rejects, so the old behavior was output no one could
+  read back; both paths reject the shape identically now.

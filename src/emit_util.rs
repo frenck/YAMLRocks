@@ -62,16 +62,23 @@ pub(crate) fn single_quoted_body(value: &str) -> String {
 }
 
 /// Whether a value that needs quoting can be single-quoted, or must be
-/// double-quoted. Single quotes cannot span a line break nor escape anything, so
-/// a value containing `\n`/`\r`, a C0/DEL control, a C1 control, or a
-/// non-character forces double quotes; a value containing a single quote also
-/// takes double quotes here. `double_quotes` (the document preference) forces
-/// double directly. Shared by the fast encoder and the round-trip quoting rules
-/// so both choose the same quote character.
+/// double-quoted. A value containing a single quote takes double quotes here
+/// (doubling every `'` reads noisier than one pair of double quotes), and
+/// `double_quotes` (the document preference) forces double directly. Shared by
+/// the fast encoder and the round-trip quoting rules so both choose the same
+/// quote character.
 pub(crate) fn single_quotable(value: &str, double_quotes: bool) -> bool {
-    !double_quotes
-        && !value.contains('\'')
-        && !value.contains('\n')
+    !double_quotes && !value.contains('\'') && single_capable(value)
+}
+
+/// Whether single quotes can hold `value` at all: they cannot span a line break
+/// nor escape anything, so a `\n`/`\r`, a C0/DEL control, a C1 control, or a
+/// non-character rules them out. An apostrophe does *not*: single quotes
+/// represent it by doubling (`'it''s'`), which [`push_single_quoted`] applies.
+/// Callers that mirror PyYAML's tagged-scalar style use this directly, since
+/// PyYAML keeps single quotes for apostrophe-carrying values.
+pub(crate) fn single_capable(value: &str) -> bool {
+    !value.contains('\n')
         && !value.contains('\r')
         && !value.bytes().any(|b| b < 0x20 || b == 0x7f)
         && !value.chars().any(is_non_printable)

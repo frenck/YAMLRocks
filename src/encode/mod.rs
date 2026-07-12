@@ -297,37 +297,12 @@ impl<'a> Emitter<'a> {
 
     /// Emit a string as a literal block scalar (`|`), choosing the chomping
     /// indicator from the value's trailing newlines so it round-trips exactly:
-    /// none → strip (`|-`), one → clip (`|`), two or more → keep (`|+`).
+    /// none → strip (`|-`), one → clip (`|`), two or more → keep (`|+`). The
+    /// writer is shared with the round-trip emitter
+    /// ([`crate::emit_util::push_block_scalar`]) so the chomping rules cannot
+    /// drift between the two.
     fn emit_literal_block(&mut self, value: &str, indent: usize) {
-        let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
-        let body = value.trim_end_matches('\n');
-
-        self.buf.push(b'|');
-        match trailing {
-            0 => self.buf.push(b'-'),
-            // Clip (a single trailing newline) cannot represent an all-newline
-            // value whose body is empty (`"\n"`): the body collapses to nothing
-            // and the lone newline is chomped away on re-read. Keep (`+`) so the
-            // trailing newline survives.
-            1 if body.is_empty() => self.buf.push(b'+'),
-            1 => {}
-            _ => self.buf.push(b'+'),
-        }
-        self.buf.push(b'\n');
-
-        for line in body.split('\n') {
-            if line.is_empty() {
-                self.buf.push(b'\n');
-            } else {
-                self.write_indent(indent);
-                self.buf.extend_from_slice(line.as_bytes());
-                self.buf.push(b'\n');
-            }
-        }
-        // For "keep", emit the blank lines beyond the single implicit newline.
-        for _ in 1..trailing {
-            self.buf.push(b'\n');
-        }
+        crate::emit_util::push_block_scalar(&mut self.buf, value, b'|', indent);
     }
 
     // -- Block sequence --
@@ -661,7 +636,7 @@ impl<'a> Emitter<'a> {
 /// key (a sequence, mapping, or tagged node) shares one rank, so complex keys
 /// keep their relative input order via the stable sort. A pure string-keyed
 /// mapping, the common case, is unchanged.
-pub(crate) fn compare_keys(a: &Value, b: &Value) -> std::cmp::Ordering {
+fn compare_keys(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
     fn rank(v: &Value) -> u8 {

@@ -148,6 +148,47 @@ pub(crate) fn double_quoted_body(value: &str) -> String {
     out
 }
 
+/// Append `value` to `buf` as a block scalar (`|` or `>` per `marker`), body
+/// lines at the absolute column `body_indent`. The chomping indicator is
+/// reverse-engineered from the value's trailing newlines, since chomping was
+/// already applied when the value was produced:
+///
+/// - 0 trailing → strip (`-`)
+/// - 1 trailing → clip (default, no indicator) — except an all-newline value
+///   whose body is empty (`"\n"`), where clip would chomp the lone newline away
+///   on re-read, so keep (`+`) preserves it
+/// - 2+ trailing → keep (`+`), preserving the extra blank lines
+///
+/// Shared by the fast encoder and the round-trip emitter so both write block
+/// scalars, and their chomping edge cases, identically.
+pub(crate) fn push_block_scalar(buf: &mut Vec<u8>, value: &str, marker: u8, body_indent: usize) {
+    let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
+    let body = value.trim_end_matches('\n');
+
+    buf.push(marker);
+    match trailing {
+        0 => buf.push(b'-'),
+        1 if body.is_empty() => buf.push(b'+'),
+        1 => {}
+        _ => buf.push(b'+'),
+    }
+    buf.push(b'\n');
+
+    for line in body.split('\n') {
+        if line.is_empty() {
+            buf.push(b'\n');
+        } else {
+            buf.resize(buf.len() + body_indent, b' ');
+            buf.extend_from_slice(line.as_bytes());
+            buf.push(b'\n');
+        }
+    }
+    // For "keep", emit the blank lines beyond the single implicit newline.
+    for _ in 1..trailing {
+        buf.push(b'\n');
+    }
+}
+
 /// Append `value` to `buf` as a single-quoted YAML scalar, doubling any `'`.
 pub(crate) fn push_single_quoted(buf: &mut Vec<u8>, value: &str) {
     buf.push(b'\'');

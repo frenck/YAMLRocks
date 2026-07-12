@@ -67,9 +67,14 @@ following ship in v0.7 except line width:
    would emit flush; a dump-config flag indents it a step under its key (the
    PyYAML style ESPHome requires).
 2. **`sort_keys`.** `OPT_SORT_KEYS` sorts mapping keys by the fast path's
-   comparator (type then value, numbers numerically), matching a plain `dumps`.
-   It runs in the lowering, before children are lowered, so anchor detection
-   follows the final emission order.
+   comparator (type then value, numbers numerically), matching a plain `dumps`
+   for primitive keys (`None`/bool/int/float/str/bytes). It runs in the
+   lowering, before children are lowered, so anchor detection follows the final
+   emission order. That ordering constraint is also why a key that needs a
+   conversion (datetime, UUID, Path, Decimal, Enum, custom object) keeps
+   insertion order instead: ranking it would run the conversion twice
+   (observable side effects), and the sort cannot move after lowering without
+   risking an alias emitted before its anchor. A documented divergence.
 3. **PyYAML-faithful auto styling.** Under `style="auto"`, a standard tag the
    plain value already resolves to is elided, so a `!!float`-tagged `1.0e17`
    emits bare; a `!!str` on a number-looking value is quoted to stay a string;
@@ -85,15 +90,16 @@ following ship in v0.7 except line width:
    an alias rather than looping. Aliasability matches PyYAML's `ignore_aliases`
    (everything except `None`/`bool`/`int`/`float`/`str`/`bytes`/`()`), so a shared
    set, dataclass, or custom object represented as a mapping is deduped too. A
-   shared _tagged_ value carries the tag on the anchored first occurrence and the
-   repeats become bare aliases: a shared tagged scalar or empty value works
-   (`!x &id001 v` … `*id001`). Known limitation: a shared tagged _collection_
-   raises, because the collection's own repeats already lower to an alias and a
-   YAML alias cannot take the tag; a `serializers` result that tags a shared
-   mapping/sequence is the usual trigger. A plain `dumps`, which never aliases,
-   emits it twice instead. This is the one place the accepted anchor divergence
-   surfaces as an error rather than differing bytes; it is safe (no silent data
-   change).
+   tag from the wrapper channel (`YAMLRocksTag`, a `serializers` result) belongs
+   to that occurrence, not to the wrapped value, so the wrapped value is
+   untracked: later bare occurrences lower fresh copies, matching a plain
+   `dumps` byte-for-byte instead of minting an alias that would silently
+   inherit the tag. Known limitation: a tag wrapping a value that was _already_
+   emitted with an anchor (or that refers back to itself) raises, because a
+   YAML alias cannot take the tag and the anchor cannot be revoked. A plain
+   `dumps`, which never aliases, emits it twice instead. This is the one place
+   the accepted anchor divergence surfaces as an error rather than differing
+   bytes; it is safe (no silent data change).
 6. **Every value, composed with `default`/`serializers`.** A deferred compound is
    decomposed into its child objects, which recurse through `represent`, so no
    value is skipped inside a set/dataclass/enum/numpy/`default` result; a deferred

@@ -227,7 +227,7 @@ fn tagged_to_value(
     };
     validate_tag(&tag)?;
     let inner = python_to_value(py, value.bind(py), ctx)?;
-    Ok(Value::Tagged(tag, Box::new(inner)))
+    attach_tag(tag, inner)
 }
 
 /// Interpret a `tags` callback's return value, which may be a [`YAMLRocksTag`]
@@ -245,12 +245,26 @@ fn tag_callback_result(
             let tag: String = tuple.get_item(0)?.extract()?;
             validate_tag(&tag)?;
             let inner = python_to_value(py, &tuple.get_item(1)?, ctx)?;
-            return Ok(Value::Tagged(tag, Box::new(inner)));
+            return attach_tag(tag, inner);
         }
     }
     Err(errors::encode_error(
         "a tags callback must return a YAMLRocksTag or a (tag, value) tuple".to_string(),
     ))
+}
+
+/// Wrap a converted inner value in a tag. One node carries one tag: wrapping an
+/// already-tagged value (a nested `YAMLRocksTag`, or an inner value whose type
+/// serializes tagged) is rejected — the old double-tag output (`!a !b v`) was
+/// YAML that `loads` itself refuses. The represent path rejects the same shapes.
+fn attach_tag(tag: String, inner: Value<'static>) -> PyResult<Value<'static>> {
+    if matches!(inner, Value::Tagged(..)) {
+        crate::stack::drop_value_tree(inner);
+        return Err(errors::encode_error(
+            "cannot attach a tag to a value that already carries a tag".to_string(),
+        ));
+    }
+    Ok(Value::Tagged(tag, Box::new(inner)))
 }
 
 /// Convert a Python `int` to a [`Value`], falling back to a big integer (the
@@ -558,31 +572,15 @@ pub(crate) fn numpy_child<'py>(
 static NUMPY_TYPES: OnceLock<Option<(Py<PyAny>, Py<PyAny>)>> = OnceLock::new();
 
 /// Convert a numpy array (`tolist`) or scalar (`item`), but only for genuine
-/// numpy objects. The type is checked with `isinstance` against numpy's exported
-/// `ndarray`/`generic` classes rather than a `__module__` string prefix, so a
-/// look-alike from another module (e.g. `numpycompat`) does not take this path.
+/// numpy objects. Detection and decomposition live in [`numpy_child`], shared
+/// with the represent path, so both classify numpy objects identically.
 fn numpy_to_value(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     ctx: EncodeCtx<'_>,
 ) -> PyResult<Option<Value<'static>>> {
-    let types = NUMPY_TYPES.get_or_init(|| {
-        let numpy = py.import("numpy").ok()?;
-        let ndarray = numpy.getattr("ndarray").ok()?.unbind();
-        let generic = numpy.getattr("generic").ok()?.unbind();
-        Some((ndarray, generic))
-    });
-    let Some((ndarray, generic)) = types else {
-        return Ok(None);
-    };
-    if !(obj.is_instance(ndarray.bind(py))? || obj.is_instance(generic.bind(py))?) {
-        return Ok(None);
+    match numpy_child(py, obj)? {
+        Some(child) => Ok(Some(python_to_value(py, &child, ctx)?)),
+        None => Ok(None),
     }
-    if let Ok(list) = obj.call_method0("tolist") {
-        return Ok(Some(python_to_value(py, &list, ctx)?));
-    }
-    if let Ok(item) = obj.call_method0("item") {
-        return Ok(Some(python_to_value(py, &item, ctx)?));
-    }
-    Ok(None)
 }

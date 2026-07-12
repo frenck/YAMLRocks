@@ -83,6 +83,11 @@ pub struct DumpConfig {
     /// indenting it a step (`OPT_INDENTLESS_SEQUENCES`). Only consulted on the
     /// dump path (`indent_sequences`).
     pub indentless: bool,
+    /// Prefer single quotes when the emitter must quote a scalar on its own (a
+    /// flow-unsafe or BOM-leading plain), mirroring `OPT_SINGLE_QUOTES` and the
+    /// fast encoder's quote preference. The default (off) keeps the loaded-
+    /// document behavior: double quotes, which can escape anything.
+    pub single_quotes: bool,
 }
 
 /// Emit a single synthetic document tree with dump-shaping options applied. Used
@@ -244,7 +249,7 @@ impl RoundTripEmitter {
             }
             self.emit_anchor_tag(key);
             self.emit_inline_content(key, indent);
-            self.buf.push(b':');
+            self.end_inline_key(key);
             self.emit_value_after_colon(val, indent);
         }
     }
@@ -267,9 +272,20 @@ impl RoundTripEmitter {
             }
             self.emit_anchor_tag(key);
             self.emit_inline_content(key, indent);
-            self.buf.push(b':');
+            self.end_inline_key(key);
             self.emit_value_after_colon(val, indent);
         }
+    }
+
+    /// Write the `:` that closes an inline mapping key. An alias key needs a
+    /// space before it: anchor and alias names may contain `:` (the scanner is
+    /// spec-strict here, per the YAML test suite's W5VH), so a glued `*id001:`
+    /// would scan as the alias "id001:" and the document could not reload.
+    fn end_inline_key(&mut self, key: &YamlNode) {
+        if matches!(key.kind, YamlNodeKind::Alias(_)) {
+            self.buf.push(b' ');
+        }
+        self.buf.push(b':');
     }
 
     /// Emit one mapping pair in explicit `?`/`:` block form, for a complex key
@@ -587,7 +603,7 @@ impl RoundTripEmitter {
             // produces a plain scalar starting with a bare indicator. Found by
             // the `roundtrip` fuzz target.
             ScalarStyle::Plain if value.starts_with('\u{feff}') => {
-                crate::emit_util::push_double_quoted(&mut self.buf, value);
+                self.push_quoted(value);
             }
             // Inside a flow collection a bare `,`/`[`/`]`/`{`/`}`/`: ` would end
             // the entry or collection early, so a plain scalar carrying one must
@@ -595,55 +611,43 @@ impl RoundTripEmitter {
             // never contains a bare flow indicator (the scanner would not produce
             // it). See [`plain_unsafe_in_flow`].
             ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => {
-                crate::emit_util::push_double_quoted(&mut self.buf, value);
+                self.push_quoted(value);
             }
             ScalarStyle::Plain => self.buf.extend_from_slice(value.as_bytes()),
             ScalarStyle::SingleQuoted => crate::emit_util::push_single_quoted(&mut self.buf, value),
             ScalarStyle::DoubleQuoted => crate::emit_util::push_double_quoted(&mut self.buf, value),
+            // Defensive: a block scalar is invalid inside a flow collection. The
+            // producers downgrade these before they get here (the represent
+            // lowering, the assignment style rules); if a future producer misses
+            // that, emit valid YAML rather than an unparsable `[|`.
+            ScalarStyle::Literal | ScalarStyle::Folded if self.flow_depth > 0 => {
+                crate::emit_util::push_double_quoted(&mut self.buf, value);
+            }
             ScalarStyle::Literal => self.emit_block_scalar(value, body_indent, b'|'),
             ScalarStyle::Folded => self.emit_block_scalar(value, body_indent, b'>'),
+        }
+    }
+
+    /// Quote a scalar the emitter must quote on its own (a flow-unsafe or
+    /// BOM-leading plain): double quotes by default, single when the dump
+    /// prefers them and the value allows it, mirroring the fast encoder's
+    /// `emit_quoted_string`.
+    fn push_quoted(&mut self, value: &str) {
+        if self.dump.single_quotes && crate::emit_util::single_quotable(value, false) {
+            crate::emit_util::push_single_quoted(&mut self.buf, value);
+        } else {
+            crate::emit_util::push_double_quoted(&mut self.buf, value);
         }
     }
 
     /// Emit a block scalar whose body lines sit at the absolute column
     /// `body_indent`. The caller computes that column for its context (a mapping
     /// value: `key + step`; a sequence item: `dash + 2`; the document root:
-    /// `step`), matching the fast encoder rather than adding a fixed step here.
+    /// `step`), matching the fast encoder. The writer itself is shared with the
+    /// fast encoder ([`crate::emit_util::push_block_scalar`]) so the chomping
+    /// rules cannot drift between the two.
     fn emit_block_scalar(&mut self, value: &str, body_indent: usize, marker: u8) {
-        // The scanner already applied chomping when producing `value`, so we
-        // reverse-engineer the indicator from its trailing newlines:
-        //   0 trailing  → strip  (`-`)
-        //   1 trailing  → clip   (default, no indicator)
-        //   2+ trailing → keep   (`+`), preserving the extra blank lines
-        let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
-        let body = value.trim_end_matches('\n');
-
-        self.buf.push(marker);
-        match trailing {
-            0 => self.buf.push(b'-'),
-            // Clip (a single trailing newline) cannot represent an all-newline
-            // value whose body is empty (`"\n"`): the body collapses to nothing
-            // and the lone newline is chomped away on re-read. Keep (`+`) so the
-            // trailing newline survives. Mirrors the fast encoder.
-            1 if body.is_empty() => self.buf.push(b'+'),
-            1 => {}
-            _ => self.buf.push(b'+'),
-        }
-        self.buf.push(b'\n');
-
-        for line in body.split('\n') {
-            if line.is_empty() {
-                self.buf.push(b'\n');
-            } else {
-                self.write_indent(body_indent);
-                self.buf.extend_from_slice(line.as_bytes());
-                self.buf.push(b'\n');
-            }
-        }
-        // For "keep", emit the blank lines beyond the single implicit newline.
-        for _ in 1..trailing {
-            self.buf.push(b'\n');
-        }
+        crate::emit_util::push_block_scalar(&mut self.buf, value, marker, body_indent);
     }
 
     fn emit_flow_sequence(&mut self, items: &[YamlNode], indent: usize) {
@@ -669,7 +673,8 @@ impl RoundTripEmitter {
             }
             self.emit_anchor_tag(key);
             self.emit_inline_content(key, indent);
-            self.buf.extend_from_slice(b": ");
+            self.end_inline_key(key);
+            self.buf.push(b' ');
             self.emit_anchor_tag(val);
             self.emit_inline_content(val, indent);
         }

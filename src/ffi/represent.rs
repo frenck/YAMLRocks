@@ -21,6 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::{
     PyBool, PyBytes, PyDict, PyFloat, PyFrozenSet, PyInt, PyList, PySet, PyString, PyTuple, PyType,
@@ -43,14 +44,9 @@ const MAX_REPRESENT_DEPTH: u32 = 1000;
 
 /// A scalar node descriptor returned by a `represent` callback: the text to emit,
 /// an optional explicit tag, and a style. `style="auto"` lets the emitter apply
-/// its implicit-resolver quoting; an explicit style is honored verbatim.
-#[pyclass(
-    name = "YAMLRocksScalar",
-    module = "yamlrocks",
-    frozen,
-    skip_from_py_object
-)]
-#[derive(Clone)]
+/// its implicit-resolver quoting; an explicit style is validated against the
+/// value and then honored.
+#[pyclass(name = "YAMLRocksScalar", module = "yamlrocks", frozen)]
 pub struct YAMLRocksScalar {
     value: String,
     tag: Option<String>,
@@ -70,6 +66,21 @@ impl YAMLRocksScalar {
         })
     }
 
+    #[getter]
+    fn value(&self) -> &str {
+        &self.value
+    }
+
+    #[getter]
+    fn tag(&self) -> Option<&str> {
+        self.tag.as_deref()
+    }
+
+    #[getter]
+    fn style(&self) -> &'static str {
+        self.style.map_or("auto", ScalarStyle::name)
+    }
+
     fn __repr__(&self) -> String {
         let style = self.style.map_or("auto", ScalarStyle::name);
         match &self.tag {
@@ -80,6 +91,23 @@ impl YAMLRocksScalar {
             None => format!("YAMLRocksScalar({:?}, style={style:?})", self.value),
         }
     }
+}
+
+/// Snapshot a descriptor's child iterable. A one-shot iterable (a generator,
+/// `dict.items()`, `map`) is drained into a list right away: a descriptor may be
+/// lowered more than once (returned for several objects), and consuming the
+/// iterable at lowering time would silently emit an empty collection from the
+/// second use on. A list or tuple is kept as passed and read at dump time.
+///
+/// This also pins every reference cycle through a descriptor to pass through a
+/// Python container the garbage collector can clear, which is what makes the
+/// `__traverse__` support below sufficient without a `__clear__`.
+fn snapshot_iterable(py: Python<'_>, iterable: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    let bound = iterable.bind(py);
+    if bound.is_instance_of::<PyList>() || bound.is_instance_of::<PyTuple>() {
+        return Ok(iterable);
+    }
+    Ok(py.get_type::<PyList>().call1((bound,))?.unbind())
 }
 
 /// A sequence node descriptor: its items (original host objects, re-dispatched
@@ -95,8 +123,39 @@ pub struct YAMLRocksSequence {
 impl YAMLRocksSequence {
     #[new]
     #[pyo3(signature = (items, *, tag=None, flow=None))]
-    fn new(items: Py<PyAny>, tag: Option<String>, flow: Option<bool>) -> Self {
-        Self { items, tag, flow }
+    fn new(
+        py: Python<'_>,
+        items: Py<PyAny>,
+        tag: Option<String>,
+        flow: Option<bool>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            items: snapshot_iterable(py, items)?,
+            tag,
+            flow,
+        })
+    }
+
+    #[getter]
+    fn items(&self, py: Python<'_>) -> Py<PyAny> {
+        self.items.clone_ref(py)
+    }
+
+    #[getter]
+    fn tag(&self) -> Option<&str> {
+        self.tag.as_deref()
+    }
+
+    #[getter]
+    fn flow(&self) -> Option<bool> {
+        self.flow
+    }
+
+    /// Report the held items to the garbage collector, so a reference cycle
+    /// through a descriptor (an item that reaches back to it) is collectable
+    /// instead of leaking.
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.items)
     }
 }
 
@@ -113,8 +172,39 @@ pub struct YAMLRocksMapping {
 impl YAMLRocksMapping {
     #[new]
     #[pyo3(signature = (pairs, *, tag=None, flow=None))]
-    fn new(pairs: Py<PyAny>, tag: Option<String>, flow: Option<bool>) -> Self {
-        Self { pairs, tag, flow }
+    fn new(
+        py: Python<'_>,
+        pairs: Py<PyAny>,
+        tag: Option<String>,
+        flow: Option<bool>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            pairs: snapshot_iterable(py, pairs)?,
+            tag,
+            flow,
+        })
+    }
+
+    #[getter]
+    fn pairs(&self, py: Python<'_>) -> Py<PyAny> {
+        self.pairs.clone_ref(py)
+    }
+
+    #[getter]
+    fn tag(&self) -> Option<&str> {
+        self.tag.as_deref()
+    }
+
+    #[getter]
+    fn flow(&self) -> Option<bool> {
+        self.flow
+    }
+
+    /// Report the held pairs to the garbage collector, so a reference cycle
+    /// through a descriptor (a pair that reaches back to it) is collectable
+    /// instead of leaking.
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.pairs)
     }
 }
 
@@ -164,7 +254,7 @@ pub fn represent_to_node(
         aliased: HashSet::new(),
         retained: Vec::new(),
     };
-    let mut root = ctx.lower(obj, 0, false)?;
+    let mut root = ctx.lower(obj, 0, false, false)?;
     // Turn the raw `id()` markers left on shared nodes into real anchor names,
     // dropping them from nodes that were never aliased.
     name_anchors(&mut root, &ctx.aliased, &mut HashMap::new(), &mut 0);
@@ -194,11 +284,31 @@ struct Lower<'py, 'r, 'c> {
 }
 
 impl Lower<'_, '_, '_> {
-    fn lower(&mut self, obj: &Bound<'_, PyAny>, depth: u32, in_flow: bool) -> PyResult<YamlNode> {
-        // Grow the native stack on demand so a deeply nested object (bounded by
-        // `MAX_REPRESENT_DEPTH`) cannot overflow a small thread stack. See
-        // [`crate::stack`].
-        crate::stack::guard(|| self.lower_inner(obj, depth, in_flow))
+    /// Lower one value. `in_flow` means the node lands inside a flow collection
+    /// (block layout and block scalars are invalid there); `in_key` means it is
+    /// a mapping key (emitted inline, so collections default to flow and block
+    /// scalar styles downgrade to quotes, matching the fast path's key
+    /// rendering).
+    fn lower(
+        &mut self,
+        obj: &Bound<'_, PyAny>,
+        depth: u32,
+        in_flow: bool,
+        in_key: bool,
+    ) -> PyResult<YamlNode> {
+        // This descent re-enters Python at every level (the callback, `default`,
+        // serializers), so it cannot grow onto a fresh stack segment the way the
+        // pure-Rust descents do ([`crate::stack::guard`]): CPython checks its C
+        // stack against the thread's original bounds, and Python code running on
+        // a grown segment aborts with a fatal "Unrecoverable stack overflow"
+        // instead of raising. When headroom runs low, fail with the same clean
+        // error the depth cap gives.
+        if !crate::stack::python_call_headroom() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "object is too deeply nested to serialize (possible self-reference)",
+            ));
+        }
+        self.lower_inner(obj, depth, in_flow, in_key)
     }
 
     fn lower_inner(
@@ -206,6 +316,7 @@ impl Lower<'_, '_, '_> {
         obj: &Bound<'_, PyAny>,
         depth: u32,
         in_flow: bool,
+        in_key: bool,
     ) -> PyResult<YamlNode> {
         if depth >= MAX_REPRESENT_DEPTH {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -232,7 +343,7 @@ impl Lower<'_, '_, '_> {
             self.retained.push(obj.clone().unbind());
         }
 
-        let mut node = self.render(obj, depth, in_flow)?;
+        let mut node = self.render(obj, depth, in_flow, in_key)?;
         if !aliasable {
             return Ok(node);
         }
@@ -272,12 +383,18 @@ impl Lower<'_, '_, '_> {
 
     /// The node for `obj`: the representer's result, or the built-in rendering
     /// when the host defers. Alias bookkeeping is the caller's ([`lower_inner`]).
-    fn render(&mut self, obj: &Bound<'_, PyAny>, depth: u32, in_flow: bool) -> PyResult<YamlNode> {
+    fn render(
+        &mut self,
+        obj: &Bound<'_, PyAny>,
+        depth: u32,
+        in_flow: bool,
+        in_key: bool,
+    ) -> PyResult<YamlNode> {
         let described = self.represent.call1((obj,))?;
         if !described.is_none() {
-            return self.descriptor_to_node(&described, depth, in_flow);
+            return self.descriptor_to_node(&described, depth, in_flow, in_key);
         }
-        self.deferred_node(obj, depth, in_flow)
+        self.deferred_node(obj, depth, in_flow, in_key)
     }
 
     /// Built-in rendering for a value the host deferred on. A compound value
@@ -290,7 +407,15 @@ impl Lower<'_, '_, '_> {
         obj: &Bound<'_, PyAny>,
         depth: u32,
         in_flow: bool,
+        in_key: bool,
     ) -> PyResult<YamlNode> {
+        // `None` renders as a null before anything else, including the
+        // `serializers` registry, matching the fast path (which short-circuits
+        // `is_none` at the top, so a registered `NoneType` serializer never
+        // fires there either).
+        if obj.is_none() {
+            return Ok(synthetic(YamlNodeKind::Null, NodeStyle::Block, None));
+        }
         // Primitive scalars, and their subclasses (an `IntEnum`, a `str`/`bytes`
         // subclass), are converted directly, before the `serializers` registry,
         // matching the fast path's dispatch order: a registered primitive
@@ -302,25 +427,25 @@ impl Lower<'_, '_, '_> {
             || obj.is_instance_of::<PyBytes>()
         {
             let value = python_to_value(self.py, obj, self.encode)?;
-            return Ok(self.value_to_node(value, in_flow));
+            return Ok(self.value_to_node(value, in_flow || in_key));
         }
         if let Ok(dict) = obj.cast::<PyDict>() {
             // Snapshot before recursing: `represent` runs arbitrary Python that
             // could mutate the dict mid-walk (which `PyDict_Next` forbids).
             let entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
-            return self.mapping_node(entries, depth, None, None, in_flow);
+            return self.mapping_node(entries, depth, None, None, in_flow, in_key);
         }
         if let Ok(list) = obj.cast::<PyList>() {
-            return self.sequence_node(list.iter().collect(), depth, None, None, in_flow);
+            return self.sequence_node(list.iter().collect(), depth, None, None, in_flow, in_key);
         }
         if let Ok(tuple) = obj.cast::<PyTuple>() {
-            return self.sequence_node(tuple.iter().collect(), depth, None, None, in_flow);
+            return self.sequence_node(tuple.iter().collect(), depth, None, None, in_flow, in_key);
         }
         if let Ok(set) = obj.cast::<PySet>() {
-            return self.sequence_node(set.iter().collect(), depth, None, None, in_flow);
+            return self.sequence_node(set.iter().collect(), depth, None, None, in_flow, in_key);
         }
         if let Ok(set) = obj.cast::<PyFrozenSet>() {
-            return self.sequence_node(set.iter().collect(), depth, None, None, in_flow);
+            return self.sequence_node(set.iter().collect(), depth, None, None, in_flow, in_key);
         }
         // A load-side custom-tagged value (`OPT_PASSTHROUGH_TAG` output).
         if let Ok(tag_obj) = obj.cast::<YAMLRocksTag>() {
@@ -328,13 +453,13 @@ impl Lower<'_, '_, '_> {
                 let borrowed = tag_obj.borrow();
                 (borrowed.tag.clone(), borrowed.value.clone_ref(self.py))
             };
-            return self.tagged_node(tag, inner.bind(self.py), depth, in_flow);
+            return self.tagged_node(tag, inner.bind(self.py), depth, in_flow, in_key);
         }
         // A `serializers` entry for this exact type: a custom `!tag value`.
         if let Some(registry) = self.encode.tags {
             if let Some(func) = registry.bind(self.py).get_item(obj.get_type())? {
                 let result = func.call1((obj,))?;
-                return self.serializer_result_node(&result, depth, in_flow);
+                return self.serializer_result_node(&result, depth, in_flow, in_key);
             }
         }
         // datetime/date/time → ISO scalar, checked before Enum and dataclass to
@@ -344,12 +469,12 @@ impl Lower<'_, '_, '_> {
         // converter returns `None` when passthrough is on, falling through to the
         // Enum/dataclass/`default` handling exactly as the fast path does).
         if let Some(value) = crate::ffi::convert::datetime_to_value(obj, self.encode)? {
-            return Ok(self.value_to_node(value, in_flow));
+            return Ok(self.value_to_node(value, in_flow || in_key));
         }
         // Enum: its value, re-dispatched. Through `lower` (not `render`) so the
-        // depth increments and the stack guard applies.
+        // depth increments and the stack headroom check applies.
         if is_enum(obj)? {
-            return self.lower(&obj.getattr("value")?, depth + 1, in_flow);
+            return self.lower(&obj.getattr("value")?, depth + 1, in_flow, in_key);
         }
         // Dataclass instance: a mapping of its fields.
         if !self.encode.passthrough_dataclass
@@ -363,13 +488,13 @@ impl Lower<'_, '_, '_> {
                 let value = obj.getattr(name.cast::<PyString>()?.to_str()?)?;
                 entries.push((name, value));
             }
-            return self.mapping_node(entries, depth, None, None, in_flow);
+            return self.mapping_node(entries, depth, None, None, in_flow, in_key);
         }
         // numpy array/scalar (opt-in): re-dispatch its list/scalar form through
-        // `lower` (depth-bounded, stack-guarded).
+        // `lower` (depth-bounded, headroom-checked).
         if self.encode.serialize_numpy {
             if let Some(child) = numpy_child(self.py, obj)? {
-                return self.lower(&child, depth + 1, in_flow);
+                return self.lower(&child, depth + 1, in_flow, in_key);
             }
         }
         // A scalar leaf (str/int/float/bool/None/datetime/Decimal/UUID/Path/...).
@@ -379,7 +504,7 @@ impl Lower<'_, '_, '_> {
             ..self.encode
         };
         match python_to_value(self.py, obj, no_default) {
-            Ok(value) => Ok(self.value_to_node(value, in_flow)),
+            Ok(value) => Ok(self.value_to_node(value, in_flow || in_key)),
             // Only an *unrecognized type* falls back to `default`, matching the
             // fast path; a genuine encode error (non-UTF-8 bytes, a lone
             // surrogate) is propagated unchanged rather than masked by `default`.
@@ -395,7 +520,7 @@ impl Lower<'_, '_, '_> {
                         // raises rather than re-invoking `default`. `represent`
                         // still sees the result and its children.
                         let prev = self.encode.default.take();
-                        let lowered = self.lower(result.bind(self.py), depth + 1, in_flow);
+                        let lowered = self.lower(result.bind(self.py), depth + 1, in_flow, in_key);
                         self.encode.default = prev;
                         lowered
                     }
@@ -413,20 +538,18 @@ impl Lower<'_, '_, '_> {
         described: &Bound<'_, PyAny>,
         depth: u32,
         in_flow: bool,
+        in_key: bool,
     ) -> PyResult<YamlNode> {
         if let Ok(scalar) = described.cast::<YAMLRocksScalar>() {
             let scalar = scalar.borrow();
-            let mut node = scalar_node(
+            return scalar_node(
                 scalar.value.clone(),
                 scalar.style,
-                scalar.tag.as_deref(),
+                scalar.tag.clone(),
                 self.double_quotes,
                 self.schema,
-                in_flow,
-            )?;
-            // A scalar carries no children, so its span end stays at the start.
-            node.end_offset = node.span.offset;
-            return Ok(node);
+                in_flow || in_key,
+            );
         }
         if let Ok(seq) = described.cast::<YAMLRocksSequence>() {
             let seq = seq.borrow();
@@ -435,7 +558,7 @@ impl Lower<'_, '_, '_> {
                 .bind(self.py)
                 .try_iter()?
                 .collect::<PyResult<_>>()?;
-            return self.sequence_node(items, depth, seq.tag.clone(), seq.flow, in_flow);
+            return self.sequence_node(items, depth, seq.tag.clone(), seq.flow, in_flow, in_key);
         }
         if let Ok(map) = described.cast::<YAMLRocksMapping>() {
             let map = map.borrow();
@@ -457,7 +580,7 @@ impl Lower<'_, '_, '_> {
                 }
                 entries.push((pair.get_item(0)?, pair.get_item(1)?));
             }
-            return self.mapping_node(entries, depth, map.tag.clone(), map.flow, in_flow);
+            return self.mapping_node(entries, depth, map.tag.clone(), map.flow, in_flow, in_key);
         }
         Err(pyo3::exceptions::PyTypeError::new_err(
             "a represent callback must return a yamlrocks.YAMLRocksScalar, \
@@ -474,37 +597,30 @@ impl Lower<'_, '_, '_> {
         tag: Option<String>,
         flow: Option<bool>,
         in_flow: bool,
+        in_key: bool,
     ) -> PyResult<YamlNode> {
-        let tag = tag.map(|t| normalize_tag(&t));
-        if let Some(tag) = &tag {
-            validate_tag(tag)?;
-        }
-        let flow = self.flowing(flow, in_flow);
+        let tag = descriptor_tag(tag)?;
+        let flow = self.flowing(flow, in_flow, in_key);
         let ordered = self.sorted_pairs(entries);
         let mut pairs: Vec<(YamlNode, YamlNode)> = Vec::with_capacity(ordered.len());
         for (key, val) in &ordered {
-            // A collection used as a key is emitted inline as a flow collection
-            // (`[1, 2]: x`), never a block collection under an explicit `?`, so
-            // lower it in flow context (matching the fast path, which has no
-            // explicit-key form). A scalar key stays in block context; a
-            // multi-line one is double-quoted by `keyify_scalar` below.
+            // Keys lower with `in_key` set: whatever a key decomposes to — a
+            // container, an Enum value, a `default` result — is emitted inline
+            // (a flow collection, a quoted scalar), matching the fast path,
+            // which has no explicit-key form of its own.
             //
             // If lowering a key or value errors, dismantle the pairs already built
             // iteratively before returning: their derived recursive `Drop` would
             // otherwise overflow the native stack when an earlier value was deeply
             // nested. Mirrors the success-path teardown in `dumps`.
-            let key_flow = flow || is_container(key);
-            let key_node = match self.lower(key, depth + 1, key_flow) {
-                Ok(mut node) => {
-                    keyify_scalar(&mut node);
-                    node
-                }
+            let key_node = match self.lower(key, depth + 1, flow, true) {
+                Ok(node) => node,
                 Err(err) => {
                     drop_node_pairs(pairs);
                     return Err(err);
                 }
             };
-            match self.lower(val, depth + 1, flow) {
+            match self.lower(val, depth + 1, flow, false) {
                 Ok(val_node) => pairs.push((key_node, val_node)),
                 Err(err) => {
                     crate::stack::drop_node_tree(key_node);
@@ -529,18 +645,16 @@ impl Lower<'_, '_, '_> {
         tag: Option<String>,
         flow: Option<bool>,
         in_flow: bool,
+        in_key: bool,
     ) -> PyResult<YamlNode> {
-        let tag = tag.map(|t| normalize_tag(&t));
-        if let Some(tag) = &tag {
-            validate_tag(tag)?;
-        }
-        let flow = self.flowing(flow, in_flow);
+        let tag = descriptor_tag(tag)?;
+        let flow = self.flowing(flow, in_flow, in_key);
         let mut out: Vec<YamlNode> = Vec::with_capacity(items.len());
         for item in &items {
             // On error, dismantle the items already built iteratively before
             // returning, so a deeply nested earlier item cannot overflow the stack
             // via its recursive `Drop`. Mirrors the success-path teardown.
-            match self.lower(item, depth + 1, flow) {
+            match self.lower(item, depth + 1, flow, false) {
                 Ok(node) => out.push(node),
                 Err(err) => {
                     for node in out {
@@ -559,25 +673,52 @@ impl Lower<'_, '_, '_> {
 
     /// A tagged node: lower `inner` (its children still reach `represent`) and
     /// attach the validated tag. `inner` goes through `lower` at the next depth so
-    /// it is depth-bounded and stack-guarded; a serializer that returns a tag
+    /// it is depth-bounded and headroom-checked; a serializer that returns a tag
     /// wrapping its own input therefore aliases (and is rejected below) instead of
     /// recursing without bound.
+    ///
+    /// The tag arrives through the shared `YAMLRocksTag`/`serializers` channel,
+    /// which a plain `dumps` validates as written: no canonical-URI normalization
+    /// here (that is a porting affordance for descriptor tags only), so both
+    /// paths accept and reject exactly the same tags.
     fn tagged_node(
         &mut self,
         tag: String,
         inner: &Bound<'_, PyAny>,
         depth: u32,
         in_flow: bool,
+        in_key: bool,
     ) -> PyResult<YamlNode> {
-        let tag = normalize_tag(&tag);
         validate_tag(&tag)?;
-        let mut node = self.lower(inner, depth + 1, in_flow)?;
+        let mut node = self.lower(inner, depth + 1, in_flow, in_key)?;
         // An alias cannot carry a tag (nor an anchor); a tag wrapping a
         // self-referential or already-shared value is unrepresentable.
         if matches!(node.kind, YamlNodeKind::Alias(_)) {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "cannot attach a tag to a self-referential or shared value",
             ));
+        }
+        // One node carries one tag: wrapping an already-tagged value (a nested
+        // `YAMLRocksTag`, or an inner value whose type serializes tagged) would
+        // silently drop one of the two, so it is rejected on both paths.
+        if node.tag.is_some() {
+            crate::stack::drop_node_tree(node);
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "cannot attach a tag to a value that already carries a tag",
+            ));
+        }
+        // The tag belongs to *this* occurrence (the wrapper), not to the inner
+        // value: untrack the inner value so a later occurrence lowers a fresh
+        // copy instead of aliasing the tagged node (an alias would silently
+        // inherit the tag). A value that already aliased back into this subtree
+        // (a self-reference) keeps its anchor — its inner aliases resolve to it.
+        if let Some(marker) = node.anchor.as_deref() {
+            if let Ok(id) = marker.parse::<usize>() {
+                if !self.aliased.contains(&id) {
+                    node.anchor = None;
+                    self.seen.remove(&id);
+                }
+            }
         }
         node.tag = Some(tag);
         Ok(node)
@@ -590,19 +731,20 @@ impl Lower<'_, '_, '_> {
         result: &Bound<'_, PyAny>,
         depth: u32,
         in_flow: bool,
+        in_key: bool,
     ) -> PyResult<YamlNode> {
         if let Ok(tag_obj) = result.cast::<YAMLRocksTag>() {
             let (tag, inner) = {
                 let borrowed = tag_obj.borrow();
                 (borrowed.tag.clone(), borrowed.value.clone_ref(self.py))
             };
-            return self.tagged_node(tag, inner.bind(self.py), depth, in_flow);
+            return self.tagged_node(tag, inner.bind(self.py), depth, in_flow, in_key);
         }
         if let Ok(tuple) = result.cast::<PyTuple>() {
             if tuple.len() == 2 {
                 let tag: String = tuple.get_item(0)?.extract()?;
                 let value = tuple.get_item(1)?;
-                return self.tagged_node(tag, &value, depth, in_flow);
+                return self.tagged_node(tag, &value, depth, in_flow, in_key);
             }
         }
         Err(pyo3::exceptions::PyTypeError::new_err(
@@ -611,10 +753,13 @@ impl Lower<'_, '_, '_> {
     }
 
     /// Whether a collection emits in flow style: forced when already inside a flow
-    /// collection (a block child would be invalid there), else the descriptor's
-    /// explicit `flow=`, else the document-wide `OPT_FLOW_STYLE` default.
-    fn flowing(&self, flow: Option<bool>, in_flow: bool) -> bool {
-        in_flow || flow.unwrap_or(self.flow_all)
+    /// collection (a block child would be invalid there); else the descriptor's
+    /// explicit `flow=` (which can opt a key back into the explicit `? ` block
+    /// form); else forced for a mapping key, since the fast path emits a
+    /// collection key inline as a flow collection; else the document-wide
+    /// `OPT_FLOW_STYLE` default.
+    fn flowing(&self, flow: Option<bool>, in_flow: bool, in_key: bool) -> bool {
+        in_flow || flow.unwrap_or(in_key || self.flow_all)
     }
 
     /// Order a mapping's `(key, value)` pairs for emission. With `sort_keys` set,
@@ -624,15 +769,18 @@ impl Lower<'_, '_, '_> {
     /// lowered, so anchor detection follows the final emission order (sorting after
     /// would risk emitting an alias before its anchor).
     ///
-    /// A non-scalar key (a `datetime`/`UUID`/`Path`, a container, a custom object)
-    /// keeps input order rather than being ranked by its rendered form. Ranking it
-    /// would mean running the conversion here and again when the key is lowered
-    /// (a double call, observable for a stateful `isoformat`/`__fspath__`), and
-    /// the sort must precede lowering for anchor ordering, so the two cannot share
-    /// one conversion. A plain `dumps` orders a `datetime`/`UUID`/`Path` key by its
-    /// string and a container key by input order; this matches the container case
-    /// and diverges only for the stringy special types, an accepted limitation for
-    /// the exotic case of a mapping keyed on such objects under `sort_keys`.
+    /// A key that needs a conversion beyond the primitives (a `datetime`/`UUID`/
+    /// `Path`/`Decimal`, an `Enum`, a container, a custom object) keeps input
+    /// order rather than being ranked by its rendered form. Ranking it would mean
+    /// running the conversion here and again when the key is lowered (a double
+    /// call, observable for a stateful `isoformat`/`__fspath__`), and the sort
+    /// must precede lowering for anchor ordering, so the two cannot share one
+    /// conversion. A plain `dumps` orders such keys by their converted form and a
+    /// container key by input order; this matches the container case and diverges
+    /// only for the converting types, an accepted, documented limitation for the
+    /// exotic case of a mapping keyed on such objects under `sort_keys`. A
+    /// `bytes` key is the exception: its conversion is a pure UTF-8 view, so it
+    /// sorts with the strings exactly as a plain `dumps` does.
     fn sorted_pairs<'a>(
         &self,
         pairs: Vec<(Bound<'a, PyAny>, Bound<'a, PyAny>)>,
@@ -665,9 +813,9 @@ impl Lower<'_, '_, '_> {
         match value {
             V::Null => synthetic(YamlNodeKind::Null, NodeStyle::Block, None),
             V::Bool(b) => scalar_plain(if b { "true" } else { "false" }),
-            V::Int(i) => scalar_plain(&i.to_string()),
-            V::BigInt(s) => scalar_plain(&s),
-            V::Float(f) => scalar_plain(&crate::emit_util::canonical_float(f)),
+            V::Int(i) => scalar_plain(i.to_string()),
+            V::BigInt(s) => scalar_plain(s.into_owned()),
+            V::Float(f) => scalar_plain(crate::emit_util::canonical_float(f)),
             V::String(s) => {
                 let style = flow_safe_style(
                     auto_string_style(&s, self.double_quotes, self.schema),
@@ -679,7 +827,7 @@ impl Lower<'_, '_, '_> {
                     None,
                 )
             }
-            V::Timestamp(ts) => scalar_plain(&ts.to_iso()),
+            V::Timestamp(ts) => scalar_plain(ts.to_iso()),
             V::Sequence(items) => {
                 let items = items
                     .into_iter()
@@ -796,6 +944,15 @@ impl SortKey {
                 return SortKey::Str(text.to_owned());
             }
         }
+        // The fast path converts `bytes` to its UTF-8 text and sorts it with the
+        // strings; mirror that. Invalid UTF-8 falls to `Other` — lowering such a
+        // key raises the same encode error as a plain `dumps`, so its rank is
+        // never observable.
+        if let Ok(bytes) = obj.cast::<PyBytes>() {
+            if let Ok(text) = std::str::from_utf8(bytes.as_bytes()) {
+                return SortKey::Str(text.to_owned());
+            }
+        }
         SortKey::Other(index)
     }
 
@@ -896,9 +1053,9 @@ fn name_anchors_inner(
 
 /// A synthetic plain scalar node, for a value that is inherently plain-safe (a
 /// bool/int/float/timestamp token from the fast-path `Value`).
-fn scalar_plain(text: &str) -> YamlNode {
+fn scalar_plain(text: impl Into<String>) -> YamlNode {
     synthetic(
-        YamlNodeKind::Scalar(text.to_owned(), ScalarStyle::Plain),
+        YamlNodeKind::Scalar(text.into(), ScalarStyle::Plain),
         NodeStyle::Block,
         None,
     )
@@ -924,35 +1081,6 @@ fn drop_node_pairs(pairs: Vec<(YamlNode, YamlNode)>) {
     }
 }
 
-/// Whether `obj` is a built-in collection (dict/list/tuple/set/frozenset), the
-/// values that render as a collection and so, as a mapping key, must be emitted
-/// inline as a flow collection rather than a block one.
-fn is_container(obj: &Bound<'_, PyAny>) -> bool {
-    obj.is_instance_of::<PyDict>()
-        || obj.is_instance_of::<PyList>()
-        || obj.is_instance_of::<PyTuple>()
-        || obj.is_instance_of::<PySet>()
-        || obj.is_instance_of::<PyFrozenSet>()
-}
-
-/// Re-style a synthetic block-scalar (`literal`/`folded`) key as double-quoted,
-/// matching the fast path: a multi-line string used as a mapping key is emitted
-/// inline as a double-quoted scalar (`"a\nb": v`), not as an explicit
-/// `? |`-block key. A block scalar cannot be an inline (implicit) key, so a
-/// deferred multi-line string that auto-styled to a literal block would
-/// otherwise diverge from a plain `dumps`. Only synthetic (dump-path) keys are
-/// touched; a loaded key keeps its source form.
-fn keyify_scalar(node: &mut YamlNode) {
-    if !node.synthetic {
-        return;
-    }
-    if let YamlNodeKind::Scalar(_, style @ (ScalarStyle::Literal | ScalarStyle::Folded)) =
-        &mut node.kind
-    {
-        *style = ScalarStyle::DoubleQuoted;
-    }
-}
-
 /// Block or flow layout for a collection node.
 fn node_style(flow: bool) -> NodeStyle {
     if flow {
@@ -962,33 +1090,50 @@ fn node_style(flow: bool) -> NodeStyle {
     }
 }
 
-/// Why an explicit block scalar `style` cannot losslessly represent `value`, or
-/// `None` if it can. A block scalar normalizes line endings and cannot hold a
-/// `\r` or a non-printable control; a `folded` scalar rewrites interior newlines
-/// (a single newline folds to a space, blank lines collapse), so any newline
-/// makes it lossy; a `literal` auto-detects its indentation from the first
-/// content line, so a leading space or tab there would be swallowed (this emitter
-/// writes no explicit indentation indicator). A non-block style never applies.
-fn block_style_lossiness(value: &str, style: ScalarStyle) -> Option<&'static str> {
-    // Only block scalars are constrained here. A double-quoted scalar escapes a
-    // carriage return and every control character, and `plain`/`single` are the
-    // caller's explicit non-block choice, so none of them are rejected.
-    if !matches!(style, ScalarStyle::Literal | ScalarStyle::Folded) {
-        return None;
-    }
-    // A block scalar normalizes line endings and cannot hold a `\r` or a
-    // non-printable control.
-    if value.contains('\r') {
-        return Some("it contains a carriage return");
-    }
-    if value.chars().any(crate::emit_util::is_non_printable) {
-        return Some("it contains a non-printable control character");
-    }
+/// Why an explicit scalar `style` cannot represent `value` without changing it
+/// on reload, or `None` if it can. Double quotes escape anything and are never
+/// rejected; every other style has content it cannot hold:
+///
+/// - A block scalar (`literal`/`folded`) normalizes line endings and cannot hold
+///   a `\r` or a non-printable control; a `folded` scalar rewrites interior
+///   newlines, so any newline makes it lossy; a `literal` auto-detects its
+///   indentation from the first content line, so a leading space or tab there
+///   would be swallowed (this emitter writes no indentation indicator).
+/// - A `single` scalar cannot escape: a line break folds (or fails to parse)
+///   and a control character would be written raw, which `loads` rejects.
+/// - A `plain` scalar has no quoting at all: content that re-reads as
+///   structure, a comment, another node, or trimmed whitespace silently changes
+///   the document ([`plain_lossiness`]). Content that merely re-reads as another
+///   *type* (`"true"`, `"1.5"`) stays allowed — that type change is the
+///   documented use of an explicit plain style.
+fn style_lossiness(value: &str, style: ScalarStyle) -> Option<&'static str> {
     match style {
-        ScalarStyle::Folded if value.contains('\n') => {
-            Some("folding would rewrite its line breaks")
+        ScalarStyle::DoubleQuoted => None,
+        ScalarStyle::Plain => plain_lossiness(value),
+        ScalarStyle::SingleQuoted => {
+            if value.contains('\n') || value.contains('\r') {
+                Some("single quotes cannot hold a line break")
+            } else if value
+                .chars()
+                .any(|c| c != '\t' && ((c as u32) < 0x20 || crate::emit_util::is_non_printable(c)))
+            {
+                Some("single quotes cannot escape a control character")
+            } else {
+                None
+            }
         }
-        ScalarStyle::Literal => {
+        ScalarStyle::Literal | ScalarStyle::Folded => {
+            // A block scalar normalizes line endings and cannot hold a `\r` or a
+            // non-printable control.
+            if value.contains('\r') {
+                return Some("it contains a carriage return");
+            }
+            if value.chars().any(crate::emit_util::is_non_printable) {
+                return Some("it contains a non-printable control character");
+            }
+            if matches!(style, ScalarStyle::Folded) && value.contains('\n') {
+                return Some("folding would rewrite its line breaks");
+            }
             let first = value.split('\n').find(|line| !line.is_empty());
             match first {
                 Some(line) if line.starts_with([' ', '\t']) => {
@@ -997,14 +1142,71 @@ fn block_style_lossiness(value: &str, style: ScalarStyle) -> Option<&'static str
                 _ => None,
             }
         }
-        _ => None,
     }
 }
 
+/// Why an explicit `plain` style cannot represent `value`: with no quotes, any
+/// content the scanner reads as structure, a comment, another node kind, a
+/// document marker, or foldable whitespace silently changes the document on
+/// reload. Mirrors the hazards `needs_quoting` guards on the auto path, minus
+/// the type-resolution rules: re-reading as another type is the point of
+/// forcing `plain`.
+fn plain_lossiness(value: &str) -> Option<&'static str> {
+    if value.is_empty() {
+        return Some("an empty string has no plain rendering");
+    }
+    if value.contains('\n') || value.contains('\r') {
+        return Some("a plain scalar cannot hold a line break");
+    }
+    if value
+        .chars()
+        .any(|c| c == '\t' || (c as u32) < 0x20 || crate::emit_util::is_non_printable(c))
+    {
+        return Some("it contains a tab or control character");
+    }
+    if value.starts_with('\u{feff}') {
+        return Some("a leading byte order mark would be stripped on reload");
+    }
+    let bytes = value.as_bytes();
+    if bytes[0] == b' ' || bytes[bytes.len() - 1] == b' ' {
+        return Some("leading or trailing spaces would be trimmed on reload");
+    }
+    // `-`/`?`/`:` are indicators only before whitespace (or alone); any other
+    // leading indicator re-scans the value as something else entirely (an
+    // alias, an anchor, a tag, a comment, a quote, a directive, ...).
+    match bytes[0] {
+        b'-' | b'?' | b':' if bytes.len() == 1 || bytes[1] == b' ' => {
+            return Some("it begins with a YAML indicator");
+        }
+        b',' | b'[' | b']' | b'{' | b'}' | b'#' | b'&' | b'*' | b'!' | b'|' | b'>' | b'\''
+        | b'"' | b'%' | b'@' | b'`' => {
+            return Some("it begins with a YAML indicator");
+        }
+        _ => {}
+    }
+    if value == "---" || value == "..." || value.starts_with("--- ") || value.starts_with("... ") {
+        return Some("it re-reads as a document marker");
+    }
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b':' if i + 1 == bytes.len() || bytes[i + 1] == b' ' => {
+                return Some("it contains a ':' mapping indicator");
+            }
+            b'#' if i > 0 && bytes[i - 1] == b' ' => {
+                return Some("it contains a ' #' comment starter");
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Downgrade a block scalar style (`literal`/`folded`) to double-quoted when the
-/// scalar sits inside a flow collection, where a block scalar is invalid.
-fn flow_safe_style(style: ScalarStyle, in_flow: bool) -> ScalarStyle {
-    if in_flow && matches!(style, ScalarStyle::Literal | ScalarStyle::Folded) {
+/// scalar sits in an inline-only position: inside a flow collection or as a
+/// mapping key, where a block scalar is invalid. This is also what renders a
+/// deferred multi-line string key as `"a\nb": v`, matching the fast path.
+fn flow_safe_style(style: ScalarStyle, inline: bool) -> ScalarStyle {
+    if inline && matches!(style, ScalarStyle::Literal | ScalarStyle::Folded) {
         ScalarStyle::DoubleQuoted
     } else {
         style
@@ -1015,8 +1217,9 @@ fn flow_safe_style(style: ScalarStyle, in_flow: bool) -> ScalarStyle {
 /// PyYAML-faithful auto styling when the style is unset. Any provided tag is
 /// validated with the emit-side tag rules.
 ///
-/// An explicit style is honored verbatim, tag kept. For `auto` we mirror
-/// PyYAML's rule so a host's representers port without hand-annotating styles:
+/// An explicit style is validated against the value ([`style_lossiness`]) and
+/// then honored, tag kept. For `auto` we mirror PyYAML's rule so a host's
+/// representers port without hand-annotating styles:
 ///
 /// - No tag: quote only when a plain rendering would reload as a different type
 ///   ([`assigned_string_style`]).
@@ -1031,45 +1234,40 @@ fn flow_safe_style(style: ScalarStyle, in_flow: bool) -> ScalarStyle {
 ///   `!extend`); the quoting is the style PyYAML emits, not what preserves the
 ///   tag. This is why `!extend my_id` emits as `!extend 'my_id'`.
 ///
-/// A block scalar style inside a flow collection is downgraded to a quoted style
-/// (`in_flow`), since block scalars are invalid there.
+/// A block scalar style inside a flow collection, or on a mapping key, is
+/// downgraded to a quoted style (`inline`), since block scalars are invalid in
+/// those positions.
 fn scalar_node(
     value: String,
     style: Option<ScalarStyle>,
-    tag: Option<&str>,
+    tag: Option<String>,
     double_quotes: bool,
     schema: Schema,
-    in_flow: bool,
+    inline: bool,
 ) -> PyResult<YamlNode> {
-    // Normalize a canonical core tag to its `!!X` shorthand, then validate.
-    let tag = tag.map(normalize_tag);
-    if let Some(tag) = &tag {
-        validate_tag(tag)?;
-    }
-    let tag = tag.as_deref();
+    let tag = descriptor_tag(tag)?;
     if let Some(style) = style {
-        let style = flow_safe_style(style, in_flow);
-        // A block scalar (`literal`/`folded`) that cannot round-trip the value is
-        // rejected rather than silently emitted lossy: folding rewrites interior
-        // newlines, a literal auto-detects indentation from a leading-whitespace
-        // first line, and neither can hold a `\r` or a non-printable control. A
-        // flow context has already downgraded the style to double-quoted above, so
-        // this only fires for a real block scalar.
-        if let Some(reason) = block_style_lossiness(&value, style) {
+        let style = flow_safe_style(style, inline);
+        // A style that cannot round-trip the value is rejected rather than
+        // silently emitted lossy or unparsable: a lossy block scalar, a plain
+        // scalar that re-reads as structure, a single-quoted control character.
+        // An inline position has already downgraded a block style to
+        // double-quoted above, so the downgrade rescues what it can.
+        if let Some(reason) = style_lossiness(&value, style) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "a {} scalar cannot represent this value without changing it on \
-                 reload ({reason}); use \"double\"/\"single\" or the default style",
+                 reload ({reason}); use \"double\" or the default style",
                 style.name(),
             )));
         }
         return Ok(synthetic(
             YamlNodeKind::Scalar(value, style),
             NodeStyle::Block,
-            tag.map(str::to_owned),
+            tag,
         ));
     }
     let Some(tag) = tag else {
-        let style = flow_safe_style(auto_string_style(&value, double_quotes, schema), in_flow);
+        let style = flow_safe_style(auto_string_style(&value, double_quotes, schema), inline);
         return Ok(synthetic(
             YamlNodeKind::Scalar(value, style),
             NodeStyle::Block,
@@ -1077,14 +1275,14 @@ fn scalar_node(
         ));
     };
     let plain_kind = schema.classify(&value, ScalarStyle::Plain, None);
-    let node = match standard_tag_kind(tag) {
+    let node = match standard_tag_kind(&tag) {
         // The plain value already resolves to the tag's type: the tag is
         // redundant, so drop it. A string still runs through the quoting rule
         // (a plain `[x]` would be unsafe); a bool/int/float/null token is
         // inherently plain-safe (`true`, `1.0e17`), so emit it plain.
         Some(std) if kind_matches(plain_kind, std) => {
             let style = if matches!(std, StdKind::Str) {
-                flow_safe_style(auto_string_style(&value, double_quotes, schema), in_flow)
+                flow_safe_style(auto_string_style(&value, double_quotes, schema), inline)
             } else {
                 ScalarStyle::Plain
             };
@@ -1092,20 +1290,22 @@ fn scalar_node(
         }
         // A `!!str` on a value that would resolve to a non-string: quote to keep
         // it a string; the quoting implies the str tag, so drop it.
-        Some(StdKind::Str) => synthetic(
-            YamlNodeKind::Scalar(value.clone(), forced_quote_style(&value)),
-            NodeStyle::Block,
-            None,
-        ),
+        Some(StdKind::Str) => {
+            let style = forced_quote_style(&value);
+            synthetic(YamlNodeKind::Scalar(value, style), NodeStyle::Block, None)
+        }
         // A custom tag (or a standard one the value does not match): keep the tag
         // and force quotes to match PyYAML's default style for a tagged scalar.
         // The tag survives a plain scalar too, so this is styling for parity, not
         // a tag-preservation requirement.
-        _ => synthetic(
-            YamlNodeKind::Scalar(value.clone(), forced_quote_style(&value)),
-            NodeStyle::Block,
-            Some(tag.to_owned()),
-        ),
+        _ => {
+            let style = forced_quote_style(&value);
+            synthetic(
+                YamlNodeKind::Scalar(value, style),
+                NodeStyle::Block,
+                Some(tag),
+            )
+        }
     };
     Ok(node)
 }
@@ -1121,14 +1321,25 @@ enum StdKind {
     Str,
 }
 
+/// Normalize a descriptor tag and validate it with the emit-side tag rules.
+/// Only descriptor tags are normalized: the shared `YAMLRocksTag`/`serializers`
+/// channel keeps plain-`dumps` validation as written ([`Lower::tagged_node`]).
+fn descriptor_tag(tag: Option<String>) -> PyResult<Option<String>> {
+    let tag = tag.map(normalize_tag);
+    if let Some(tag) = &tag {
+        validate_tag(tag)?;
+    }
+    Ok(tag)
+}
+
 /// Normalize a canonical core tag (`tag:yaml.org,2002:X`) to its `!!X` shorthand,
 /// so a callback ported from a PyYAML representer (which uses the canonical URI
 /// tags) both passes tag validation and gets the standard-tag elision. Any other
-/// tag is left as written.
-fn normalize_tag(tag: &str) -> String {
+/// tag is passed through as written.
+fn normalize_tag(tag: String) -> String {
     match tag.strip_prefix("tag:yaml.org,2002:") {
         Some(suffix) => format!("!!{suffix}"),
-        None => tag.to_owned(),
+        None => tag,
     }
 }
 

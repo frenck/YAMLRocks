@@ -264,7 +264,9 @@ not `str`; decode with `.decode()` if you need text.
   representer. See [full control with `represent`](/guides/dumping/#full-control-with-represent).
 
 `dumps` also accepts a [`YAMLRocksDocument`](#yamlrocksdocument) to re-emit a round-tripped
-document.
+document. A document re-emits from its own preserved layout, so the emit-shaping
+arguments (`option`, `width`, `serializers`, `default`, `represent`) are ignored
+for it.
 
 ```python
 import yamlrocks

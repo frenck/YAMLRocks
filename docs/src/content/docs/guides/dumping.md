@@ -538,14 +538,24 @@ yamlrocks.YAMLRocksMapping(pairs, *, tag=None, flow=None)
   (`!!bool` on `true`, `!!float` on `1.0e17`) is elided; a custom tag is kept.
 - `style` is one of `"auto"`, `"plain"`, `"single"`, `"double"`, `"literal"`
   (a `|` block), or `"folded"` (a `>` block). `"auto"` lets the emitter quote as
-  needed; an explicit style is honored verbatim, so it is on you to pick one the
-  value can be represented in losslessly (forcing `"plain"` on `"[x]"`, say,
-  would reload as a list). A block style inside a flow collection is downgraded
-  to a quoted style, since block scalars are invalid there.
+  needed. An explicit style is honored, but one the value cannot survive a
+  reload in raises `ValueError` instead of silently corrupting the output: a
+  `"plain"` with a line break, a leading indicator, or a `': '`/`' #'` sequence;
+  a `"single"` with a control character; a `"literal"`/`"folded"` with content a
+  block scalar cannot hold. `"double"` can escape anything and is never
+  rejected. A plain rendering that merely re-reads as another _type_ (forcing
+  `"plain"` on `"true"` or `"1.5"`) is allowed; that type change is the point of
+  forcing it. A block style inside a flow collection, or on a mapping key, is
+  downgraded to a quoted style, since block scalars are invalid there.
 - `items` and `pairs` hold your **original** objects, not pre-rendered nodes.
   YAMLRocks re-dispatches each child through `represent`, so you only ever
   describe one level. Indentation, flow, `sort_keys`, and shared-object anchoring
-  stay with the library.
+  stay with the library. A one-shot iterable (a generator, `dict.items()`) is
+  snapshotted when the descriptor is constructed, so returning the same
+  descriptor for several values emits the same items every time.
+- A collection-valued mapping key emits inline as a flow collection
+  (`{x: 1}: v`), matching a plain `dumps`; a descriptor with `flow=False`
+  opts a key into the explicit `? ` block form instead.
 
 A forced block scalar, for example, is just a style:
 
@@ -591,12 +601,16 @@ deferred values alike.
 
 Deferred output is byte-for-byte identical to a plain `dumps` in all but a few
 documented corners: a shared object gets a PyYAML-style anchor/alias where a
-plain `dumps` duplicates it (and a shared _tagged collection_ raises, since a
-YAML alias cannot carry the tag, where a plain `dumps` duplicates it); a
-non-primitive mapping key (a `datetime`, `UUID`, `Path`, or custom object) keeps
-insertion order under `OPT_SORT_KEYS` rather than being sorted by its rendered
-string; and `width` line-wrapping is not implemented (passing `width` with
-`represent` raises rather than silently ignoring it).
+plain `dumps` duplicates it (and a tag wrapping an already-anchored shared value
+raises, since a YAML alias cannot carry the tag); a mapping key that needs a
+conversion (a `datetime`, `UUID`, `Path`, `Decimal`, `Enum`, or custom object)
+keeps insertion order under `OPT_SORT_KEYS` rather than being sorted by its
+converted form (`bytes` keys sort with the strings, as a plain `dumps` does);
+`width` line-wrapping is not implemented (passing `width` with `represent`
+raises rather than silently ignoring it); and because the lowering re-enters
+Python for every value, the supported nesting depth is bounded by the thread's
+stack (hundreds of levels; deeper raises a clean error where a plain `dumps`
+goes further).
 
 ## Writing to a file with `dump`
 

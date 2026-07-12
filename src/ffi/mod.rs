@@ -596,8 +596,8 @@ pub fn dumps(
     let opts = option.unwrap_or(0);
 
     // A round-trip document re-emits from its own preserved layout, so the
-    // emit-shaping arguments (option, width, serializers, default) do not
-    // apply here and are intentionally ignored; round-trip styles win.
+    // emit-shaping arguments (option, width, serializers, default, represent)
+    // do not apply here and are intentionally ignored; round-trip styles win.
     if let Ok(doc) = obj.cast::<YAMLRocksDocument>() {
         return doc.borrow().to_yaml(py);
     }
@@ -611,6 +611,22 @@ pub fn dumps(
         &resolved
     } else {
         obj
+    };
+
+    // The encode context is shared by the represent branch and the plain path
+    // below, built once so a new encode option cannot be wired into one and
+    // silently missed in the other (which would break the deferred byte-for-byte
+    // parity between the two).
+    let ctx = EncodeCtx {
+        default: default.as_ref(),
+        serialize_numpy: opts & OPT_SERIALIZE_NUMPY != 0,
+        omit_microseconds: opts & OPT_OMIT_MICROSECONDS != 0,
+        naive_utc: opts & OPT_NAIVE_UTC != 0,
+        utc_z: opts & OPT_UTC_Z != 0,
+        passthrough_datetime: opts & OPT_PASSTHROUGH_DATETIME != 0,
+        passthrough_dataclass: opts & OPT_PASSTHROUGH_DATACLASS != 0,
+        tags: serializers.as_ref(),
+        depth: 0,
     };
 
     // A `represent` callback shapes how the host's own objects emit, including
@@ -631,25 +647,11 @@ pub fn dumps(
         let double_quotes = opts & OPT_SINGLE_QUOTES == 0;
         let schema = Schema::new(opts & OPT_YAML_1_1 != 0, opts & OPT_PYYAML_COMPAT != 0);
         let null_style = null_style_from_opts(opts)?;
-        // A deferred value renders through the same encode context as a plain
-        // `dumps`, so `default`/`serializers` and datetime/dataclass/numpy
-        // handling compose with `represent`.
-        let encode_ctx = EncodeCtx {
-            default: default.as_ref(),
-            serialize_numpy: opts & OPT_SERIALIZE_NUMPY != 0,
-            omit_microseconds: opts & OPT_OMIT_MICROSECONDS != 0,
-            naive_utc: opts & OPT_NAIVE_UTC != 0,
-            utc_z: opts & OPT_UTC_Z != 0,
-            passthrough_datetime: opts & OPT_PASSTHROUGH_DATETIME != 0,
-            passthrough_dataclass: opts & OPT_PASSTHROUGH_DATACLASS != 0,
-            tags: serializers.as_ref(),
-            depth: 0,
-        };
         let mut node = represent::represent_to_node(
             py,
             obj,
             represent.bind(py),
-            encode_ctx,
+            ctx,
             opts & OPT_SORT_KEYS != 0,
             opts & OPT_FLOW_STYLE != 0,
             double_quotes,
@@ -665,6 +667,7 @@ pub fn dumps(
             explicit_end: opts & OPT_EXPLICIT_END != 0,
             indent: if opts & OPT_INDENT_4 != 0 { 4 } else { 2 },
             indentless: opts & OPT_INDENTLESS_SEQUENCES != 0,
+            single_quotes: opts & OPT_SINGLE_QUOTES != 0,
         };
         let bytes = py.detach(|| {
             let bytes = crate::roundtrip::emit::emit_roundtrip_dump(&node, null_style, dump);
@@ -684,17 +687,6 @@ pub fn dumps(
     emit_options.null_style = null_style_from_opts(opts)?;
     // Best-effort line wrapping; 0 (the default) leaves lines unwrapped.
     emit_options.width = width.unwrap_or(0);
-    let ctx = EncodeCtx {
-        default: default.as_ref(),
-        serialize_numpy: opts & OPT_SERIALIZE_NUMPY != 0,
-        omit_microseconds: opts & OPT_OMIT_MICROSECONDS != 0,
-        naive_utc: opts & OPT_NAIVE_UTC != 0,
-        utc_z: opts & OPT_UTC_Z != 0,
-        passthrough_datetime: opts & OPT_PASSTHROUGH_DATETIME != 0,
-        passthrough_dataclass: opts & OPT_PASSTHROUGH_DATACLASS != 0,
-        tags: serializers.as_ref(),
-        depth: 0,
-    };
     let value = python_to_value(py, obj, ctx)?;
     // Emission is pure Rust over an owned value tree, so release the GIL for it;
     // this is what makes `async_dumps` non-blocking on the event loop.

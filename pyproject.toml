@@ -109,7 +109,7 @@ charts = [
   "fastyaml-rs==0.6.3",
   "oyaml==1.0",
   "strictyaml==1.7.3",
-  "matplotlib==3.11.0",
+  "matplotlib==3.11.1",
 ]
 # Everything needed for local development, in one install. Includes the `just`
 # task runner (the `rust-just` wheel bundles the binary), so `uv run just` works

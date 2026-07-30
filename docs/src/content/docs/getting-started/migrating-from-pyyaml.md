@@ -160,9 +160,9 @@ ref: *a
 """
 
 data = yamlrocks.loads(source, option=yamlrocks.OPT_ANNOTATED)
-data["base"] is data["ref"]   # True, the same object (as in PyYAML)
+data["base"] is data["ref"]  # True, the same object (as in PyYAML)
 data["base"]["k"] = 99
-data["ref"]["k"]              # 99, seen through the shared reference
+data["ref"]["k"]  # 99, seen through the shared reference
 ```
 
 The plain fast path (`loads` with no options, which is what the `compat` shim

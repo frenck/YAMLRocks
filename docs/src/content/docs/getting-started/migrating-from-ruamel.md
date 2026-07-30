@@ -33,6 +33,7 @@ illustrative (it needs ruamel installed), while the YAMLRocks block runs as writ
 ```python
 # ruamel.yaml
 from ruamel.yaml import YAML
+
 yaml = YAML(typ="safe")
 data = yaml.load("name: app\nport: 8080")
 ```
@@ -58,6 +59,7 @@ for text), or writes to a path or stream through `yamlrocks.dump`:
 ```python
 # ruamel.yaml
 import sys
+
 yaml.dump(data, sys.stdout)
 ```
 
@@ -65,6 +67,7 @@ yaml.dump(data, sys.stdout)
 # yamlrocks
 import sys
 import yamlrocks
+
 sys.stdout.write(yamlrocks.dumps({"name": "app", "port": 8080}).decode())
 # name: app
 # port: 8080
@@ -83,7 +86,8 @@ into it, assign, and re-emit.
 # ruamel.yaml
 from ruamel.yaml import YAML
 import sys
-yaml = YAML()              # typ="rt" is the default
+
+yaml = YAML()  # typ="rt" is the default
 doc = yaml.load("# config\nname: app  # service\nport: 8080\n")
 doc["port"] = 9090
 yaml.dump(doc, sys.stdout)

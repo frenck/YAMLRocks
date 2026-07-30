@@ -388,7 +388,7 @@ def loads(
     on_missing_secret: Callable[[str, str | None, int], None] | None = None,
     on_missing_env_var: Callable[[str, str | None, int], None] | None = None,
 ) -> (
-    dict[str, Any] | list[Any] | str | int | float | bool | None | YAMLRocksDocument
+    dict[str, Any] | list[Any] | str | int | float | bool | YAMLRocksDocument | None
 ): ...
 def load(
     source: _Source,
@@ -403,7 +403,7 @@ def load(
     on_missing_secret: Callable[[str, str | None, int], None] | None = None,
     on_missing_env_var: Callable[[str, str | None, int], None] | None = None,
 ) -> (
-    dict[str, Any] | list[Any] | str | int | float | bool | None | YAMLRocksDocument
+    dict[str, Any] | list[Any] | str | int | float | bool | YAMLRocksDocument | None
 ): ...
 def schema_ref(
     data: bytes | bytearray | memoryview | str,
@@ -476,7 +476,7 @@ async def async_loads(
     on_missing_secret: Callable[[str, str | None, int], None] | None = None,
     on_missing_env_var: Callable[[str, str | None, int], None] | None = None,
 ) -> (
-    dict[str, Any] | list[Any] | str | int | float | bool | None | YAMLRocksDocument
+    dict[str, Any] | list[Any] | str | int | float | bool | YAMLRocksDocument | None
 ): ...
 async def async_load(
     source: _Source,
@@ -491,7 +491,7 @@ async def async_load(
     on_missing_secret: Callable[[str, str | None, int], None] | None = None,
     on_missing_env_var: Callable[[str, str | None, int], None] | None = None,
 ) -> (
-    dict[str, Any] | list[Any] | str | int | float | bool | None | YAMLRocksDocument
+    dict[str, Any] | list[Any] | str | int | float | bool | YAMLRocksDocument | None
 ): ...
 async def async_load_all(
     source: _Source,

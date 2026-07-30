@@ -215,8 +215,8 @@ file has already been stamped (for example by [`upgrade`](#upgrade)) as 1.2. See
 ```python
 import yamlrocks
 
-yamlrocks.yaml_version(b"%YAML 1.2\n---\nx: 1\n")   # '1.2'
-yamlrocks.yaml_version(b"x: 1\n")                   # None
+yamlrocks.yaml_version(b"%YAML 1.2\n---\nx: 1\n")  # '1.2'
+yamlrocks.yaml_version(b"x: 1\n")  # None
 ```
 
 ## Writing
@@ -232,7 +232,9 @@ def dumps(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
-    represent: Callable[[Any], YAMLRocksScalar | YAMLRocksSequence | YAMLRocksMapping | None]
+    represent: Callable[
+        [Any], YAMLRocksScalar | YAMLRocksSequence | YAMLRocksMapping | None
+    ]
     | None = None,
 ) -> bytes: ...
 ```
@@ -290,7 +292,9 @@ def dump(
     option: int | None = None,
     serializers: dict[type, Callable[[Any], Any]] | None = None,
     width: int | None = None,
-    represent: Callable[[Any], YAMLRocksScalar | YAMLRocksSequence | YAMLRocksMapping | None]
+    represent: Callable[
+        [Any], YAMLRocksScalar | YAMLRocksSequence | YAMLRocksMapping | None
+    ]
     | None = None,
 ) -> None: ...
 ```
@@ -369,6 +373,7 @@ directly in the rare case it matters.
 
 ```python
 import yamlrocks
+
 
 async def read_config(path):
     return await yamlrocks.async_load(path, option=yamlrocks.OPT_INCLUDES)
@@ -490,17 +495,19 @@ to serialize.
 ```python
 import yamlrocks
 
-doc = yamlrocks.loads(b"# c\nname: app  # inline\nport: 8080\n", option=yamlrocks.OPT_ROUND_TRIP)
+doc = yamlrocks.loads(
+    b"# c\nname: app  # inline\nport: 8080\n", option=yamlrocks.OPT_ROUND_TRIP
+)
 doc["port"] = 9090
 doc.to_yaml()
 # b'# c\nname: app  # inline\nport: 9090\n'
 ```
 
 ```python
-doc.keys()      # ['name', 'port']
-doc.to_dict()   # {'name': 'app', 'port': 9090}
-doc.walk()      # [(('name',), 'app'), (('port',), 9090)]
-doc.range()     # (2, 1, 3, 11)  the body spans line 2, col 1, to the end of 'port: 8080'
+doc.keys()  # ['name', 'port']
+doc.to_dict()  # {'name': 'app', 'port': 9090}
+doc.walk()  # [(('name',), 'app'), (('port',), 9090)]
+doc.range()  # (2, 1, 3, 11)  the body spans line 2, col 1, to the end of 'port: 8080'
 ```
 
 `locate(path)` maps a data path, the kind a validator emits to say where a failure
@@ -514,8 +521,8 @@ first document (a leading `int` is a key/index, not a document selector).
 ```python
 doc = yamlrocks.loads(b"port: not-a-number\n", option=yamlrocks.OPT_ROUND_TRIP)
 node = doc.locate(["port"])
-node.line, node.column   # (1, 7), the value, 1-indexed
-node.range()             # (1, 7, 1, 19)
+node.line, node.column  # (1, 7), the value, 1-indexed
+node.range()  # (1, 7, 1, 19)
 doc.locate(["missing"])  # None
 ```
 
@@ -540,9 +547,11 @@ It supports the same navigation as `YAMLRocksDocument` (`__len__`, `__getitem__`
 ```python
 import yamlrocks
 
-doc = yamlrocks.loads(b"server:\n  host: localhost\n  port: 80\n", option=yamlrocks.OPT_ROUND_TRIP)
-server = doc["server"]          # a YAMLRocksDocumentView
-server["port"] = 443            # writes through to doc
+doc = yamlrocks.loads(
+    b"server:\n  host: localhost\n  port: 80\n", option=yamlrocks.OPT_ROUND_TRIP
+)
+server = doc["server"]  # a YAMLRocksDocumentView
+server["port"] = 443  # writes through to doc
 doc.to_yaml()
 # b'server:\n  host: localhost\n  port: 443\n'
 ```
@@ -580,10 +589,10 @@ doc = yamlrocks.loads(
     b"server:\n  port: 8080  # the http port\n", option=yamlrocks.OPT_ROUND_TRIP
 )
 port = doc.node["server"]["port"]
-port.value          # 8080
-port.comment        # 'the http port'
-port.line           # 2
-port.style          # 'plain'
+port.value  # 8080
+port.comment  # 'the http port'
+port.line  # 2
+port.style  # 'plain'
 
 port.value = 8443
 port.comment = "now uses TLS"
@@ -623,12 +632,10 @@ never annotated, as Python forbids subclassing them).
 ```python
 import yamlrocks
 
-data = yamlrocks.loads(
-    b"server:\n  host: localhost\n", option=yamlrocks.OPT_ANNOTATED
-)
-data.__line__       # 1
-data.__column__     # 1
-data.__file__       # None
+data = yamlrocks.loads(b"server:\n  host: localhost\n", option=yamlrocks.OPT_ANNOTATED)
+data.__line__  # 1
+data.__column__  # 1
+data.__file__  # None
 type(data["server"]["host"]).__name__  # 'YAMLRocksAnnotatedStr'
 ```
 
@@ -649,8 +656,8 @@ round-trips. See [emitting custom tags](/guides/tags/#emitting-custom-tags).
 import yamlrocks
 
 tag = yamlrocks.loads(b"v: !custom 5", option=yamlrocks.OPT_PASSTHROUGH_TAG)["v"]
-tag.tag     # '!custom'
-tag.value   # '5'
+tag.tag  # '!custom'
+tag.value  # '5'
 ```
 
 See the [custom tags guide](/guides/tags/).
@@ -697,9 +704,11 @@ import yamlrocks
 
 tags = yamlrocks.YAMLRocksTags()
 
+
 @tags.register("!vec")
 def make_vec(value):
     return tuple(value)
+
 
 yamlrocks.loads(b"p: !vec [1, 2]", tags=tags)
 # {'p': (1, 2)}
@@ -739,8 +748,8 @@ For a gradual migration, `yamlrocks.compat` is a PyYAML drop-in:
 ```python
 from yamlrocks import compat
 
-compat.safe_load("a: 1")              # {'a': 1}
-compat.safe_dump({"b": 2, "a": 1})    # 'a: 1\nb: 2\n'
+compat.safe_load("a: 1")  # {'a': 1}
+compat.safe_dump({"b": 2, "a": 1})  # 'a: 1\nb: 2\n'
 ```
 
 It exposes `safe_load`, `safe_load_all`, `safe_dump`, `safe_dump_all`, `load`,

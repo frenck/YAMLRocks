@@ -51,9 +51,9 @@ import yamlrocks
 try:
     yamlrocks.loads(b'key: "unterminated')
 except yamlrocks.YAMLRocksParseError as exc:
-    print(exc.line, exc.column)   # 1 6
-    print(exc.file)               # None (loaded from bytes)
-    print(str(exc))               # unterminated double-quoted scalar at line 1, column 6
+    print(exc.line, exc.column)  # 1 6
+    print(exc.file)  # None (loaded from bytes)
+    print(str(exc))  # unterminated double-quoted scalar at line 1, column 6
     raise
 ```
 
@@ -94,7 +94,7 @@ with open(os.path.join(config, "main.yaml"), "w") as handle:
 try:
     yamlrocks.load(os.path.join(config, "main.yaml"), option=yamlrocks.OPT_INCLUDES)
 except yamlrocks.YAMLRocksIncludeNotFoundError as exc:
-    print(exc.file is not None)         # True
+    print(exc.file is not None)  # True
     print(isinstance(exc.include_stack, list))  # True
 ```
 
@@ -142,7 +142,7 @@ write errors after you switch the import:
 import yamlrocks
 from yamlrocks import compat
 
-print(compat.YAMLError is yamlrocks.YAMLRocksError)   # True
+print(compat.YAMLError is yamlrocks.YAMLRocksError)  # True
 ```
 
 ## See also

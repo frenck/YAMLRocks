@@ -16,7 +16,7 @@ resolution differs. The same input can therefore yield different Python types:
 ```python
 import yamlrocks
 
-yamlrocks.loads(b"enabled: yes")                              # {'enabled': 'yes'}
+yamlrocks.loads(b"enabled: yes")  # {'enabled': 'yes'}
 yamlrocks.loads(b"enabled: yes", option=yamlrocks.OPT_YAML_1_1)  # {'enabled': True}
 ```
 
@@ -72,7 +72,7 @@ differently:
 ```python
 import yamlrocks
 
-yamlrocks.loads(b"perm: 0777")                              # {'perm': '0777'}
+yamlrocks.loads(b"perm: 0777")  # {'perm': '0777'}
 yamlrocks.loads(b"perm: 0777", option=yamlrocks.OPT_YAML_1_1)  # {'perm': 511}
 ```
 
@@ -244,7 +244,9 @@ import yamlrocks
 
 source = b"# device settings\nenabled: yes # was on\nmask: 0777\n"
 
-doc = yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP | yamlrocks.OPT_UPGRADE_1_1)
+doc = yamlrocks.loads(
+    source, option=yamlrocks.OPT_ROUND_TRIP | yamlrocks.OPT_UPGRADE_1_1
+)
 doc.to_yaml()
 # b'%YAML 1.2\n---\n# device settings\nenabled: true # was on\nmask: 511\n'
 ```
@@ -281,7 +283,7 @@ the upgrade keep their 1.2 meaning:
 import yamlrocks
 
 upgraded = yamlrocks.upgrade(b"enabled: yes\n")
-edited = upgraded + b"note: yes\n"          # the user adds a string later
+edited = upgraded + b"note: yes\n"  # the user adds a string later
 
 yamlrocks.loads(edited, option=yamlrocks.OPT_UPGRADE_1_1)
 # {'enabled': True, 'note': 'yes'}          (note stays a string)
@@ -293,7 +295,7 @@ read with the 1.1 schema even by default, because it explicitly said so.
 ```python
 import yamlrocks
 
-yamlrocks.loads(b"%YAML 1.1\n---\nenabled: yes\n")   # {'enabled': True}
+yamlrocks.loads(b"%YAML 1.1\n---\nenabled: yes\n")  # {'enabled': True}
 ```
 
 To check whether a file already carries a declaration, use `yaml_version`, a pure
@@ -302,8 +304,8 @@ detector that reads only the stream header (no body parse, no I/O):
 ```python
 import yamlrocks
 
-yamlrocks.yaml_version(b"%YAML 1.2\n---\nx: 1\n")   # '1.2'
-yamlrocks.yaml_version(b"x: 1\n")                   # None
+yamlrocks.yaml_version(b"%YAML 1.2\n---\nx: 1\n")  # '1.2'
+yamlrocks.yaml_version(b"x: 1\n")  # None
 ```
 
 ### Finding the 1.1-isms

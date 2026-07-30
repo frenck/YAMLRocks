@@ -110,7 +110,7 @@ YAML 1.2 is the default, so `yes`/`no`/`on`/`off` are plain strings. Opt into th
 1.1 schema when you need its booleans and octals:
 
 ```python
-yamlrocks.loads(b"enabled: yes")                              # {'enabled': 'yes'}
+yamlrocks.loads(b"enabled: yes")  # {'enabled': 'yes'}
 yamlrocks.loads(b"enabled: yes", option=yamlrocks.OPT_YAML_1_1)  # {'enabled': True}
 ```
 
@@ -122,8 +122,8 @@ ease off the legacy spellings without a manual conversion step.
 ```python
 doc = yamlrocks.loads(content, option=yamlrocks.OPT_ROUND_TRIP)
 
-doc["server"]["host"] = "example.com"   # deep edits write through to the AST
-print(doc.to_yaml().decode())           # comments and formatting preserved
+doc["server"]["host"] = "example.com"  # deep edits write through to the AST
+print(doc.to_yaml().decode())  # comments and formatting preserved
 ```
 
 An unmodified document re-emits byte-for-byte identical; only the nodes you touch
@@ -138,7 +138,7 @@ doc = yamlrocks.loads(
     include_dir="/config",
 )
 
-doc["automation"][0]["trigger"] = "state"   # edit a value from an included file
+doc["automation"][0]["trigger"] = "state"  # edit a value from an included file
 
 yamlrocks.dump_includes(doc, include_dir="/config")
 # Only the modified included file is rewritten; the root config is untouched.
@@ -151,8 +151,8 @@ Supported tags: `!include`, `!include_dir_named`, `!include_dir_list`,
 
 ```python
 data = yamlrocks.loads(content, option=yamlrocks.OPT_ANNOTATED)
-data.__line__              # 1
-data["server"].__line__    # 3
+data.__line__  # 1
+data["server"].__line__  # 3
 ```
 
 `YAMLRocksAnnotatedDict`/`YAMLRocksAnnotatedList`/`YAMLRocksAnnotatedStr` subclass `dict`/`list`/`str`, so

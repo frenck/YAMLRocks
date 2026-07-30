@@ -66,8 +66,8 @@ targets, and its scalar resolution lands between the two in surprising ways:
 ```python
 import yamlrocks
 
-yamlrocks.loads(b"mode: 0777")   # {'mode': '0777'}  a string, per YAML 1.2
-yamlrocks.loads(b"mask: 0o17")   # {'mask': 15}      the 1.2 octal
+yamlrocks.loads(b"mode: 0777")  # {'mode': '0777'}  a string, per YAML 1.2
+yamlrocks.loads(b"mask: 0o17")  # {'mask': 15}      the 1.2 octal
 # yamlium returns {'mode': 777} and {'mask': '0o17'}.
 ```
 

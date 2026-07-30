@@ -85,11 +85,11 @@ import yamlrocks
 
 doc = yamlrocks.loads(b"name: my-app\nport: 8080\n", option=yamlrocks.OPT_ROUND_TRIP)
 
-doc["name"]               # 'my-app'
-doc.get("missing", 0)     # 0  (default, like dict.get)
-"port" in doc             # True
-len(doc)                  # 2
-doc.keys()                # ['name', 'port']
+doc["name"]  # 'my-app'
+doc.get("missing", 0)  # 0  (default, like dict.get)
+"port" in doc  # True
+len(doc)  # 2
+doc.keys()  # ['name', 'port']
 ```
 
 | Operation    | Method                       | Returns                              |
@@ -105,7 +105,7 @@ an ordinary `dict` (recursively), which is handy for comparisons, JSON
 serialization, or handing data to code that does not care about layout:
 
 ```python
-doc.to_dict()             # {'name': 'my-app', 'port': 8080}
+doc.to_dict()  # {'name': 'my-app', 'port': 8080}
 ```
 
 ## Deep edits write through
@@ -140,9 +140,9 @@ slice it points at:
 ```python
 view = doc["server"]
 
-view.to_dict()            # {'host': 'example.com', 'ports': [80, 8443]}
-view.unwrap()             # same plain dict/list snapshot
-view.keys()               # ['host', 'ports']
+view.to_dict()  # {'host': 'example.com', 'ports': [80, 8443]}
+view.unwrap()  # same plain dict/list snapshot
+view.keys()  # ['host', 'ports']
 ```
 
 :::note[Views are windows, not copies]
@@ -244,7 +244,7 @@ doc = yamlrocks.loads(
     option=yamlrocks.OPT_ROUND_TRIP,
 )
 
-doc.range()               # (2, 1, 3, 11)
+doc.range()  # (2, 1, 3, 11)
 ```
 
 The body of this document starts on line 2 (after the header comment) at column 1,
@@ -252,7 +252,7 @@ and ends on line 3 at column 11. Views report the span of their own node, so you
 can locate any nested value:
 
 ```python
-doc["name"]               # 'app'
+doc["name"]  # 'app'
 ```
 
 For read-only access to line and column on plain objects (without the editing
@@ -282,13 +282,13 @@ server:
 
 doc = yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP)
 
-port = doc.node["server"]["port"]   # a YAMLRocksNode, even though the value is a scalar
-port.value                # 8080
-port.comment              # 'the http port'   (inline comment, no leading '#')
-port.line                 # 4                 (1-based)
-port.column               # 9
-port.style                # 'plain'
-doc.node["server"]["tags"].style   # 'flow'
+port = doc.node["server"]["port"]  # a YAMLRocksNode, even though the value is a scalar
+port.value  # 8080
+port.comment  # 'the http port'   (inline comment, no leading '#')
+port.line  # 4                 (1-based)
+port.column  # 9
+port.style  # 'plain'
+doc.node["server"]["tags"].style  # 'flow'
 ```
 
 ### Reading metadata
@@ -389,10 +389,10 @@ definition's `aliases` lists the references that point back at it: the basis for
 "find usages" or a safe rename:
 
 ```python
-doc.anchors                       # {'d': YAMLRocksNode(mapping)}
+doc.anchors  # {'d': YAMLRocksNode(mapping)}
 defaults = doc.anchors["d"]
-defaults.value                    # {'retries': 3, 'timeout': 30}
-len(defaults.aliases)             # 2  (the `<<: *d` merge and `staging: *d`)
+defaults.value  # {'retries': 3, 'timeout': 30}
+len(defaults.aliases)  # 2  (the `<<: *d` merge and `staging: *d`)
 ```
 
 On an alias node, `is_alias` is `True` and `target` is the defining `YAMLRocksNode`, so
@@ -400,8 +400,8 @@ you can hop from a use to its definition (and read _its_ comment or line):
 
 ```python
 staging = doc.node["staging"]
-staging.is_alias                  # True
-staging.target.anchor             # 'd'
+staging.is_alias  # True
+staging.target.anchor  # 'd'
 ```
 
 ### Following aliases
@@ -410,7 +410,7 @@ Indexing an alias follows it transparently to the anchor it points at, so you ca
 read straight through a `*alias`:
 
 ```python
-doc.node["staging"]["retries"].value   # 3
+doc.node["staging"]["retries"].value  # 3
 ```
 
 Because the alias and its anchor are the _same_ node, an edit made through a
@@ -467,8 +467,8 @@ doc = yamlrocks.loads(
     option=yamlrocks.OPT_ROUND_TRIP,
 )
 
-doc.node["defaults"].anchor = "d"   # mark &d
-doc.node["prod"].make_alias("d")    # prod: *d
+doc.node["defaults"].anchor = "d"  # mark &d
+doc.node["prod"].make_alias("d")  # prod: *d
 
 print(doc.to_yaml().decode())
 # defaults: &d
@@ -497,8 +497,8 @@ import yamlrocks
 
 doc = yamlrocks.loads(b"name: app\n", option=yamlrocks.OPT_ROUND_TRIP)
 
-doc.to_yaml()             # b'name: app\n'
-yamlrocks.dumps(doc)         # b'name: app\n'  (accepts a YAMLRocksDocument too)
+doc.to_yaml()  # b'name: app\n'
+yamlrocks.dumps(doc)  # b'name: app\n'  (accepts a YAMLRocksDocument too)
 ```
 
 Use `doc.to_yaml()` when you have a `YAMLRocksDocument` in hand; reach for
@@ -519,8 +519,8 @@ import yamlrocks
 doc = yamlrocks.load("/config/app.yaml", option=yamlrocks.OPT_ROUND_TRIP)
 doc["port"] = 9090
 
-doc.origin                # '/config/app.yaml'
-doc.save()                # ['/config/app.yaml']  - written in place
+doc.origin  # '/config/app.yaml'
+doc.save()  # ['/config/app.yaml']  - written in place
 ```
 
 A document parsed with `loads` (from bytes, not a file) has `origin == None`. Give
@@ -614,7 +614,9 @@ import yamlrocks
 
 source = b"# device settings\nenabled: yes # was on\nmask: 0777\n"
 
-doc = yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP | yamlrocks.OPT_UPGRADE_1_1)
+doc = yamlrocks.loads(
+    source, option=yamlrocks.OPT_ROUND_TRIP | yamlrocks.OPT_UPGRADE_1_1
+)
 doc.to_yaml()
 # b'%YAML 1.2\n---\n# device settings\nenabled: true # was on\nmask: 511\n'
 ```

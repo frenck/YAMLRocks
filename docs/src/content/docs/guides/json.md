@@ -91,7 +91,7 @@ doc = yamlrocks.loads(
     option=yamlrocks.OPT_ROUND_TRIP,
 )
 
-yamlrocks.to_json(doc)            # the whole document
+yamlrocks.to_json(doc)  # the whole document
 # b'{"service":{"name":"web","ports":[80,443]},"meta":{"owner":"ops"}}'
 
 yamlrocks.to_json(doc["service"])  # just one sub-tree

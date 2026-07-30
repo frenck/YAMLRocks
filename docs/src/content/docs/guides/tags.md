@@ -55,9 +55,11 @@ import yamlrocks
 
 tags = yamlrocks.YAMLRocksTags()
 
+
 @tags.register("!vec")
 def make_vec(value):
     return tuple(value)
+
 
 yamlrocks.loads(b"point: !vec [1, 2]", tags=tags)
 # {'point': (1, 2)}
@@ -98,10 +100,12 @@ point: !vec
   - 2
 """
 
+
 def handler(tag, value):
     if tag == "!vec":
         return tuple(value)
     return value
+
 
 yamlrocks.loads(source, tag_handler=handler)
 # {'point': (1, 2)}
@@ -129,8 +133,8 @@ import yamlrocks
 result = yamlrocks.loads(b"x: !custom 5", option=yamlrocks.OPT_PASSTHROUGH_TAG)
 
 tag = result["x"]
-tag.tag      # '!custom'
-tag.value    # '5'
+tag.tag  # '!custom'
+tag.value  # '5'
 ```
 
 This is ideal for round-tripping or for deferring the decision: you can inspect
@@ -141,8 +145,8 @@ yourself with `YAMLRocksTag(tag, value)` when building data to emit:
 import yamlrocks
 
 t = yamlrocks.YAMLRocksTag("!custom", 5)
-t.tag        # '!custom'
-t.value      # 5
+t.tag  # '!custom'
+t.value  # 5
 ```
 
 :::note[How the mechanisms combine]
@@ -192,9 +196,11 @@ dispatch on the Python type.
 ```python
 import yamlrocks
 
+
 class Input:
     def __init__(self, name):
         self.name = name
+
 
 yamlrocks.dumps(
     {"brightness": Input("kitchen")},
@@ -214,12 +220,14 @@ round-trip a custom type cleanly:
 ```python
 import yamlrocks
 
+
 class Input:
     def __init__(self, name):
         self.name = name
 
     def __repr__(self):
         return f"Input({self.name!r})"
+
 
 out = yamlrocks.dumps(
     {"brightness": Input("kitchen")},
@@ -305,9 +313,9 @@ secrets = {"db_password": "hunter2"}
 
 yamlrocks.loads(
     b"password: !secret db_password",
-    tag_handler=lambda tag, value: secrets.get(value, value)
-    if tag == "!secret"
-    else value,
+    tag_handler=lambda tag, value: (
+        secrets.get(value, value) if tag == "!secret" else value
+    ),
 )
 # {'password': 'hunter2'}
 ```

@@ -91,7 +91,7 @@ with open(os.path.join(workdir, "automations.yaml"), "wb") as f:
         b"- alias: Morning lights\n"
         b"  trigger:\n"
         b"    - platform: time\n"
-        b"      at: \"07:00:00\"\n"
+        b'      at: "07:00:00"\n'
         b"  action:\n"
         b"    - service: light.turn_on\n"
     )
@@ -104,9 +104,9 @@ config = yamlrocks.load(
     option=yamlrocks.OPT_INCLUDES | yamlrocks.OPT_SECRETS,
 )
 
-config["homeassistant"]["name"]          # 'Home'
-config["homeassistant"]["latitude"]      # 52.3676  (resolved from secrets.yaml)
-config["automation"][0]["alias"]         # 'Morning lights'
+config["homeassistant"]["name"]  # 'Home'
+config["homeassistant"]["latitude"]  # 52.3676  (resolved from secrets.yaml)
+config["automation"][0]["alias"]  # 'Morning lights'
 ```
 
 The `!include` is inlined and the `!secret` is resolved, just as Home Assistant
@@ -126,9 +126,9 @@ annotated = yamlrocks.load(
 )
 
 automations = annotated["automation"]
-automations.__line__                     # 2  (line within automations.yaml)
-automations.__file__                     # '.../automations.yaml'
-automations[0].__line__                  # 2
+automations.__line__  # 2  (line within automations.yaml)
+automations.__file__  # '.../automations.yaml'
+automations[0].__line__  # 2
 ```
 
 Because `__file__` follows the value across an `!include`, an error message can
@@ -153,11 +153,13 @@ config loader can wrap with a "did you forget to quote a template?" hint:
 ```python
 import yamlrocks
 
-opt = yamlrocks.OPT_INCLUDES | yamlrocks.OPT_ANNOTATED | yamlrocks.OPT_REJECT_COMPLEX_KEYS
+opt = (
+    yamlrocks.OPT_INCLUDES | yamlrocks.OPT_ANNOTATED | yamlrocks.OPT_REJECT_COMPLEX_KEYS
+)
 try:
     yamlrocks.loads(b"state: {{ states('sensor.x') }}\n", option=opt)
 except yamlrocks.YAMLRocksComplexKeyError as err:
-    print(err.line, err.column)   # 1 9
+    print(err.line, err.column)  # 1 9
 ```
 
 `YAMLRocksComplexKeyError` carries `.file`/`.line`/`.column` (and is a
@@ -280,7 +282,7 @@ data = yamlrocks.loads(
     b"http:\n  server_port: 8123\n",
     option=yamlrocks.OPT_ANNOTATED | yamlrocks.OPT_ANNOTATE_NUMBERS,
 )
-data["http"]["server_port"].__line__   # 2
+data["http"]["server_port"].__line__  # 2
 ```
 
 The only scalars that stay plain are `bool` and `None`: Python forbids

@@ -43,13 +43,13 @@ yourself with a `tag_handler` or `OPT_PASSTHROUGH_TAG`:
 import yamlrocks
 
 # A tag never executes anything. The value is just the scalar underneath.
-yamlrocks.loads(b"value: !something 42")          # {'value': '42'}
+yamlrocks.loads(b"value: !something 42")  # {'value': '42'}
 
 # Opt in to interpret a tag, on your terms.
 yamlrocks.loads(
     b"value: !double 5",
     tag_handler=lambda tag, value: int(value) * 2 if tag == "!double" else value,
-)                                              # {'value': 10}
+)  # {'value': 10}
 ```
 
 There is no `yamlrocks.load` that behaves like `yaml.load`. The safe behavior is
@@ -65,8 +65,8 @@ defaults to YAML 1.2, where those are plain strings:
 ```python
 import yamlrocks
 
-yamlrocks.loads(b"country: NO")                   # {'country': 'NO'}
-yamlrocks.loads(b"enabled: yes")                  # {'enabled': 'yes'}
+yamlrocks.loads(b"country: NO")  # {'country': 'NO'}
+yamlrocks.loads(b"enabled: yes")  # {'enabled': 'yes'}
 ```
 
 If you need the old behavior for a specific document, opt in with
@@ -76,7 +76,7 @@ legacy 1.1 files to canonical 1.2:
 ```python
 import yamlrocks
 
-yamlrocks.loads(b"enabled: yes", option=yamlrocks.OPT_YAML_1_1)   # {'enabled': True}
+yamlrocks.loads(b"enabled: yes", option=yamlrocks.OPT_YAML_1_1)  # {'enabled': True}
 yamlrocks.upgrade(b"enabled: yes\nmode: on\n")
 # b'%YAML 1.2\n---\nenabled: true\nmode: true\n'
 ```
@@ -91,8 +91,10 @@ an explicit opt-in that never touches other 1.1 forms:
 import datetime
 import yamlrocks
 
-yamlrocks.loads(b"at: 13:30:45")                                 # {'at': '13:30:45'}
-yamlrocks.loads(b"on: 2024-01-15", option=yamlrocks.OPT_TIMESTAMPS)  # {'on': datetime.date(2024, 1, 15)}
+yamlrocks.loads(b"at: 13:30:45")  # {'at': '13:30:45'}
+yamlrocks.loads(
+    b"on: 2024-01-15", option=yamlrocks.OPT_TIMESTAMPS
+)  # {'on': datetime.date(2024, 1, 15)}
 ```
 
 See [YAML 1.1 vs 1.2](/guides/yaml-11-vs-12/) for the full list of differences,
@@ -209,8 +211,8 @@ near drop-in switch:
 ```python
 import yamlrocks.compat as yaml
 
-yaml.safe_load(b"a: 1")            # {'a': 1}
-yaml.safe_dump({"a": 1})          # 'a: 1\n'  (a str, matching PyYAML)
+yaml.safe_load(b"a: 1")  # {'a': 1}
+yaml.safe_dump({"a": 1})  # 'a: 1\n'  (a str, matching PyYAML)
 ```
 
 `safe_load`, `safe_load_all`, `safe_dump`, and `safe_dump_all` map straight

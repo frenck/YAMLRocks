@@ -21,13 +21,13 @@ data = yamlrocks.loads(
     option=yamlrocks.OPT_ANNOTATED,
 )
 
-isinstance(data, dict)            # True (a real dict subclass)
-data.__line__                     # 1
-data.__column__                   # 1
+isinstance(data, dict)  # True (a real dict subclass)
+data.__line__  # 1
+data.__column__  # 1
 
-data["server"].__line__           # 3  (the mapping body starts here)
-data["server"]["host"].__line__   # 3
-data["server"]["host"].__column__ # 9
+data["server"].__line__  # 3  (the mapping body starts here)
+data["server"]["host"].__line__  # 3
+data["server"]["host"].__column__  # 9
 ```
 
 Every annotated node exposes five attributes:
@@ -57,9 +57,9 @@ PyYAML exposes as `node.start_mark`/`node.end_mark`.
 import yamlrocks
 
 data = yamlrocks.loads(b"key: value\nbroad: x\n", option=yamlrocks.OPT_ANNOTATED)
-key = list(data)[1]                              # the 'broad' key
-(key.__line__, key.__column__)                   # (2, 1)
-(key.__end_line__, key.__end_column__)           # (2, 6)  (just past 'broad')
+key = list(data)[1]  # the 'broad' key
+(key.__line__, key.__column__)  # (2, 1)
+(key.__end_line__, key.__end_column__)  # (2, 6)  (just past 'broad')
 ```
 
 :::note[End positions are exact, quotes included]
@@ -93,14 +93,14 @@ server:
 data = yamlrocks.loads(source, option=yamlrocks.OPT_ANNOTATED)
 
 # Dict behavior.
-list(data.keys())                 # ['name', 'server']
-{**data["server"]}                # {'host': 'localhost'}
+list(data.keys())  # ['name', 'server']
+{**data["server"]}  # {'host': 'localhost'}
 
 # Str behavior on a scalar.
 host = data["server"]["host"]
-host.upper()                      # 'LOCALHOST'
-host == "localhost"               # True
-host + ":8080"                    # 'localhost:8080'
+host.upper()  # 'LOCALHOST'
+host == "localhost"  # True
+host + ":8080"  # 'localhost:8080'
 ```
 
 Because they are genuine subclasses, you can pass annotated values to any function
@@ -121,7 +121,7 @@ data = yamlrocks.loads(b"name: app", option=yamlrocks.OPT_ANNOTATED)
 
 # Attach a class attribute (here a method) to the annotated string type.
 type(data["name"]).__shout__ = lambda self: self.upper() + "!"
-data["name"].__shout__()          # 'APP!'
+data["name"].__shout__()  # 'APP!'
 ```
 
 :::note[Class attributes, not instance attributes]
@@ -148,10 +148,10 @@ data = yamlrocks.loads(
     option=yamlrocks.OPT_ANNOTATED,
 )
 
-type(data).__name__                       # 'YAMLRocksAnnotatedDict'
-next(iter(data)).__line__                 # 1  (the `server` key's own line)
-type(data["server"]["host"]).__name__     # 'YAMLRocksAnnotatedStr'
-type(data["server"]["port"]).__name__     # 'int'  (plain by default)
+type(data).__name__  # 'YAMLRocksAnnotatedDict'
+next(iter(data)).__line__  # 1  (the `server` key's own line)
+type(data["server"]["host"]).__name__  # 'YAMLRocksAnnotatedStr'
+type(data["server"]["port"]).__name__  # 'int'  (plain by default)
 ```
 
 So by default a string value like `host` carries `__line__`/`__column__`, but an
@@ -173,9 +173,9 @@ data = yamlrocks.loads(
     b"port: 8080\n",
     option=yamlrocks.OPT_ANNOTATED | yamlrocks.OPT_ANNOTATE_NUMBERS,
 )
-data["port"]              # 8080
-data["port"].__line__     # 1
-data["port"] + 1          # 8081  (still an int in every way that matters)
+data["port"]  # 8080
+data["port"].__line__  # 1
+data["port"] + 1  # 8081  (still an int in every way that matters)
 ```
 
 An annotated number is an `int`/`float` _subclass_: `isinstance(x, int)`,
@@ -211,8 +211,8 @@ block: |
 """
 
 data = yamlrocks.loads(source, option=yamlrocks.OPT_ANNOTATED)
-data["inline"].__style__          # 'plain'
-data["block"].__style__           # 'literal'  (a | block; content starts at __line__ + 1)
+data["inline"].__style__  # 'plain'
+data["block"].__style__  # 'literal'  (a | block; content starts at __line__ + 1)
 ```
 
 ### Knowing which tag produced a value: `__source_tag__`
@@ -241,10 +241,10 @@ with open(os.path.join(workdir, "configuration.yaml"), "w") as f:
 opt = yamlrocks.OPT_ANNOTATED | yamlrocks.OPT_SECRETS | yamlrocks.OPT_INCLUDES
 data = yamlrocks.load(os.path.join(workdir, "configuration.yaml"), option=opt)
 
-data["api_key"].is_secret          # True  (from `api_key: !secret api_key`)
-data["api_key"].__source_tag__     # '!secret'
+data["api_key"].is_secret  # True  (from `api_key: !secret api_key`)
+data["api_key"].__source_tag__  # '!secret'
 data["api_key"].__source_target__  # 'api_key'  (the directive's argument)
-data["title"].__source_tag__       # None  (a plain inline value)
+data["title"].__source_tag__  # None  (a plain inline value)
 ```
 
 `__source_target__` carries the directive's _argument_: the secret name for
@@ -285,10 +285,10 @@ import yamlrocks
 
 data = yamlrocks.loads(b"items:\n  - a\n  - b\n", option=yamlrocks.OPT_ANNOTATED)
 
-type(data["items"]).__name__      # 'YAMLRocksAnnotatedList'
-data["items"].__line__            # 2
-data["items"][0].__line__         # 2
-data["items"][1].__line__         # 3
+type(data["items"]).__name__  # 'YAMLRocksAnnotatedList'
+data["items"].__line__  # 2
+data["items"][0].__line__  # 2
+data["items"][1].__line__  # 3
 ```
 
 ## Tracking the originating file
@@ -341,9 +341,9 @@ ref: *a
 
 data = yamlrocks.loads(source, option=yamlrocks.OPT_ANNOTATED)
 
-data["base"] is data["ref"]   # True, the same object
+data["base"] is data["ref"]  # True, the same object
 data["base"]["k"] = 99
-data["ref"]["k"]              # 99, seen through the shared reference
+data["ref"]["k"]  # 99, seen through the shared reference
 ```
 
 This matters for tools that define a block once under an anchor and reuse it in

@@ -53,7 +53,9 @@ stay small:
 import yamlrocks
 
 opt = yamlrocks.OPT_INDENT_2 | yamlrocks.OPT_SORT_KEYS
-print(yamlrocks.to_json(yamlrocks.loads(b"name: app\nport: 8080\n"), option=opt).decode())
+print(
+    yamlrocks.to_json(yamlrocks.loads(b"name: app\nport: 8080\n"), option=opt).decode()
+)
 # {
 #   "name": "app",
 #   "port": 8080
@@ -129,6 +131,7 @@ streams, so it carries a skip marker for the docs verifier:
 ```python
 #!/usr/bin/env python3
 """Read YAML on stdin, write pretty, sorted JSON on stdout."""
+
 import sys
 import yamlrocks
 
@@ -157,10 +160,10 @@ doc = yamlrocks.loads(
     option=yamlrocks.OPT_ROUND_TRIP,
 )
 
-yamlrocks.to_json(doc["service"])   # just one sub-tree, as JSON
+yamlrocks.to_json(doc["service"])  # just one sub-tree, as JSON
 # b'{"name":"web","ports":[80,443]}'
 
-doc.to_yaml()                       # the YAML is untouched, comments and all
+doc.to_yaml()  # the YAML is untouched, comments and all
 # b'service:\n  name: web\n  ports: [80, 443]\nmeta:\n  owner: ops\n'
 ```
 

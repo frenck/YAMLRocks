@@ -97,12 +97,14 @@ The editing surface is a `YAMLRocksDocument` with `dict`/`list`-style access plu
 ```python
 import yamlrocks
 
-doc = yamlrocks.loads(b"server:\n  host: localhost\n  port: 8080\n", option=yamlrocks.OPT_ROUND_TRIP)
+doc = yamlrocks.loads(
+    b"server:\n  host: localhost\n  port: 8080\n", option=yamlrocks.OPT_ROUND_TRIP
+)
 
-doc.keys()                       # ['server']
-doc["server"]["port"] = 9090     # nested edit writes through
-doc.to_dict()                    # {'server': {'host': 'localhost', 'port': 9090}}
-doc.walk()                       # [(('server', 'host'), 'localhost'), (('server', 'port'), 9090)]
+doc.keys()  # ['server']
+doc["server"]["port"] = 9090  # nested edit writes through
+doc.to_dict()  # {'server': {'host': 'localhost', 'port': 9090}}
+doc.walk()  # [(('server', 'host'), 'localhost'), (('server', 'port'), 9090)]
 ```
 
 See [round-trip editing](/guides/round-trip/) and the
@@ -135,9 +137,9 @@ import yamlrocks
 
 doc = yamlrocks.loads(b"name: app\nport: 8080\n", option=yamlrocks.OPT_ROUND_TRIP)
 
-doc.node["port"].comment = "the listen port"          # inline, no '#'
+doc.node["port"].comment = "the listen port"  # inline, no '#'
 doc.node["name"].comment_before = "service identity"  # standalone line above
-doc.node.comment_after = "end of config"              # trailing block (foot)
+doc.node.comment_after = "end of config"  # trailing block (foot)
 doc.to_yaml()
 # b'# service identity\nname: app\nport: 8080 # the listen port\n# end of config\n'
 ```

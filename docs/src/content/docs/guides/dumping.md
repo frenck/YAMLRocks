@@ -34,7 +34,7 @@ import yamlrocks
 
 payload = yamlrocks.dumps({"name": "app", "ports": [80, 443]})
 
-with open("config.yaml", "wb") as f:   # note the "wb" binary mode
+with open("config.yaml", "wb") as f:  # note the "wb" binary mode
     f.write(payload)
 ```
 
@@ -145,7 +145,9 @@ when concatenating documents into a single stream:
 ```python
 import yamlrocks
 
-yamlrocks.dumps({"a": 1}, option=yamlrocks.OPT_EXPLICIT_START | yamlrocks.OPT_EXPLICIT_END)
+yamlrocks.dumps(
+    {"a": 1}, option=yamlrocks.OPT_EXPLICIT_START | yamlrocks.OPT_EXPLICIT_END
+)
 # b'---\na: 1\n...\n'
 ```
 
@@ -156,7 +158,9 @@ is simply ignored:
 ```python
 import yamlrocks
 
-yamlrocks.dumps({"b": 1, "a": 2}, option=yamlrocks.OPT_SORT_KEYS | yamlrocks.OPT_INDENT_4)
+yamlrocks.dumps(
+    {"b": 1, "a": 2}, option=yamlrocks.OPT_SORT_KEYS | yamlrocks.OPT_INDENT_4
+)
 # b'a: 2\nb: 1\n'
 ```
 
@@ -202,7 +206,9 @@ folds back to a single space:
 ```python
 import yamlrocks
 
-config = {"description": "a fairly long sentence that we would like wrapped onto a few lines"}
+config = {
+    "description": "a fairly long sentence that we would like wrapped onto a few lines"
+}
 yamlrocks.dumps(config, width=40)
 # b'description: "a fairly long sentence\n             that we would like wrapped\n             onto a few lines"\n'
 ```
@@ -220,7 +226,9 @@ safe place to break:
 ```python
 import yamlrocks
 
-yamlrocks.dumps({"url": "https://example.com/a/very/long/unbreakable/path/here"}, width=20)
+yamlrocks.dumps(
+    {"url": "https://example.com/a/very/long/unbreakable/path/here"}, width=20
+)
 # b'url: https://example.com/a/very/long/unbreakable/path/here\n'
 ```
 
@@ -300,16 +308,20 @@ yamlrocks.dumps({"id": uuid.UUID("12345678-1234-5678-1234-567812345678")})
 yamlrocks.dumps({"price": decimal.Decimal("3.14")})
 # b'price: 3.14\n'
 
+
 class Color(enum.Enum):
     GREEN = "green"
 
+
 yamlrocks.dumps({"color": Color.GREEN})
 # b'color: green\n'
+
 
 @dataclass
 class Point:
     x: int
     y: int
+
 
 yamlrocks.dumps(Point(1, 2))
 # b'x: 1\ny: 2\n'
@@ -326,9 +338,7 @@ A timezone-aware `datetime` serializes to a full ISO 8601 timestamp by default:
 import yamlrocks
 import datetime
 
-dt = datetime.datetime(
-    2026, 6, 5, 12, 30, 45, 123456, tzinfo=datetime.timezone.utc
-)
+dt = datetime.datetime(2026, 6, 5, 12, 30, 45, 123456, tzinfo=datetime.timezone.utc)
 
 yamlrocks.dumps(dt)
 # b'2026-06-05T12:30:45.123456+00:00\n'
@@ -345,9 +355,7 @@ Three flags adjust how timestamps render:
 import yamlrocks
 import datetime
 
-dt = datetime.datetime(
-    2026, 6, 5, 12, 30, 45, 123456, tzinfo=datetime.timezone.utc
-)
+dt = datetime.datetime(2026, 6, 5, 12, 30, 45, 123456, tzinfo=datetime.timezone.utc)
 
 yamlrocks.dumps(dt, option=yamlrocks.OPT_OMIT_MICROSECONDS | yamlrocks.OPT_UTC_Z)
 # b'2026-06-05T12:30:45Z\n'
@@ -416,15 +424,18 @@ turn, so you can map a custom object onto a mapping or sequence:
 ```python
 import yamlrocks
 
+
 class Money:
     def __init__(self, amount, currency):
         self.amount = amount
         self.currency = currency
 
+
 def encode(obj):
     if isinstance(obj, Money):
         return {"amount": obj.amount, "currency": obj.currency}
     raise TypeError
+
 
 yamlrocks.dumps({"total": Money(42, "EUR")}, default=encode)
 # b'total:\n  amount: 42\n  currency: EUR\n'
@@ -472,10 +483,12 @@ emit them in a custom shape instead of a field mapping:
 import yamlrocks
 from dataclasses import dataclass
 
+
 @dataclass
 class Point:
     x: int
     y: int
+
 
 yamlrocks.dumps(
     Point(1, 2),
@@ -502,14 +515,17 @@ defer to the built-in rendering:
 ```python
 import yamlrocks
 
+
 class Secret:
     def __init__(self, name):
         self.name = name
+
 
 def represent(value):
     if isinstance(value, Secret):
         return yamlrocks.YAMLRocksScalar(value.name, tag="!secret")
     return None
+
 
 yamlrocks.dumps({"password": Secret("wifi"), "ssid": "home"}, represent=represent)
 # b"password: !secret 'wifi'\nssid: home\n"
@@ -565,10 +581,12 @@ A forced block scalar, for example, is just a style:
 ```python
 import yamlrocks
 
+
 def represent(value):
     if isinstance(value, str) and value.startswith("return"):
         return yamlrocks.YAMLRocksScalar(value, tag="!lambda", style="literal")
     return None
+
 
 yamlrocks.dumps({"on_press": "return x + 1;"}, represent=represent)
 # b'on_press: !lambda |-\n  return x + 1;\n'
@@ -653,8 +671,10 @@ worker thread, so a slow disk does not stall an asyncio application:
 import asyncio
 import yamlrocks
 
+
 async def main():
     await yamlrocks.async_dump({"name": "app", "port": 8080}, "config.yaml")
+
 
 asyncio.run(main())
 
@@ -679,8 +699,10 @@ synchronous call yourself:
 import asyncio
 import yamlrocks
 
+
 async def main():
     return await asyncio.to_thread(yamlrocks.dumps, {"name": "app"})
+
 
 asyncio.run(main())
 # b'name: app\n'

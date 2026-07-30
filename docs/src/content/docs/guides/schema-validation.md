@@ -232,8 +232,8 @@ schema = {
     },
 }
 
-yamlrocks.loads(b"id: 7\n", schema=schema)        # {'id': 7}
-yamlrocks.loads(b"id: abc123\n", schema=schema)   # {'id': 'abc123'}
+yamlrocks.loads(b"id: 7\n", schema=schema)  # {'id': 7}
+yamlrocks.loads(b"id: abc123\n", schema=schema)  # {'id': 'abc123'}
 ```
 
 If the value matches none of the branches, validation fails:
@@ -391,8 +391,10 @@ SCHEMAS = {
     },
 }
 
+
 def resolve(ref):
     return SCHEMAS.get(ref)
+
 
 doc = b"# yaml-language-server: $schema=https://example.com/config.schema.json\nname: app\nport: 8080\n"
 

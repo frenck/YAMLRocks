@@ -138,8 +138,8 @@ port: 8080
 """
 
 data = yamlrocks.loads(source)
-payload = yamlrocks.dumps(data)        # already bytes
-with open("out.yaml", "wb") as f:   # note "wb"
+payload = yamlrocks.dumps(data)  # already bytes
+with open("out.yaml", "wb") as f:  # note "wb"
     f.write(payload)
 ```
 

@@ -30,7 +30,7 @@ features:
 doc = yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP)
 
 # Read values like a dict / list.
-doc["server"]["host"]            # 'localhost'
+doc["server"]["host"]  # 'localhost'
 
 # Write values; only what you touch changes.
 doc["server"]["port"] = 9090
@@ -63,11 +63,11 @@ onto that subtree. Edits through a view write back to the parent document:
 ```python
 doc = yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP)
 
-server = doc["server"]           # a YAMLRocksDocumentView onto the `server` mapping
-type(server).__name__            # 'YAMLRocksDocumentView'
+server = doc["server"]  # a YAMLRocksDocumentView onto the `server` mapping
+type(server).__name__  # 'YAMLRocksDocumentView'
 
-server["host"] = "0.0.0.0"       # writes through to doc
-doc.to_yaml().splitlines()[2]    # b'  host: 0.0.0.0  # bind address'
+server["host"] = "0.0.0.0"  # writes through to doc
+doc.to_yaml().splitlines()[2]  # b'  host: 0.0.0.0  # bind address'
 ```
 
 A view exposes the same navigation and inspection methods as the document:
@@ -84,8 +84,8 @@ to the right lines:
 ```python
 doc = yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP)
 
-doc["server"].range()            # (3, 3, 4, 13) - the server block spans lines 3-4
-doc["features"].range()          # (6, 3, 7, 12) - the features list spans lines 6-7
+doc["server"].range()  # (3, 3, 4, 13) - the server block spans lines 3-4
+doc["features"].range()  # (6, 3, 7, 12) - the features list spans lines 6-7
 ```
 
 Combine `range()` with `walk()` to drive a "jump to definition" or inline-error
@@ -102,6 +102,7 @@ for path, value in doc.walk():
 # ('features', 0) = logging
 # ('features', 1) = metrics
 
+
 # Locate the span of the node at a given path.
 def span_at(document, path):
     node = document
@@ -109,7 +110,8 @@ def span_at(document, path):
         node = node[key]
     return node.range()
 
-span_at(doc, ("server",))        # (3, 3, 4, 13)
+
+span_at(doc, ("server",))  # (3, 3, 4, 13)
 ```
 
 ## Bulk edits with walk()
@@ -148,9 +150,9 @@ view:
 ```python
 doc = yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP)
 
-plain = doc.to_dict()            # a regular dict/list tree
+plain = doc.to_dict()  # a regular dict/list tree
 subtree = doc["server"].to_dict()  # snapshot of one subtree
-doc["server"].unwrap()           # equivalent for a view
+doc["server"].unwrap()  # equivalent for a view
 ```
 
 ## Emitting and saving
@@ -163,8 +165,8 @@ memory with `to_yaml()`:
 doc = yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP)
 doc["server"]["port"] = 9090
 
-emitted = yamlrocks.dumps(doc)      # bytes, identical to doc.to_yaml()
-emitted == doc.to_yaml()         # True
+emitted = yamlrocks.dumps(doc)  # bytes, identical to doc.to_yaml()
+emitted == doc.to_yaml()  # True
 ```
 
 The example below touches the filesystem, so it carries a skip marker for the
@@ -178,8 +180,8 @@ import yamlrocks
 doc = yamlrocks.load("config.yaml", option=yamlrocks.OPT_ROUND_TRIP)
 doc["server"]["port"] = 9090
 
-doc.save()                       # overwrite config.yaml in place
-doc.save("config.new.yaml")      # or write a copy, leaving the original
+doc.save()  # overwrite config.yaml in place
+doc.save("config.new.yaml")  # or write a copy, leaving the original
 ```
 
 ## Tips

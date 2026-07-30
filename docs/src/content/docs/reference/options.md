@@ -9,7 +9,9 @@ the bitwise-OR operator `|` and pass the result as `option`:
 ```python
 import yamlrocks
 
-yamlrocks.dumps({"b": 1, "a": 2}, option=yamlrocks.OPT_SORT_KEYS | yamlrocks.OPT_INDENT_4)
+yamlrocks.dumps(
+    {"b": 1, "a": 2}, option=yamlrocks.OPT_SORT_KEYS | yamlrocks.OPT_INDENT_4
+)
 # b'a: 2\nb: 1\n'
 ```
 
@@ -54,7 +56,7 @@ older schema where it is a boolean:
 ```python
 import yamlrocks
 
-yamlrocks.loads(b"a: yes")                              # {'a': 'yes'}
+yamlrocks.loads(b"a: yes")  # {'a': 'yes'}
 yamlrocks.loads(b"a: yes", option=yamlrocks.OPT_YAML_1_1)  # {'a': True}
 ```
 
@@ -65,8 +67,10 @@ survives a round-trip through a 1.1 reader:
 ```python
 import yamlrocks
 
-yamlrocks.dumps({"elapsed": "10:20:30"})                              # b'elapsed: 10:20:30\n'
-yamlrocks.dumps({"elapsed": "10:20:30"}, option=yamlrocks.OPT_YAML_1_1)  # b'elapsed: "10:20:30"\n'
+yamlrocks.dumps({"elapsed": "10:20:30"})  # b'elapsed: 10:20:30\n'
+yamlrocks.dumps(
+    {"elapsed": "10:20:30"}, option=yamlrocks.OPT_YAML_1_1
+)  # b'elapsed: "10:20:30"\n'
 ```
 
 ### Timestamps
@@ -80,8 +84,10 @@ plain, untagged scalar matching a timestamp shape becomes a `datetime.date` or
 import datetime
 import yamlrocks
 
-yamlrocks.loads(b"day: 2024-01-15")                                    # {'day': '2024-01-15'}
-yamlrocks.loads(b"day: 2024-01-15", option=yamlrocks.OPT_TIMESTAMPS)   # {'day': datetime.date(2024, 1, 15)}
+yamlrocks.loads(b"day: 2024-01-15")  # {'day': '2024-01-15'}
+yamlrocks.loads(
+    b"day: 2024-01-15", option=yamlrocks.OPT_TIMESTAMPS
+)  # {'day': datetime.date(2024, 1, 15)}
 ```
 
 Only plain scalars resolve: a quoted `"2024-01-15"` is explicitly a string and
@@ -177,7 +183,9 @@ import yamlrocks
 yamlrocks.dumps({"a": [1, 2]}, option=yamlrocks.OPT_FLOW_STYLE)
 # b'{a: [1, 2]}\n'
 
-yamlrocks.dumps({"a": 1}, option=yamlrocks.OPT_EXPLICIT_START | yamlrocks.OPT_EXPLICIT_END)
+yamlrocks.dumps(
+    {"a": 1}, option=yamlrocks.OPT_EXPLICIT_START | yamlrocks.OPT_EXPLICIT_END
+)
 # b'---\na: 1\n...\n'
 ```
 
@@ -262,10 +270,12 @@ the built-in renderer, so you can emit a custom format:
 import datetime
 import yamlrocks
 
+
 def default(obj):
     if isinstance(obj, datetime.datetime):
         return obj.strftime("%Y/%m/%d")
     raise TypeError
+
 
 yamlrocks.dumps(
     {"when": datetime.datetime(2026, 6, 5)},

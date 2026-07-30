@@ -18,10 +18,10 @@ supports the buffer protocol (such as `memoryview`):
 ```python
 import yamlrocks
 
-yamlrocks.loads(b"key: value")          # {'key': 'value'}
-yamlrocks.loads("count: 42")            # {'count': 42}
-yamlrocks.loads(bytearray(b"x: 1"))     # {'x': 1}
-yamlrocks.loads(memoryview(b"x: 1"))    # {'x': 1}
+yamlrocks.loads(b"key: value")  # {'key': 'value'}
+yamlrocks.loads("count: 42")  # {'count': 42}
+yamlrocks.loads(bytearray(b"x: 1"))  # {'x': 1}
+yamlrocks.loads(memoryview(b"x: 1"))  # {'x': 1}
 ```
 
 An empty document (or input that is only comments) returns `None`:
@@ -29,7 +29,7 @@ An empty document (or input that is only comments) returns `None`:
 ```python
 import yamlrocks
 
-print(yamlrocks.loads(b""))             # None
+print(yamlrocks.loads(b""))  # None
 print(yamlrocks.loads(b"# just a comment"))  # None
 ```
 
@@ -74,7 +74,7 @@ and `off` are **plain strings** in YAML 1.2, not booleans:
 ```python
 import yamlrocks
 
-yamlrocks.loads(b"a: yes")    # {'a': 'yes'}
+yamlrocks.loads(b"a: yes")  # {'a': 'yes'}
 ```
 
 :::note[Want the old 1.1 behavior?]
@@ -95,10 +95,10 @@ import yamlrocks
 with open("config.yaml", "w") as f:
     f.write("name: app\nport: 8080\n")
 
-yamlrocks.load("config.yaml")           # {'name': 'app', 'port': 8080}
+yamlrocks.load("config.yaml")  # {'name': 'app', 'port': 8080}
 
 with open("config.yaml") as f:
-    yamlrocks.load(f)                   # {'name': 'app', 'port': 8080}
+    yamlrocks.load(f)  # {'name': 'app', 'port': 8080}
 ```
 
 `load` shines with split configurations: when you set `OPT_INCLUDES` and do not
@@ -211,7 +211,7 @@ a: 1
 a: 2
 """
 
-yamlrocks.loads(source)                 # {'a': 2}
+yamlrocks.loads(source)  # {'a': 2}
 ```
 
 Pass `OPT_DUPLICATE_KEYS_ERROR` to reject duplicates instead. The error reports
@@ -366,9 +366,11 @@ name: app
 port: 8080
 """
 
+
 async def main():
     data = await yamlrocks.async_loads(source)
     return data
+
 
 asyncio.run(main())
 # {'name': 'app', 'port': 8080}
@@ -384,8 +386,10 @@ import yamlrocks
 with open("config.yaml", "w") as f:
     f.write("name: app\nport: 8080\n")
 
+
 async def main():
     return await yamlrocks.async_load("config.yaml")
+
 
 asyncio.run(main())
 # {'name': 'app', 'port': 8080}
@@ -401,9 +405,11 @@ several loads and let them overlap:
 import asyncio
 import yamlrocks
 
+
 async def main():
     docs = [b"a: %d" % i for i in range(3)]
     return await asyncio.gather(*(yamlrocks.async_loads(d) for d in docs))
+
 
 asyncio.run(main())
 # [{'a': 0}, {'a': 1}, {'a': 2}]

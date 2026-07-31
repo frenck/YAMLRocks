@@ -598,9 +598,9 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [regex-automata 0.4.14](https://crates.io/crates/regex-automata)
+- [regex-automata 0.4.16](https://crates.io/crates/regex-automata)
 - [regex-syntax 0.8.11](https://crates.io/crates/regex-syntax)
-- [regex 1.13.0](https://crates.io/crates/regex)
+- [regex 1.13.1](https://crates.io/crates/regex)
 
 ```
 Copyright (c) 2014 The Rust Project Developers

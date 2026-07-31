@@ -90,7 +90,7 @@ numpy = ["numpy==2.5.1"]
 # none for some targets the wheel smoke test covers (prerelease CPython, 32-bit
 # and ARM Windows); it installs best-effort there and the tests skip when it is
 # absent. The full suite (coverage.yaml) runs on a target that has a wheel.
-proptest = ["hypothesis==6.163.0"]
+proptest = ["hypothesis==6.164.0"]
 # Type checkers and linters (no build needed; they check the source and stub).
 typing = ["mypy==2.3.0", "ty==0.0.63"]
 lint = ["ruff==0.16.1", "codespell==2.4.3", "zizmor==1.28.0"]

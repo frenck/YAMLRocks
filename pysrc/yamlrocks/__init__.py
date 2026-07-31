@@ -151,6 +151,7 @@ class _SourceTagProvenance:
     __slots__ = ()
 
     __source_tag__: str | None
+    __source_target__: str | None
 
     @property
     def is_secret(self) -> bool:

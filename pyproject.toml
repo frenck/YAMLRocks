@@ -84,7 +84,7 @@ test = [
 # The optional numpy serialization path (OPT_SERIALIZE_NUMPY). Kept as its own
 # group so the free-threaded job can omit it (no nogil wheels yet); the numpy
 # tests skip cleanly when it is absent.
-numpy = ["numpy==2.5.1"]
+numpy = ["numpy==2.5.2"]
 # Property-based fuzz tests (tests/robustness/test_hostile_objects.py). Kept as
 # its own group, like numpy, because Hypothesis ships ABI-specific wheels and has
 # none for some targets the wheel smoke test covers (prerelease CPython, 32-bit

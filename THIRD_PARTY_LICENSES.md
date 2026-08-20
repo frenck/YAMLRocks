@@ -563,7 +563,7 @@ Used by:
 - [cc 1.2.65](https://crates.io/crates/cc)
 - [cfg-if 1.0.4](https://crates.io/crates/cfg-if)
 - [find-msvc-tools 0.1.9](https://crates.io/crates/find-msvc-tools)
-- [stacker 0.1.24](https://crates.io/crates/stacker)
+- [stacker 0.1.25](https://crates.io/crates/stacker)
 
 ```
 Copyright (c) 2014 Alex Crichton

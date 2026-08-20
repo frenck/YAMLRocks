@@ -10,7 +10,7 @@ change. Do not edit it by hand.
 
 ## Summary
 
-- MIT License: 37 crate(s)
+- MIT License: 36 crate(s)
 - Apache License 2.0: 3 crate(s)
 - Unicode License v3: 1 crate(s)
 
@@ -815,7 +815,6 @@ Used by:
 - [pyo3-ffi 0.29.2](https://crates.io/crates/pyo3-ffi)
 - [pyo3-macros-backend 0.29.2](https://crates.io/crates/pyo3-macros-backend)
 - [pyo3-macros 0.29.2](https://crates.io/crates/pyo3-macros)
-- [pyo3 0.29.2](https://crates.io/crates/pyo3)
 - [pyo3 0.29.2](https://crates.io/crates/pyo3)
 
 ```

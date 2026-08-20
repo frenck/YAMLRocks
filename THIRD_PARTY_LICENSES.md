@@ -811,11 +811,11 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [pyo3-build-config 0.29.0](https://crates.io/crates/pyo3-build-config)
-- [pyo3-ffi 0.29.0](https://crates.io/crates/pyo3-ffi)
-- [pyo3-macros-backend 0.29.0](https://crates.io/crates/pyo3-macros-backend)
-- [pyo3-macros 0.29.0](https://crates.io/crates/pyo3-macros)
-- [pyo3 0.29.0](https://crates.io/crates/pyo3)
+- [pyo3-build-config 0.29.2](https://crates.io/crates/pyo3-build-config)
+- [pyo3-ffi 0.29.2](https://crates.io/crates/pyo3-ffi)
+- [pyo3-macros-backend 0.29.2](https://crates.io/crates/pyo3-macros-backend)
+- [pyo3-macros 0.29.2](https://crates.io/crates/pyo3-macros)
+- [pyo3 0.29.2](https://crates.io/crates/pyo3)
 
 ```
 Copyright (c) 2023-present PyO3 Project and Contributors.  https://github.com/PyO3

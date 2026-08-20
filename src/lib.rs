@@ -86,6 +86,9 @@ pub mod fuzz {
         };
         let options = EmitOptions::default();
         for document in &documents {
+            if !tags_fast_emittable(document) {
+                continue;
+            }
             check_emit_roundtrip(input, document, &options);
         }
     }
@@ -155,9 +158,32 @@ pub mod fuzz {
             },
         ];
         for document in &documents {
+            if !tags_fast_emittable(document) {
+                continue;
+            }
             for options in &configs {
                 check_emit_roundtrip(input, document, options);
             }
+        }
+    }
+
+    /// The public fast-dump API only accepts tags in directly emittable form:
+    /// local/secondary tags (`!foo`, `!!str`) or verbatim tags (`!<uri>`). The
+    /// decoder, however, canonicalizes verbatim tags and `%TAG` expansions to
+    /// their bare URI forms (`tag:...`), and fast dumps never invents `%TAG`
+    /// directives or shorthand handles on output. Skip such values here so the
+    /// differential targets fuzz only inputs the fast emitter actually promises to
+    /// round-trip.
+    fn tags_fast_emittable(value: &crate::decode::Value<'_>) -> bool {
+        use crate::decode::Value::{Mapping, Sequence, Tagged};
+
+        match value {
+            Tagged(tag, inner) => tag.starts_with('!') && tags_fast_emittable(inner),
+            Sequence(items) => items.iter().all(tags_fast_emittable),
+            Mapping(pairs) => pairs
+                .iter()
+                .all(|(key, value)| tags_fast_emittable(key) && tags_fast_emittable(value)),
+            _ => true,
         }
     }
 
@@ -269,6 +295,17 @@ pub mod fuzz {
             (Tagged(tx, vx), Tagged(ty, vy)) => tx == ty && values_equiv(vx, vy),
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn differential_skips_canonicalized_tag_uris() {
+        // `%TAG` expansion reaches the decoder as a bare URI, but the fast dump
+        // API only accepts already-emittable tags starting with `!`.
+        let input = "%TAG !e! tag:example.com,2020:\n---\nk: !e!foo bar\n";
+        crate::fuzz::differential_options(input);
     }
 }
 

@@ -10,7 +10,7 @@ change. Do not edit it by hand.
 
 ## Summary
 
-- MIT License: 36 crate(s)
+- MIT License: 37 crate(s)
 - Apache License 2.0: 3 crate(s)
 - Unicode License v3: 1 crate(s)
 
@@ -248,7 +248,7 @@ Software.
 
 Used by:
 
-- [ar_archive_writer 0.5.2](https://crates.io/crates/ar_archive_writer)
+- [ar_archive_writer 0.5.3](https://crates.io/crates/ar_archive_writer)
 
 ```
                                  Apache License
@@ -560,9 +560,9 @@ limitations under the License.
 
 Used by:
 
-- [cc 1.2.65](https://crates.io/crates/cc)
+- [cc 1.4.3](https://crates.io/crates/cc)
 - [cfg-if 1.0.4](https://crates.io/crates/cfg-if)
-- [find-msvc-tools 0.1.9](https://crates.io/crates/find-msvc-tools)
+- [find-msvc-tools 0.1.11](https://crates.io/crates/find-msvc-tools)
 - [stacker 0.1.25](https://crates.io/crates/stacker)
 
 ```
@@ -598,7 +598,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [regex-automata 0.4.16](https://crates.io/crates/regex-automata)
+- [regex-automata 0.4.18](https://crates.io/crates/regex-automata)
 - [regex-syntax 0.8.11](https://crates.io/crates/regex-syntax)
 - [regex 1.13.1](https://crates.io/crates/regex)
 
@@ -635,7 +635,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [object 0.37.3](https://crates.io/crates/object)
+- [object 0.39.1](https://crates.io/crates/object)
 
 ```
 Copyright (c) 2015 The Gimli Developers
@@ -816,6 +816,7 @@ Used by:
 - [pyo3-macros-backend 0.29.2](https://crates.io/crates/pyo3-macros-backend)
 - [pyo3-macros 0.29.2](https://crates.io/crates/pyo3-macros)
 - [pyo3 0.29.2](https://crates.io/crates/pyo3)
+- [pyo3 0.29.2](https://crates.io/crates/pyo3)
 
 ```
 Copyright (c) 2023-present PyO3 Project and Contributors.  https://github.com/PyO3
@@ -850,7 +851,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [libc 0.2.186](https://crates.io/crates/libc)
+- [libc 0.2.189](https://crates.io/crates/libc)
 
 ```
 Copyright (c) The Rust Project Developers
@@ -885,7 +886,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [zerocopy 0.8.52](https://crates.io/crates/zerocopy)
+- [zerocopy 0.8.56](https://crates.io/crates/zerocopy)
 
 ```
 Copyright 2023 The Fuchsia Authors
@@ -921,7 +922,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [psm 0.1.31](https://crates.io/crates/psm)
+- [psm 0.1.32](https://crates.io/crates/psm)
 
 ```
 Copyright © 2018, Simonas Kazlauskas
@@ -979,10 +980,10 @@ Used by:
 
 - [itoa 1.0.18](https://crates.io/crates/itoa)
 - [once_cell 1.21.4](https://crates.io/crates/once_cell)
-- [portable-atomic 1.13.1](https://crates.io/crates/portable-atomic)
-- [proc-macro2 1.0.106](https://crates.io/crates/proc-macro2)
-- [quote 1.0.46](https://crates.io/crates/quote)
-- [syn 2.0.118](https://crates.io/crates/syn)
+- [portable-atomic 1.15.0](https://crates.io/crates/portable-atomic)
+- [proc-macro2 1.0.107](https://crates.io/crates/proc-macro2)
+- [quote 1.0.47](https://crates.io/crates/quote)
+- [syn 2.0.119](https://crates.io/crates/syn)
 - [unicode-ident 1.0.24](https://crates.io/crates/unicode-ident)
 - [wasip2 1.0.4+wasi-0.2.12](https://crates.io/crates/wasip2)
 - [wit-bindgen 0.57.1](https://crates.io/crates/wit-bindgen)
@@ -1018,7 +1019,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [aho-corasick 1.1.4](https://crates.io/crates/aho-corasick)
+- [aho-corasick 1.1.5](https://crates.io/crates/aho-corasick)
 - [memchr 2.8.3](https://crates.io/crates/memchr)
 
 ```

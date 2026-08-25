@@ -215,6 +215,25 @@ def test_comments_on_both_sides_of_a_commented_dash_survive():
     assert doc.to_yaml() == b"- a\n# above\n- # inline\n  # below\n  b: 9\n"
 
 
+def test_a_scalar_item_does_not_repeat_the_comment_above_its_dash():
+    """A scalar item emits only the comments written below its `-`.
+
+    The comments above the dash are written by the sequence itself, before the
+    dash; emitting the whole block again from the item body repeated them under
+    it.
+    """
+    doc = yamlrocks.loads(b"- a\n# above\n- # inline\n  value\n", option=RT)
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# above\n- # inline\n  value\n"
+
+
+def test_a_scalar_item_keeps_comments_on_both_sides_of_its_dash():
+    """The same item still emits the comments written below the dash."""
+    doc = yamlrocks.loads(b"- a\n# above\n- # inline\n  # below\n  value\n", option=RT)
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# above\n- # inline\n  # below\n  value\n"
+
+
 def test_comment_before_on_an_item_lands_above_its_dash():
     """``comment_before`` replaces the head block and writes above the `-`."""
     doc = yamlrocks.loads(b"- a\n# above\n- # inline\n  b: 1\n", option=RT)

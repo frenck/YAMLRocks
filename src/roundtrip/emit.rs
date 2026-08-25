@@ -438,7 +438,12 @@ impl RoundTripEmitter {
         self.emit_anchor_tag_compact(val);
         self.emit_inline_comment(&val.comments);
         self.buf.push(b'\n');
-        self.emit_head(&val.comments, indent);
+        // Only the comments written below the introducer: a sequence item's own
+        // caller has already emitted the ones above its `-`, and a mapping value
+        // has none there (they belong to the key, which was walked first).
+        for comment in val.comments.head_below_introducer() {
+            self.emit_comment_line(comment, indent);
+        }
         self.write_indent(indent);
         self.emit_inline_content(val, indent);
         self.end_line();

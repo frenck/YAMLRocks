@@ -174,11 +174,18 @@ pub mod fuzz {
     /// directives or shorthand handles on output. Skip such values here so the
     /// differential targets fuzz only inputs the fast emitter actually promises to
     /// round-trip.
+    ///
+    /// The rule is [`crate::encode::emittable_tag`], the one the public API
+    /// enforces: checking only the leading `!` here let a `%TAG`-expanded named
+    /// handle (`!h!suffix`) through, and the harness then asserted on output that
+    /// `dumps` itself refuses to produce.
     fn tags_fast_emittable(value: &crate::decode::Value<'_>) -> bool {
         use crate::decode::Value::{Mapping, Sequence, Tagged};
 
         match value {
-            Tagged(tag, inner) => tag.starts_with('!') && tags_fast_emittable(inner),
+            Tagged(tag, inner) => {
+                crate::encode::emittable_tag(tag).is_ok() && tags_fast_emittable(inner)
+            }
             Sequence(items) => items.iter().all(tags_fast_emittable),
             Mapping(pairs) => pairs
                 .iter()

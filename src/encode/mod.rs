@@ -995,9 +995,66 @@ fn resolves_to_number(value: &str, schema: Schema) -> bool {
     )
 }
 
+/// Whether a tag can be emitted as a single tag token, or the reason it cannot.
+///
+/// A tag is written verbatim before its value (`!tag value`), so one the scanner
+/// would read only part of splits on re-parse and silently corrupts the document.
+///
+/// Whitespace and control characters are invalid in any tag. For a shorthand tag
+/// (`!foo`, `!!foo`, `!handle!foo`) a flow indicator `,`/`]`/`}` also terminates
+/// the scan, so a `YAMLRocksTag("!foo,bar", "v")` would emit `!foo,bar v` and
+/// reload as the tag `!foo` on a (broken) value `,bar v`. A verbatim tag
+/// (`!<...>`) is delimited by its closing `>` and may carry such characters
+/// (URI commas), so it is exempt from the flow-indicator check but must close.
+///
+/// This is the single source of truth for the rule: the Python `dumps` path
+/// raises it as an error ([`crate::ffi::convert::encode::validate_tag`]), and the
+/// differential fuzz targets use it to skip values the fast emitter never
+/// promised to round-trip.
+pub(crate) fn emittable_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty() || !tag.starts_with('!') {
+        return Err(format!("invalid tag {tag:?}: a tag must start with '!'"));
+    }
+    if let Some(bad) = tag.chars().find(|c| c.is_whitespace() || c.is_control()) {
+        return Err(format!(
+            "invalid tag {tag:?}: a tag cannot contain whitespace or control characters (found {bad:?})"
+        ));
+    }
+    if let Some(verbatim) = tag.strip_prefix("!<") {
+        // A verbatim tag is `!<` + non-empty URI + `>`; the scanner rejects an
+        // unterminated or empty one on read, so refuse to emit one here too.
+        if verbatim.strip_suffix('>').map_or(true, str::is_empty) {
+            return Err(format!(
+                "invalid tag {tag:?}: a verbatim tag must be '!<...>' with non-empty content"
+            ));
+        }
+    } else {
+        // A shorthand tag is `!suffix` (primary handle) or `!!suffix`
+        // (secondary handle). A *named* handle (`!h!suffix`) needs a
+        // `%TAG !h! ...` directive, which `dumps` never writes, so the output
+        // would not reload ("undefined tag handle"); reject it, along with any
+        // other stray `!` (a literal `!` inside a suffix must be URI-escaped
+        // as `%21` per the spec).
+        let suffix_start = if tag.starts_with("!!") { 2 } else { 1 };
+        if tag[suffix_start..].contains('!') {
+            return Err(format!(
+                "invalid tag {tag:?}: a named tag handle (!name!suffix) needs a %TAG directive, \
+                 which dumps does not emit; use a primary (!suffix), secondary (!!suffix), or \
+                 verbatim (!<uri>) tag"
+            ));
+        }
+        if let Some(bad) = tag.chars().find(|c| matches!(c, ',' | ']' | '}')) {
+            return Err(format!(
+                "invalid tag {tag:?}: a shorthand tag cannot contain a flow indicator (found {bad:?})"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{encode, EmitOptions, NullStyle};
+    use super::{emittable_tag, encode, EmitOptions, NullStyle};
     use crate::decode::Value;
     use crate::resolver::Schema;
 
@@ -1448,5 +1505,24 @@ mod tests {
         };
         let v = Value::Mapping(vec![(s("a"), Value::Int(1))]);
         assert_eq!(emit(&v, &opts), "---\na: 1\n...\n");
+    }
+    #[test]
+    fn emittable_tag_rejects_what_dumps_cannot_write() {
+        // Shorthand and verbatim tags are emittable as a single token.
+        assert!(emittable_tag("!foo").is_ok());
+        assert!(emittable_tag("!!str").is_ok());
+        assert!(emittable_tag("!<tag:example.com,2020:foo>").is_ok());
+
+        // A named handle needs a `%TAG` directive, which dumps never writes, so
+        // the output would reload as "undefined tag handle". A `%TAG`-expanded
+        // document reaches the differential fuzz targets with exactly such a tag.
+        assert!(emittable_tag("!h!suffix").is_err());
+        assert!(emittable_tag("!&G!!").is_err());
+
+        // A flow indicator or whitespace would end the tag token early.
+        assert!(emittable_tag("!foo,bar").is_err());
+        assert!(emittable_tag("!foo bar").is_err());
+        assert!(emittable_tag("!<>").is_err());
+        assert!(emittable_tag("").is_err());
     }
 }

@@ -560,7 +560,7 @@ limitations under the License.
 
 Used by:
 
-- [cc 1.4.3](https://crates.io/crates/cc)
+- [cc 1.4.4](https://crates.io/crates/cc)
 - [cfg-if 1.0.4](https://crates.io/crates/cfg-if)
 - [find-msvc-tools 0.1.11](https://crates.io/crates/find-msvc-tools)
 - [stacker 0.1.25](https://crates.io/crates/stacker)

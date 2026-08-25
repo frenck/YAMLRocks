@@ -133,6 +133,74 @@ def test_key_line_comment_kept_when_the_value_itself_is_replaced():
     assert doc.to_yaml().startswith(b"servers: # the pool\n")
 
 
+def test_replacing_a_value_below_its_key_keeps_the_comment_there():
+    """A replaced scalar stays under the key, with the comment above it."""
+    doc = yamlrocks.loads(b"name: # explain\n  app\nport: 80\n", option=RT)
+    doc.node["name"].value = "web"
+    assert doc.to_yaml() == b"name: # explain\n  web\nport: 80\n"
+
+
+def test_replacing_an_item_keeps_its_comments_in_order():
+    """Replacing an item written under `- # note` keeps both comments in place.
+
+    The head comments below the dash are emitted by the item body, so an edit
+    that dropped the placement flag would re-emit them above the dash instead,
+    reordering them against the comment on the dash itself.
+    """
+    doc = yamlrocks.loads(b"- # first\n  # second\n  a: 1\n- b: 2\n", option=RT)
+    doc.node[0].value = {"a": 9}
+    assert doc.to_yaml() == b"- # first\n  # second\n  a: 9\n- b: 2\n"
+
+
+def test_blank_line_above_a_commented_dash_survives():
+    """Section spacing before `- # note` is measured from the dash, not the item."""
+    doc = yamlrocks.loads(b"- one\n\n- # note\n  two\n", option=RT)
+    doc.node[0].value = "ONE"
+    assert doc.to_yaml() == b"- ONE\n\n- # note\n  two\n"
+
+
+def test_a_commented_dash_does_not_invent_a_leading_blank_line():
+    """A blank line *inside* the entry is not re-emitted above its dash."""
+    doc = yamlrocks.loads(b"- # note\n\n  two\n- x\n", option=RT)
+    doc.node[1].value = "X"
+    assert doc.to_yaml() == b"- # note\n  two\n- X\n"
+
+
+def test_clearing_a_dash_line_comment_keeps_the_comments_below_it():
+    """Clearing `- # note` keeps the head comments written under that dash."""
+    doc = yamlrocks.loads(b"- # first\n  # second\n  a: 1\n- b: 2\n", option=RT)
+    doc.node[0].comment = None
+    assert doc.to_yaml() == b"-\n  # second\n  a: 1\n- b: 2\n"
+
+
+def test_anchor_stays_on_the_key_line_beside_its_comment():
+    """An anchor written before the comment stays there, not on the value's line."""
+    doc = yamlrocks.loads(b"key: &a # note\n  value\nz: 1\n", option=RT)
+    doc.node["z"].value = 2
+    assert doc.to_yaml() == b"key: &a # note\n  value\nz: 2\n"
+
+
+def test_tag_stays_on_the_key_line_beside_its_comment():
+    """The same for a tag written between the `:` and the comment."""
+    doc = yamlrocks.loads(
+        b"key: !t # note\n  value\nz: 1\n", option=RT | yamlrocks.OPT_PASSTHROUGH_TAG
+    )
+    doc.node["z"].value = 2
+    assert doc.to_yaml() == b"key: !t # note\n  value\nz: 2\n"
+
+
+def test_empty_implicit_key_does_not_claim_an_unrelated_comment():
+    """An empty key (`: value`) has no source position, so it introduces nothing.
+
+    Its synthetic null reports the start of the document, which must not be
+    mistaken for an introducer sitting on some other line's comment.
+    """
+    src = b"outer:\n  : # note\n    child: value\nz: 1\n"
+    doc = yamlrocks.loads(src, option=RT)
+    assert doc.to_yaml() == src
+    assert doc.node["outer"].comment is None
+
+
 def test_quoting_styles_preserved():
     """Round-trip preserves single and double quoting styles."""
     src = "double: \"quoted value\"\nsingle: 'sq'\n"

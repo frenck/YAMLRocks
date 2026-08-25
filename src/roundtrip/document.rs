@@ -879,6 +879,10 @@ impl YAMLRocksNode {
         // run of spaces before an inline `#`.
         new_val.comments.value_pad = node.comments.value_pad;
         new_val.comments.inline_spaces = node.comments.inline_spaces;
+        // Where that comment sits travels with it. Dropping this would move a
+        // `key: # note` comment after the new value, and for a sequence item
+        // would strand the head comments written below its dash.
+        new_val.comments.inline_before_value = node.comments.inline_before_value;
         new_val.comments.foot = std::mem::take(&mut node.comments.foot);
         new_val.anchor = node.anchor.take();
         new_val.tag = node.tag.take();
@@ -1612,6 +1616,7 @@ fn set_child(
                 new_val.comments.inline = v.comments.inline.take();
                 new_val.comments.value_pad = v.comments.value_pad;
                 new_val.comments.inline_spaces = v.comments.inline_spaces;
+                new_val.comments.inline_before_value = v.comments.inline_before_value;
                 new_val.comments.foot = std::mem::take(&mut v.comments.foot);
                 new_val.anchor = v.anchor.take();
                 new_val.tag = v.tag.take();
@@ -1640,6 +1645,7 @@ fn set_child(
             new_val.comments.inline = target.comments.inline.take();
             new_val.comments.value_pad = target.comments.value_pad;
             new_val.comments.inline_spaces = target.comments.inline_spaces;
+            new_val.comments.inline_before_value = target.comments.inline_before_value;
             new_val.comments.foot = std::mem::take(&mut target.comments.foot);
             new_val.anchor = target.anchor.take();
             new_val.tag = target.tag.take();

@@ -520,15 +520,16 @@ fn visit_for_comments_inner(
     is_value: bool,
     intro: Intro,
 ) {
-    claim_introducer_comment(node, context, state, intro);
-
     let line = node.span.line;
     let column = node.span.column;
     let style = node.style;
 
-    // This node's leading block starts at its first head comment (if one sits
-    // above it) or at the node's own line. Blank source lines between the
-    // previous content and that start are preserved so section spacing survives.
+    // This node's leading block starts at the first comment above it (its
+    // introducer's own comment, or a standalone one) or at the node's own line.
+    // Blank source lines between the previous content and that start are
+    // preserved so section spacing survives. Measured before the claim below,
+    // which advances past the introducer's line: the blank lines above a
+    // commented `-` still belong to this entry.
     let block_start = match context.comments.get(state.cursor) {
         Some(comment) if comment.span.line < line => comment.span.line,
         _ => line,
@@ -536,6 +537,8 @@ fn visit_for_comments_inner(
     if let Some(prev) = state.prev_line {
         node.comments.blank_before = blanks_between(context.blank_lines, prev, block_start);
     }
+
+    claim_introducer_comment(node, context, state, intro);
 
     // Head: standalone comment lines strictly above this node.
     while let Some(comment) = context.comments.get(state.cursor) {
@@ -573,8 +576,12 @@ fn visit_for_comments_inner(
                 // An explicit key (`? key`) carries its `:` on a line of its own,
                 // which the key's end position does not locate, and a flow mapping
                 // has no line for a comment to trail; both keep the plain
-                // head-comment handling.
-                let intro = if style == NodeStyle::Block && !key.explicit_key {
+                // head-comment handling. So does a key with no source position of
+                // its own: an empty implicit key (`: value`) is a synthetic null
+                // that reports the start of the document, which would measure the
+                // introducer against an unrelated line.
+                let key_located = key.end_line >= line;
+                let intro = if style == NodeStyle::Block && !key.explicit_key && key_located {
                     Intro::AfterKey(key.end_line, key.end_column)
                 } else {
                     Intro::None

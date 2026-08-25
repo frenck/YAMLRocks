@@ -431,11 +431,15 @@ impl RoundTripEmitter {
     /// just past that introducer; the comment closes the line, any standalone
     /// comments between the two follow, then the value at `indent`.
     fn emit_value_below_introducer(&mut self, val: &YamlNode, indent: usize) {
+        // An anchor or tag stays on the introducer line, ahead of the comment,
+        // where the author wrote it (`key: &a # note`). It binds to the value
+        // either way, but moving it onto the value's line is a reflow this path
+        // exists to avoid.
+        self.emit_anchor_tag_compact(val);
         self.emit_inline_comment(&val.comments);
         self.buf.push(b'\n');
         self.emit_head(&val.comments, indent);
         self.write_indent(indent);
-        self.emit_anchor_tag(val);
         self.emit_inline_content(val, indent);
         self.end_line();
     }
@@ -544,10 +548,12 @@ impl RoundTripEmitter {
                     self.buf.push(b'\n');
                     self.emit_head_below_dash(item, indent + self.step());
                     self.emit_block_mapping(m, indent + self.step());
-                } else if item.comments.inline.is_some() {
+                } else if item.comments.inline.is_some() || item.comments.inline_before_value {
                     // A comment closing the dash line (`- # note`) keeps the
                     // first key off it, so the mapping opens on the next line at
-                    // the item indent instead of sharing the dash.
+                    // the item indent instead of sharing the dash. The placement
+                    // flag holds this open after the comment itself is cleared,
+                    // so the head comments below the dash keep their home.
                     self.emit_inline_comment(&item.comments);
                     self.buf.push(b'\n');
                     self.emit_head_below_dash(item, child);

@@ -762,7 +762,7 @@ impl RoundTripEmitter {
 
     fn emit_head(&mut self, comments: &Comments, indent: usize) {
         for comment in &comments.head {
-            self.emit_comment_line(comment, indent);
+            self.emit_comment_line(&comment.text, indent);
         }
     }
 

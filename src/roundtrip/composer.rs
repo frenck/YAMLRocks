@@ -4,7 +4,7 @@ use crate::parser::{Event, EventKind, Parser};
 use crate::resolver::{ResolvedValue, Schema};
 use crate::scanner::{Comment, ScalarStyle, ScanError, Span};
 
-use super::ast::{Comments, NodeStyle, YamlNode, YamlNodeKind};
+use super::ast::{Comments, HeadComment, NodeStyle, YamlNode, YamlNodeKind};
 
 /// Compose a YAML string into a rich AST that preserves all structure,
 /// including comments reattached to their nearest nodes.
@@ -494,13 +494,12 @@ fn attach_comment_above(
             }
             node.comments.inline_before_value = true;
         }
-        _ => {
-            node.comments.head.push(comment.text.clone());
-            // Comments reaching here after the introducer's own belong below it.
-            if node.comments.inline_before_value {
-                node.comments.head_below = node.comments.head_below.saturating_add(1);
-            }
-        }
+        // A standalone line above the node. One reaching here *after* the
+        // introducer's own comment was claimed was written below it.
+        _ => node.comments.head.push(HeadComment {
+            text: comment.text.as_str().into(),
+            below_introducer: node.comments.inline_before_value,
+        }),
     }
 }
 
@@ -894,7 +893,10 @@ impl<'input> Composer<'input> {
         let tag = self.pending_tag.take();
         let anchor = self.pending_anchor.take();
         let comments = Comments {
-            head: std::mem::take(&mut self.pending_comments),
+            head: std::mem::take(&mut self.pending_comments)
+                .into_iter()
+                .map(HeadComment::above)
+                .collect(),
             ..Comments::default()
         };
 
@@ -1442,7 +1444,7 @@ mod tests {
         // A leading comment before the first key is preserved in head position
         // (on the document root or the key itself, depending on attachment).
         let head_seen = r.comments.head.iter().chain(&k.comments.head);
-        assert!(head_seen.into_iter().any(|c| c.contains("leading")));
+        assert!(head_seen.into_iter().any(|c| c.text.contains("leading")));
         assert_eq!(v.comments.inline.as_deref(), Some("trailing"));
     }
 
@@ -1476,7 +1478,7 @@ mod tests {
         let r = root("key:\n  # note\n  a: 1\n");
         let v = get(&r, "key");
         assert!(v.comments.inline.is_none());
-        assert_eq!(v.comments.head, vec!["note".to_owned()]);
+        assert_eq!(v.comments.head[0].text.as_ref(), "note");
     }
 
     #[test]

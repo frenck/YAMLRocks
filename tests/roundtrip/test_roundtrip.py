@@ -234,6 +234,15 @@ def test_a_scalar_item_keeps_comments_on_both_sides_of_its_dash():
     assert doc.to_yaml() == b"- A\n# above\n- # inline\n  # below\n  value\n"
 
 
+def test_a_long_comment_block_below_a_dash_stays_below_it():
+    """Each head comment records its own side, so the block has no length limit."""
+    below = b"".join(b"  # c%d\n" % i for i in range(300))
+    src = b"- a\n# above\n- # inline\n" + below + b"  value\n"
+    doc = yamlrocks.loads(src, option=RT)
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# above\n- # inline\n" + below + b"  value\n"
+
+
 def test_comment_before_on_an_item_lands_above_its_dash():
     """``comment_before`` replaces the head block and writes above the `-`."""
     doc = yamlrocks.loads(b"- a\n# above\n- # inline\n  b: 1\n", option=RT)

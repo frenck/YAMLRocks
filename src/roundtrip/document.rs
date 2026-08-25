@@ -1458,7 +1458,7 @@ fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<(&'a Yaml
             // above the first key); any later pair carries its own.
             let idx = pairs.iter().rposition(|(key, _)| scalar_eq(key, k))?;
             if idx == 0 {
-                Some((parent_node, head_scope_of_parent(parent)))
+                Some((parent_node, head_scope_of_parent(parent, parent_node)))
             } else {
                 Some((&pairs[idx].0, HeadScope::All))
             }
@@ -1466,7 +1466,7 @@ fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<(&'a Yaml
         // A sequence element holds its own head comment, and owns the block
         // above its dash; a key node holds its own with nothing to divide.
         Some((PathSeg::Index(_), _)) => {
-            resolve_path(roots, path).map(|node| (node, HeadScope::AboveDash))
+            resolve_path(roots, path).map(|node| (node, head_scope_of_item(node)))
         }
         Some((PathSeg::KeyNode(_), _)) => {
             resolve_path(roots, path).map(|node| (node, HeadScope::All))
@@ -1475,12 +1475,23 @@ fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<(&'a Yaml
 }
 
 /// The scope for a first-key cursor, whose head comments live on the mapping
-/// itself. When that mapping *is* a sequence item, they are the comments below
-/// its dash; anywhere else there is no dash to divide them.
-fn head_scope_of_parent(parent: &[PathSeg]) -> HeadScope {
+/// itself. When that mapping is a sequence item whose dash carries a comment,
+/// they are the lines below that comment; with no dash comment there is nothing
+/// dividing the block, and the whole of it sits above the key.
+fn head_scope_of_parent(parent: &[PathSeg], parent_node: &YamlNode) -> HeadScope {
     match parent.last() {
-        Some(PathSeg::Index(_)) => HeadScope::BelowDash,
+        Some(PathSeg::Index(_)) if parent_node.comments.inline_before_value => HeadScope::BelowDash,
         _ => HeadScope::All,
+    }
+}
+
+/// The scope for a cursor addressing a sequence item itself. Without a comment
+/// on its dash there is no dividing line, so the item owns its whole block.
+fn head_scope_of_item(item: &YamlNode) -> HeadScope {
+    if item.comments.inline_before_value {
+        HeadScope::AboveDash
+    } else {
+        HeadScope::All
     }
 }
 
@@ -1502,7 +1513,7 @@ fn resolve_head_mut<'a>(
                 _ => return None,
             }?;
             if idx == 0 {
-                let scope = head_scope_of_parent(parent);
+                let scope = head_scope_of_parent(parent, parent_node);
                 Some((parent_node, scope))
             } else if let YamlNodeKind::Mapping(pairs) = &mut parent_node.kind {
                 Some((&mut pairs[idx].0, HeadScope::All))
@@ -1510,9 +1521,10 @@ fn resolve_head_mut<'a>(
                 None
             }
         }
-        Some((PathSeg::Index(_), _)) => {
-            resolve_path_mut(roots, path).map(|node| (node, HeadScope::AboveDash))
-        }
+        Some((PathSeg::Index(_), _)) => resolve_path_mut(roots, path).map(|node| {
+            let scope = head_scope_of_item(node);
+            (node, scope)
+        }),
         Some((PathSeg::KeyNode(_), _)) => {
             resolve_path_mut(roots, path).map(|node| (node, HeadScope::All))
         }

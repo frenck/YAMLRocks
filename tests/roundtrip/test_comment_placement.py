@@ -106,74 +106,127 @@ def test_an_unrelated_edit_keeps_every_comment_on_its_line(name: str) -> None:
     assert lines(doc.to_yaml()) == lines(source)
 
 
-# Every cursor that can address a "before" comment, with what it must report.
-# A sequence item owns the block above its dash; the first key inside it owns
-# the block below the dash's own comment, which is where those lines sit
-# relative to that key.
-CURSORS = [
-    (b"- # c2\n  # c3\n  a: 1\n- x\n", "item", lambda d: d.node[0], None),
-    (
-        b"- # c2\n  # c3\n  a: 1\n- x\n",
-        "item-first-key",
-        lambda d: d.node[0]["a"],
-        "c3",
-    ),
-    (b"- y\n# c1\n- # c2\n  # c3\n  a: 1\n", "later-item", lambda d: d.node[1], "c1"),
-    (
-        b"- y\n# c1\n- # c2\n  # c3\n  a: 1\n",
-        "later-item-first-key",
-        lambda d: d.node[1]["a"],
-        "c3",
-    ),
-    (
-        b"- y\n# c1\n- # c2\n  a: 1\n  b: 2\n",
-        "item-second-key",
-        lambda d: d.node[1]["b"],
-        None,
-    ),
-    (b"- y\n# c1\n- a: 1\n", "item-without-dash-comment", lambda d: d.node[1], "c1"),
-    (
-        b"- y\n- a: 1\n  # c3\n  b: 2\n",
-        "second-key-in-plain-item",
-        lambda d: d.node[1]["b"],
-        "c3",
-    ),
-    (
-        b"parent: # c2\n  # c3\n  first: 1\n",
-        "mapping-first-key",
-        lambda d: d.node["parent"]["first"],
-        "c3",
-    ),
-    (b"# c1\nparent:\n  first: 1\n", "mapping-value", lambda d: d.node["parent"], "c1"),
-    (b"k: v\n# c1\nz: 9\n", "later-key", lambda d: d.node["z"], "c1"),
-]
+# Every combination of a sequence item with or without a comment on its dash,
+# with or without comments above and below it, addressed from every cursor that
+# can reach one. Generated rather than listed: the cell this missed the first
+# time (the first key of an item whose dash carries no comment) is exactly the
+# kind a hand-written list of examples leaves out.
+def _item_sources() -> dict[str, bytes]:
+    sources = {}
+    for above in ("", "# above\n"):
+        for dash in ("", " # dash"):
+            for below in ("", "  # below\n"):
+                # A comment below the dash needs one on the dash to sit under.
+                if below and not dash:
+                    continue
+                name = f"above={bool(above)},dash={bool(dash)},below={bool(below)}"
+                sources[name] = (
+                    b"- first: 0\n"
+                    + above.encode()
+                    + b"-"
+                    + dash.encode()
+                    + b"\n"
+                    + below.encode()
+                    + b"  a: 1\n  b: 2\n"
+                ).replace(b"-\n  a: 1", b"- a: 1")
+    return sources
 
 
-@pytest.mark.parametrize(
-    ("source", "label", "cursor", "expected"),
-    CURSORS,
-    ids=[case[1] for case in CURSORS],
-)
-def test_comment_before_reports_the_block_that_cursor_owns(
-    source: bytes, label: str, cursor, expected: str | None
+ITEM_SOURCES = _item_sources()
+
+# Which node each cursor addresses, and how to find the line its "before"
+# comments precede. The item's line is its own `-`, which is the *second* dash
+# in these sources; the keys are found by their text. When the dash carries no
+# comment the item and its first key share that one line, so the two cursors
+# address the same block by design.
+CURSORS = {
+    "item": (lambda doc: doc.node[1], lambda lines: _second_dash(lines)),
+    "first-key": (
+        lambda doc: doc.node[1]["a"],
+        lambda lines: _line_with(lines, b"a: 1"),
+    ),
+    "second-key": (
+        lambda doc: doc.node[1]["b"],
+        lambda lines: _line_with(lines, b"b: 2"),
+    ),
+}
+
+
+def _second_dash(lines: list[bytes]) -> int:
+    """The line of the second item's `-`."""
+    dashes = [i for i, line in enumerate(lines) if line.lstrip().startswith(b"-")]
+    return dashes[1]
+
+
+def _line_with(lines: list[bytes], text: bytes) -> int:
+    return next(i for i, line in enumerate(lines) if text in line)
+
+
+def _comments_directly_above(source: bytes, line_of) -> str | None:
+    """The comment lines immediately above a line, the oracle for the getter.
+
+    Whatever a reader sees written above that line, and nothing further up.
+    """
+    lines = source.split(b"\n")
+    index = line_of(lines)
+    collected = []
+    while index > 0 and lines[index - 1].strip().startswith(b"#"):
+        index -= 1
+        collected.insert(0, lines[index].strip().lstrip(b"#").strip().decode())
+    return "\n".join(collected) if collected else None
+
+
+@pytest.mark.parametrize("name", sorted(ITEM_SOURCES))
+@pytest.mark.parametrize("cursor", sorted(CURSORS))
+def test_comment_before_matches_what_is_written_above_that_line(
+    name: str, cursor: str
 ) -> None:
-    """Each cursor reports the comment block written for it, and no other."""
+    """Each cursor reports exactly the comment lines written above its own line."""
+    source = ITEM_SOURCES[name]
+    resolve, line_of = CURSORS[cursor]
     doc = yamlrocks.loads(source, option=RT)
-    assert cursor(doc).comment_before == expected
+
+    assert resolve(doc).comment_before == _comments_directly_above(source, line_of)
 
 
-@pytest.mark.parametrize(
-    ("source", "label", "cursor", "expected"),
-    CURSORS,
-    ids=[case[1] for case in CURSORS],
-)
-def test_comment_before_writes_back_where_it_was_read(
-    source: bytes, label: str, cursor, expected: str | None
-) -> None:
-    """Assigning ``comment_before`` its own value changes nothing."""
+@pytest.mark.parametrize("name", sorted(ITEM_SOURCES))
+@pytest.mark.parametrize("cursor", sorted(CURSORS))
+def test_comment_before_writes_back_where_it_was_read(name: str, cursor: str) -> None:
+    """Assigning ``comment_before`` its own value changes nothing, from any cursor."""
+    source = ITEM_SOURCES[name]
+    resolve, _ = CURSORS[cursor]
     doc = yamlrocks.loads(source, option=RT)
-    node = cursor(doc)
+    node = resolve(doc)
     node.comment_before = node.comment_before
     # Force the AST path, so the source cache cannot hide a move.
     doc.node.comment_after = doc.node.comment_after
     assert doc.to_yaml() == source
+
+
+@pytest.mark.parametrize(
+    "name", sorted(name for name in ITEM_SOURCES if "dash=True" in name)
+)
+def test_writing_one_side_of_a_dash_leaves_the_other_alone(name: str) -> None:
+    """With a comment on the dash, the item and its first key own separate blocks.
+
+    Without one they share a line, and so address the same block on purpose;
+    only a dash comment splits them.
+    """
+    source = ITEM_SOURCES[name]
+    doc = yamlrocks.loads(source, option=RT)
+    below = doc.node[1]["a"].comment_before
+    doc.node[1].comment_before = "written above"
+    assert doc.node[1]["a"].comment_before == below
+
+    doc = yamlrocks.loads(source, option=RT)
+    above = doc.node[1].comment_before
+    doc.node[1]["a"].comment_before = "written below"
+    assert doc.node[1].comment_before == above
+
+
+# The comment on a mapping's own key line, reached from the first key inside it.
+def test_mapping_first_key_reports_the_leading_block() -> None:
+    """A mapping's leading comments stay readable from its first key."""
+    doc = yamlrocks.loads(b"parent: # note\n  # leading\n  first: 1\n", option=RT)
+    assert doc.node["parent"].comment == "note"
+    assert doc.node["parent"]["first"].comment_before == "leading"

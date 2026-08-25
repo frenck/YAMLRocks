@@ -24,8 +24,12 @@ uv pip install --python "${pyexe}" --group proptest \
   || echo "::notice::hypothesis has no wheel on this target; property tests will skip"
 
 # Install the just-built wheel, offline (never PyPI), no deps (yamlrocks has
-# none of its own).
-uv pip install --python "${pyexe}" --no-index --no-deps --find-links dist yamlrocks
+# none of its own). `--refresh-package` is what makes this test the *built*
+# wheel: every build produces the same name and version, so a wheel cached by an
+# earlier run (uv's cache is restored across jobs) satisfies the requirement and
+# is installed instead, silently smoke-testing yesterday's binary.
+uv pip install --python "${pyexe}" --no-index --no-deps --refresh-package yamlrocks \
+  --find-links dist yamlrocks
 
 # On a free-threaded (no-GIL) build, fail loudly if the GIL is actually enabled,
 # i.e. the build silently fell back to a GIL build or the import re-enabled it.

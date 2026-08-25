@@ -85,6 +85,185 @@ def test_sequence_comments_preserved():
     assert roundtrip(src) == src
 
 
+def test_key_line_comment_stays_on_the_key_after_an_edit():
+    """A comment after `key:` stays there when the value is a block below it.
+
+    Unmodified documents re-emit from the source cache, which hides the
+    placement; an edit forces the AST path, where the comment used to slide down
+    and become a standalone line above the first child.
+    """
+    doc = yamlrocks.loads(b"servers: # the pool\n  - alpha\nport: 80\n", option=RT)
+    doc["port"] = 8080
+    assert doc.to_yaml() == b"servers: # the pool\n  - alpha\nport: 8080\n"
+
+
+def test_key_line_comment_survives_an_edit_for_a_scalar_below_the_key():
+    """The same for a plain scalar written under its key, where it was dropped."""
+    doc = yamlrocks.loads(b"name: # explain\n  app\nport: 80\n", option=RT)
+    doc["port"] = 8080
+    assert doc.to_yaml() == b"name: # explain\n  app\nport: 8080\n"
+
+
+def test_key_line_comment_keeps_its_alignment_padding():
+    """The gap between the `:` and the `#` survives the AST path."""
+    doc = yamlrocks.loads(b"servers:    # the pool\n  - alpha\nport: 80\n", option=RT)
+    doc["port"] = 8080
+    assert doc.to_yaml() == b"servers:    # the pool\n  - alpha\nport: 8080\n"
+
+
+def test_dash_line_comment_stays_on_the_dash_after_an_edit():
+    """A comment after a `-` keeps its place, with the item below it."""
+    doc = yamlrocks.loads(b"- # the first one\n  a: 1\n- b: 2\n", option=RT)
+    doc[1]["b"] = 9
+    assert doc.to_yaml() == b"- # the first one\n  a: 1\n- b: 9\n"
+
+
+def test_comments_below_a_dash_line_comment_stay_below_it():
+    """Head comments written under `- # note` belong there, not above the dash."""
+    src = b"- # first\n  # second\n  a: 1\n- b: 2\n"
+    doc = yamlrocks.loads(src, option=RT)
+    doc[1]["b"] = 9
+    assert doc.to_yaml() == b"- # first\n  # second\n  a: 1\n- b: 9\n"
+
+
+def test_key_line_comment_kept_when_the_value_itself_is_replaced():
+    """Replacing a block value keeps the comment on the key line."""
+    doc = yamlrocks.loads(b"servers: # the pool\n  - alpha\n", option=RT)
+    doc.node["servers"].value = ["beta", "gamma"]
+    assert doc.to_yaml().startswith(b"servers: # the pool\n")
+
+
+def test_replacing_a_value_below_its_key_keeps_the_comment_there():
+    """A replaced scalar stays under the key, with the comment above it."""
+    doc = yamlrocks.loads(b"name: # explain\n  app\nport: 80\n", option=RT)
+    doc.node["name"].value = "web"
+    assert doc.to_yaml() == b"name: # explain\n  web\nport: 80\n"
+
+
+def test_replacing_an_item_keeps_its_comments_in_order():
+    """Replacing an item written under `- # note` keeps both comments in place.
+
+    The head comments below the dash are emitted by the item body, so an edit
+    that dropped the placement flag would re-emit them above the dash instead,
+    reordering them against the comment on the dash itself.
+    """
+    doc = yamlrocks.loads(b"- # first\n  # second\n  a: 1\n- b: 2\n", option=RT)
+    doc.node[0].value = {"a": 9}
+    assert doc.to_yaml() == b"- # first\n  # second\n  a: 9\n- b: 2\n"
+
+
+def test_blank_line_above_a_commented_dash_survives():
+    """Section spacing before `- # note` is measured from the dash, not the item."""
+    doc = yamlrocks.loads(b"- one\n\n- # note\n  two\n", option=RT)
+    doc.node[0].value = "ONE"
+    assert doc.to_yaml() == b"- ONE\n\n- # note\n  two\n"
+
+
+def test_a_commented_dash_does_not_invent_a_leading_blank_line():
+    """A blank line *inside* the entry is not re-emitted above its dash."""
+    doc = yamlrocks.loads(b"- # note\n\n  two\n- x\n", option=RT)
+    doc.node[1].value = "X"
+    assert doc.to_yaml() == b"- # note\n  two\n- X\n"
+
+
+def test_clearing_a_dash_line_comment_keeps_the_comments_below_it():
+    """Clearing `- # note` keeps the head comments written under that dash."""
+    doc = yamlrocks.loads(b"- # first\n  # second\n  a: 1\n- b: 2\n", option=RT)
+    doc.node[0].comment = None
+    assert doc.to_yaml() == b"-\n  # second\n  a: 1\n- b: 2\n"
+
+
+def test_anchor_stays_on_the_key_line_beside_its_comment():
+    """An anchor written before the comment stays there, not on the value's line."""
+    doc = yamlrocks.loads(b"key: &a # note\n  value\nz: 1\n", option=RT)
+    doc.node["z"].value = 2
+    assert doc.to_yaml() == b"key: &a # note\n  value\nz: 2\n"
+
+
+def test_tag_stays_on_the_key_line_beside_its_comment():
+    """The same for a tag written between the `:` and the comment."""
+    doc = yamlrocks.loads(
+        b"key: !t # note\n  value\nz: 1\n", option=RT | yamlrocks.OPT_PASSTHROUGH_TAG
+    )
+    doc.node["z"].value = 2
+    assert doc.to_yaml() == b"key: !t # note\n  value\nz: 2\n"
+
+
+def test_section_comment_above_a_commented_dash_stays_above_it():
+    """A comment above the `-` and one on it keep their own sides of the dash.
+
+    They arrive as one run of comments, so the split between them has to be
+    recorded: re-emitting the lot on either side reorders them against the
+    comment written on the dash itself.
+    """
+    src = b"- a\n# about next\n- # inline\n  b: 1\n"
+    doc = yamlrocks.loads(src, option=RT)
+    assert doc.node[1].comment == "inline"
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# about next\n- # inline\n  b: 1\n"
+
+
+def test_comments_on_both_sides_of_a_commented_dash_survive():
+    """A comment above the dash, one on it, and one below all keep their place."""
+    src = b"- a\n# above\n- # inline\n  # below\n  b: 1\n"
+    doc = yamlrocks.loads(src, option=RT)
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# above\n- # inline\n  # below\n  b: 1\n"
+    # The split travels with the comments when the item itself is replaced.
+    doc = yamlrocks.loads(src, option=RT)
+    doc.node[1].value = {"b": 9}
+    assert doc.to_yaml() == b"- a\n# above\n- # inline\n  # below\n  b: 9\n"
+
+
+def test_a_scalar_item_does_not_repeat_the_comment_above_its_dash():
+    """A scalar item emits only the comments written below its `-`.
+
+    The comments above the dash are written by the sequence itself, before the
+    dash; emitting the whole block again from the item body repeated them under
+    it.
+    """
+    doc = yamlrocks.loads(b"- a\n# above\n- # inline\n  value\n", option=RT)
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# above\n- # inline\n  value\n"
+
+
+def test_a_scalar_item_keeps_comments_on_both_sides_of_its_dash():
+    """The same item still emits the comments written below the dash."""
+    doc = yamlrocks.loads(b"- a\n# above\n- # inline\n  # below\n  value\n", option=RT)
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# above\n- # inline\n  # below\n  value\n"
+
+
+def test_a_long_comment_block_below_a_dash_stays_below_it():
+    """Each head comment records its own side, so the block has no length limit."""
+    below = b"".join(b"  # c%d\n" % i for i in range(300))
+    src = b"- a\n# above\n- # inline\n" + below + b"  value\n"
+    doc = yamlrocks.loads(src, option=RT)
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# above\n- # inline\n" + below + b"  value\n"
+
+
+def test_comment_before_on_an_item_lands_above_its_dash():
+    """``comment_before`` replaces the head block and writes above the `-`."""
+    doc = yamlrocks.loads(b"- a\n# above\n- # inline\n  b: 1\n", option=RT)
+    doc.node[1].comment_before = "fresh"
+    assert doc.to_yaml() == b"- a\n# fresh\n- # inline\n  b: 1\n"
+
+
+def test_empty_implicit_key_introduces_from_its_own_colon():
+    """An empty key (`: value`) is placed at its `:`, so it introduces from there.
+
+    The node has no source text of its own; left at the document start (the
+    obvious default) it would measure the introducer against an unrelated line,
+    either missing the comment or claiming one written somewhere else entirely.
+    """
+    src = b"a: 1\n: # note\n  child: v\n"
+    doc = yamlrocks.loads(src, option=RT)
+    assert doc.to_yaml() == src
+    doc.node["a"].value = 2
+    assert doc.to_yaml() == b"a: 2\nnull: # note\n  child: v\n"
+
+
 def test_quoting_styles_preserved():
     """Round-trip preserves single and double quoting styles."""
     src = "double: \"quoted value\"\nsingle: 'sq'\n"

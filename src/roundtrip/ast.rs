@@ -208,13 +208,20 @@ pub struct Comments {
     /// document carries; a synthetic (edited-in) node defaults to `0`.
     pub blank_before: u32,
     /// Comments on their own line(s) before this node.
-    pub head: Vec<String>,
+    pub head: Vec<HeadComment>,
     /// Comment on the same line after this node's value.
     pub inline: Option<String>,
     /// Number of spaces between the value and the `#` of [`inline`](Self::inline),
     /// preserving alignment padding (`x: 1      # note`) across a re-emit. `0`
     /// means "not captured" (a synthetic comment), which emits as a single space.
     pub inline_spaces: u32,
+    /// Whether [`inline`](Self::inline) was written on the line that *introduces*
+    /// this value (after a mapping key's `:` or a sequence `-`) while the value
+    /// itself begins on a later line, as in `key: # note`. The emitter keeps such
+    /// a comment on the introducer line instead of moving it past the value.
+    /// `false` for the usual trailing comment (`key: value # note`), which the
+    /// emitter writes after the value.
+    pub inline_before_value: bool,
     /// Number of spaces between this node's introducer (a mapping key's `:` or a
     /// sequence `-`) and an inline value sharing its line, preserving alignment
     /// like `example:      true` or `-    item`. `0` means "not captured" (a
@@ -233,6 +240,56 @@ pub struct Comments {
     pub foot: Vec<String>,
     /// Whether this node was modified since loading (for diff-based emission).
     pub modified: bool,
+}
+
+/// A standalone comment line above a node, and which side of the node's
+/// introducer it was written on.
+///
+/// A section comment can sit above a `-` while the dash carries its own comment
+/// (`- # note`) and further comments follow underneath. They reach the node as
+/// one run, so each has to remember its own side to be re-emitted there.
+#[derive(Debug, Clone)]
+pub struct HeadComment {
+    /// The comment text, without the leading `#`. A `Box<str>` rather than a
+    /// `String`: the text never grows after attachment, and dropping the unused
+    /// capacity keeps this the same size the plain `String` was, so recording
+    /// the side costs nothing.
+    pub text: Box<str>,
+    /// Whether it was written *below* the comment on the node's introducer,
+    /// rather than above the introducer itself. Always `false` for a node whose
+    /// introducer carries no comment, where there is no dividing line.
+    pub below_introducer: bool,
+}
+
+impl HeadComment {
+    /// A comment above the node's introducer, the position every comment takes
+    /// when nothing divides the block.
+    pub fn above(text: impl Into<Box<str>>) -> Self {
+        Self {
+            text: text.into(),
+            below_introducer: false,
+        }
+    }
+}
+
+impl Comments {
+    /// The head comments written above this node's introducer (a sequence `-`).
+    /// Everything, for a node whose introducer carries no comment of its own.
+    pub fn head_above_introducer(&self) -> impl Iterator<Item = &str> {
+        self.head
+            .iter()
+            .filter(|comment| !comment.below_introducer)
+            .map(|comment| &*comment.text)
+    }
+
+    /// The head comments written below that introducer, between its own comment
+    /// and the node's first line.
+    pub fn head_below_introducer(&self) -> impl Iterator<Item = &str> {
+        self.head
+            .iter()
+            .filter(|comment| comment.below_introducer)
+            .map(|comment| &*comment.text)
+    }
 }
 
 /// The presentation style of a node.
@@ -257,7 +314,7 @@ pub struct IncludeSource {
 
 #[cfg(test)]
 mod tests {
-    use super::{Comments, NodeStyle, YamlNode, YamlNodeKind};
+    use super::{Comments, HeadComment, NodeStyle, YamlNode, YamlNodeKind};
     use crate::scanner::{ScalarStyle, Span};
 
     fn span() -> Span {
@@ -283,7 +340,7 @@ mod tests {
     #[test]
     fn builders_set_each_field() {
         let comments = Comments {
-            head: vec!["note".to_owned()],
+            head: vec![HeadComment::above("note")],
             ..Default::default()
         };
         let node = YamlNode::new(
@@ -297,8 +354,35 @@ mod tests {
         assert_eq!(node.anchor.as_deref(), Some("a"));
         assert_eq!(node.tag.as_deref(), Some("!t"));
         assert_eq!(node.style, NodeStyle::Flow);
-        assert_eq!(node.comments.head, vec!["note".to_owned()]);
+        assert_eq!(node.comments.head[0].text.as_ref(), "note");
         assert!(matches!(node.kind, YamlNodeKind::Scalar(..)));
+    }
+
+    #[test]
+    fn head_comments_split_around_their_introducer() {
+        // A section comment above the `-`, then two written below its comment.
+        let comments = Comments {
+            head: vec![
+                HeadComment::above("above"),
+                HeadComment {
+                    text: "below".into(),
+                    below_introducer: true,
+                },
+                HeadComment {
+                    text: "further".into(),
+                    below_introducer: true,
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            comments.head_above_introducer().collect::<Vec<_>>(),
+            ["above"]
+        );
+        assert_eq!(
+            comments.head_below_introducer().collect::<Vec<_>>(),
+            ["below", "further"]
+        );
     }
 
     #[test]

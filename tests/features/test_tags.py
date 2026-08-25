@@ -342,7 +342,9 @@ def test_dumps_malformed_verbatim_tag_is_rejected():
     """A verbatim tag must be `!<...>` with non-empty content and a closing `>`."""
     import pytest
 
-    for bad in ["!<>", "!<unterminated", "!<tag:foo"]:
+    # `!<tag:a>b>` closes at the first `>`, so emitting it would truncate the tag
+    # and leave `b>` in the document as content.
+    for bad in ["!<>", "!<unterminated", "!<tag:foo", "!<tag:a>b>"]:
         with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="verbatim tag"):
             yamlrocks.dumps(yamlrocks.YAMLRocksTag(bad, "v"))
 

@@ -311,6 +311,24 @@ Comment text is always bare (no leading `#`, no surrounding whitespace), so you
 read and write the words, not the punctuation. A multi-line `comment_before` or
 `comment_after` is returned as one string with `\n` between the lines.
 
+`comment` follows YAML, not the shape of the value. When the value is a block
+mapping or sequence, the trailing comment goes on the key's own line, and that is
+where `comment` reads and writes it:
+
+```python
+import yamlrocks
+
+doc = yamlrocks.loads(
+    b"servers: # the whole pool\n  - alpha\n  - beta\n",
+    option=yamlrocks.OPT_ROUND_TRIP,
+)
+
+doc.node["servers"].comment  # 'the whole pool'
+doc.node["servers"][0].comment  # None
+```
+
+The same holds for a sequence item written under its own dash (`- # note`).
+
 ### Writing metadata
 
 `value`, `comment`, `comment_before`, and `comment_after` are writable, and the

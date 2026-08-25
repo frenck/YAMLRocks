@@ -403,6 +403,12 @@ impl RoundTripEmitter {
                 self.emit_anchor_tag_compact(val);
                 self.buf.push(b'\n');
             }
+            // A value the author wrote below its key, with a comment left on the
+            // key line (`key: # note`). Keep both where they were: pushing the
+            // comment past the value would move it onto a line it was never on.
+            _ if val.comments.inline_before_value => {
+                self.emit_value_below_introducer(val, child);
+            }
             _ => {
                 // Restore the padding between the `:` and an inline value
                 // (`example:      true`); one space for a synthetic value.
@@ -420,6 +426,29 @@ impl RoundTripEmitter {
         }
     }
 
+    /// Emit a value that sits on the line(s) below its introducer, after the
+    /// comment the author left on the `key:`/`-` line itself. The cursor sits
+    /// just past that introducer; the comment closes the line, any standalone
+    /// comments between the two follow, then the value at `indent`.
+    fn emit_value_below_introducer(&mut self, val: &YamlNode, indent: usize) {
+        // An anchor or tag stays on the introducer line, ahead of the comment,
+        // where the author wrote it (`key: &a # note`). It binds to the value
+        // either way, but moving it onto the value's line is a reflow this path
+        // exists to avoid.
+        self.emit_anchor_tag_compact(val);
+        self.emit_inline_comment(&val.comments);
+        self.buf.push(b'\n');
+        // Only the comments written below the introducer: a sequence item's own
+        // caller has already emitted the ones above its `-`, and a mapping value
+        // has none there (they belong to the key, which was walked first).
+        for comment in val.comments.head_below_introducer() {
+            self.emit_comment_line(comment, indent);
+        }
+        self.write_indent(indent);
+        self.emit_inline_content(val, indent);
+        self.end_line();
+    }
+
     /// Ensure the buffer ends with exactly one newline (block scalars emit
     /// their own trailing newlines; plain scalars do not).
     fn end_line(&mut self) {
@@ -433,9 +462,33 @@ impl RoundTripEmitter {
     fn emit_block_sequence(&mut self, items: &[YamlNode], indent: usize) {
         for item in items {
             self.emit_blank_before(&item.comments);
-            self.emit_head(&item.comments, indent);
+            self.emit_head_above_dash(item, indent);
             self.write_indent(indent);
             self.emit_sequence_item_body(item, indent);
+        }
+    }
+
+    /// Emit the standalone comments that precede a sequence item's `-`. An item
+    /// whose dash line ends in a comment (`- # note`) holds its head comments
+    /// *below* that dash instead, where the author wrote them, so they are left
+    /// to [`emit_head_below_dash`](Self::emit_head_below_dash).
+    fn emit_head_above_dash(&mut self, item: &YamlNode, indent: usize) {
+        if item.comments.inline_before_value {
+            for comment in item.comments.head_above_introducer() {
+                self.emit_comment_line(comment, indent);
+            }
+        } else {
+            self.emit_head(&item.comments, indent);
+        }
+    }
+
+    /// The counterpart: emit the head comments an item carries *below* its dash,
+    /// on the lines between a dash-line comment and the item's own content.
+    fn emit_head_below_dash(&mut self, item: &YamlNode, indent: usize) {
+        if item.comments.inline_before_value {
+            for comment in item.comments.head_below_introducer() {
+                self.emit_comment_line(comment, indent);
+            }
         }
     }
 
@@ -447,7 +500,7 @@ impl RoundTripEmitter {
         for (i, item) in items.iter().enumerate() {
             if i > 0 {
                 self.emit_blank_before(&item.comments);
-                self.emit_head(&item.comments, indent);
+                self.emit_head_above_dash(item, indent);
                 self.write_indent(indent);
             }
             self.emit_sequence_item_body(item, indent);
@@ -502,8 +555,20 @@ impl RoundTripEmitter {
                     // item through `emit_value_after_colon`), not the fixed +2 of
                     // the compact inline form below.
                     self.emit_anchor_tag_compact(item);
+                    self.emit_inline_comment(&item.comments);
                     self.buf.push(b'\n');
+                    self.emit_head_below_dash(item, indent + self.step());
                     self.emit_block_mapping(m, indent + self.step());
+                } else if item.comments.inline.is_some() || item.comments.inline_before_value {
+                    // A comment closing the dash line (`- # note`) keeps the
+                    // first key off it, so the mapping opens on the next line at
+                    // the item indent instead of sharing the dash. The placement
+                    // flag holds this open after the comment itself is cleared,
+                    // so the head comments below the dash keep their home.
+                    self.emit_inline_comment(&item.comments);
+                    self.buf.push(b'\n');
+                    self.emit_head_below_dash(item, child);
+                    self.emit_block_mapping(m, child);
                 } else {
                     self.buf.push(b' ');
                     self.emit_block_mapping_after_dash(m, child);
@@ -519,7 +584,9 @@ impl RoundTripEmitter {
                     // nested sequence's items sit two columns past the dash (the
                     // fast path's fixed offset), unlike a mapping item above.
                     self.emit_anchor_tag_compact(item);
+                    self.emit_inline_comment(&item.comments);
                     self.buf.push(b'\n');
+                    self.emit_head_below_dash(item, child);
                     self.emit_block_sequence(s, child);
                 } else if item.comments.compact {
                     // A compact nested sequence (`- - 1`) keeps its first item on
@@ -527,11 +594,20 @@ impl RoundTripEmitter {
                     self.buf.push(b' ');
                     self.emit_block_sequence_after_dash(s, child);
                 } else {
+                    // As for a mapping item, a comment closing the dash line
+                    // stays there and the nested items open below it.
+                    self.emit_inline_comment(&item.comments);
                     self.buf.push(b'\n');
+                    self.emit_head_below_dash(item, child);
                     self.emit_block_sequence(s, child);
                 }
                 // A trailing comment block at the end of this item's sequence.
                 self.emit_foot(&item.comments, child);
+            }
+            // An item written below its `-`, with a comment left on the dash
+            // line; both keep their place (see the mapping-value arm).
+            _ if item.comments.inline_before_value => {
+                self.emit_value_below_introducer(item, child);
             }
             _ => {
                 // Restore the padding between the `-` and an inline item
@@ -686,7 +762,7 @@ impl RoundTripEmitter {
 
     fn emit_head(&mut self, comments: &Comments, indent: usize) {
         for comment in &comments.head {
-            self.emit_comment_line(comment, indent);
+            self.emit_comment_line(&comment.text, indent);
         }
     }
 

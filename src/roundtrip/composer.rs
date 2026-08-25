@@ -4,7 +4,7 @@ use crate::parser::{Event, EventKind, Parser};
 use crate::resolver::{ResolvedValue, Schema};
 use crate::scanner::{Comment, ScalarStyle, ScanError, Span};
 
-use super::ast::{Comments, NodeStyle, YamlNode, YamlNodeKind};
+use super::ast::{Comments, HeadComment, NodeStyle, YamlNode, YamlNodeKind};
 
 /// Compose a YAML string into a rich AST that preserves all structure,
 /// including comments reattached to their nearest nodes.
@@ -13,7 +13,7 @@ pub fn compose(input: &str) -> Result<Vec<YamlNode>, ScanError> {
     let (events, comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, false)?;
-    attach_comments(&mut nodes, &comments, input);
+    attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
     mark_leading_bom(&mut nodes, parser.had_bom());
     Ok(nodes)
 }
@@ -39,7 +39,7 @@ pub fn compose_all(input: &str) -> Result<Vec<YamlNode>, ScanError> {
     let (events, comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, true)?;
-    attach_comments(&mut nodes, &comments, input);
+    attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
     mark_leading_bom(&mut nodes, parser.had_bom());
     Ok(nodes)
 }
@@ -51,7 +51,7 @@ pub fn compose_with_file_id(input: &str, file_id: u32) -> Result<Vec<YamlNode>, 
     let (events, comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, false)?;
-    attach_comments(&mut nodes, &comments, input);
+    attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
     mark_leading_bom(&mut nodes, parser.had_bom());
     Ok(nodes)
 }
@@ -257,7 +257,12 @@ fn key_display(node: &YamlNode) -> String {
 ///
 /// Any comments left after the walk (trailing the final node) become foot
 /// comments on the last top-level node.
-fn attach_comments(nodes: &mut [YamlNode], comments: &[Comment], input: &str) {
+fn attach_comments(
+    nodes: &mut [YamlNode],
+    comments: &[Comment],
+    input: &str,
+    dash_positions: &std::collections::HashSet<(u32, u32)>,
+) {
     // Unlike comment attachment, blank-line spacing must be recorded even for a
     // document with no comments at all, so this walk always runs.
     //
@@ -272,21 +277,21 @@ fn attach_comments(nodes: &mut [YamlNode], comments: &[Comment], input: &str) {
         .filter(|(_, text)| text.trim().is_empty())
         .map(|(i, _)| i as u32)
         .collect();
-    let mut cursor = 0usize;
-    let mut prev_line: Option<u32> = None;
+    let context = CommentContext {
+        comments,
+        blank_lines: &blank_lines,
+        dash_positions,
+    };
+    let mut state = WalkState {
+        cursor: 0,
+        prev_line: None,
+    };
     for node in nodes.iter_mut() {
-        visit_for_comments(
-            node,
-            comments,
-            &blank_lines,
-            &mut cursor,
-            &mut prev_line,
-            true,
-        );
+        visit_for_comments(node, &context, &mut state, true, Intro::None);
     }
-    if cursor < comments.len() {
+    if state.cursor < comments.len() {
         if let Some(last) = nodes.last_mut() {
-            for comment in &comments[cursor..] {
+            for comment in &comments[state.cursor..] {
                 // Route each trailing comment to the deepest block it is indented
                 // into, so a comment at the end of a nested final block is owned
                 // by that block and re-emits at its indent instead of flattening
@@ -344,9 +349,22 @@ fn is_block_collection(node: &YamlNode) -> bool {
         }
 }
 
-/// Raise the running "last source line seen" to at least `line`.
-fn bump(prev_line: &mut Option<u32>, line: u32) {
-    *prev_line = Some(prev_line.map_or(line, |p| p.max(line)));
+/// The walk's running position: which comment comes next, and the last source
+/// line consumed. Paired with [`CommentContext`] so the recursive walk carries
+/// two references per level instead of four.
+struct WalkState {
+    /// Index of the next unattached comment in [`CommentContext::comments`].
+    cursor: usize,
+    /// The last source line seen, or `None` before the first node, so the blank
+    /// gap before a node can be measured.
+    prev_line: Option<u32>,
+}
+
+impl WalkState {
+    /// Raise the running "last source line seen" to at least `line`.
+    fn bump(&mut self, line: u32) {
+        self.prev_line = Some(self.prev_line.map_or(line, |prev| prev.max(line)));
+    }
 }
 
 /// Flag a block-sequence item that opened on its parent's dash line (`- - 1`),
@@ -390,62 +408,160 @@ fn blanks_between(
         .count() as u32
 }
 
+/// The read-only source facts the comment walk consults at every node, bundled
+/// into one reference. The walk recurses once per level of nesting, so passing
+/// three separate references would put their width on the stack a thousand times
+/// over on a deeply nested document.
+struct CommentContext<'a> {
+    /// The document's comments, in source order.
+    comments: &'a [Comment],
+    /// The source lines that hold no content, for measuring section spacing.
+    blank_lines: &'a std::collections::HashSet<u32>,
+    /// See [`Composer::dash_positions`].
+    dash_positions: &'a std::collections::HashSet<(u32, u32)>,
+}
+
+/// How a node was introduced, so the walk can claim a comment left on that
+/// introducer's own line (`key: # note`, `- # note`).
+///
+/// Passed *into* the walk rather than handled at the call site: the walk recurses
+/// once per level of nesting, and in an unoptimized build every value live across
+/// a call in its body is spilled to the frame, which a deeply nested document
+/// then pays a thousand times over. Resolving this in the callee's prologue,
+/// where nothing else is live yet, keeps that frame small.
+#[derive(Clone, Copy)]
+enum Intro {
+    /// A document root, or a node that cannot own a trailing comment (a mapping
+    /// key, an explicit-key pair's value, anything inside a flow collection).
+    None,
+    /// A block mapping value: the `:` sits at the given `(line, column)`, just
+    /// past the key.
+    AfterKey(u32, u32),
+    /// A block sequence item: its `-` sits at this column, on one of the lines
+    /// the composer recorded in [`Composer::dash_positions`].
+    AfterDash(u32),
+}
+
+/// The column just past the introducer when `comment` was written on the
+/// introducer's own line, or `None` when it is a standalone line above the node.
+fn introducer_gap(intro: Intro, comment: &Comment, context: &CommentContext<'_>) -> Option<u32> {
+    let after_intro = match intro {
+        Intro::None => return None,
+        // The `:` follows the key directly, so the introducer ends one column
+        // past the key's exact end.
+        Intro::AfterKey(line, column) if line == comment.span.line => column + 1,
+        // Every `-` of a block sequence sits at the sequence's own column, and
+        // the composer recorded the ones whose item begins further down. That set
+        // is empty for a document that has no such dash at all, which is nearly
+        // all of them, so check that before hashing a lookup for every comment.
+        Intro::AfterDash(column)
+            if !context.dash_positions.is_empty()
+                && context
+                    .dash_positions
+                    .contains(&(comment.span.line, column)) =>
+        {
+            column + 1
+        }
+        _ => return None,
+    };
+    (comment.span.column >= after_intro).then_some(after_intro)
+}
+
+/// Attach one comment written above `node`.
+///
+/// A comment on the line that *introduces* the node (`key: # note`, `- # note`)
+/// trails the entry, and is its inline comment even though the value starts
+/// further down. Filed as a head comment instead it would be invisible to
+/// `.comment`, and for a collection value would leak onto its first child's
+/// `comment_before`. Every other comment above the node is a standalone line and
+/// becomes a head comment, so the two can interleave: a section comment above a
+/// `-`, the dash's own comment, then more lines below it.
+fn attach_comment_above(
+    node: &mut YamlNode,
+    comment: &Comment,
+    intro: Intro,
+    context: &CommentContext<'_>,
+) {
+    match introducer_gap(intro, comment, context) {
+        Some(after_intro) if node.comments.inline.is_none() => {
+            node.comments.inline = Some(comment.text.clone());
+            // Alignment padding, measured from just past the `:`/`-`. An anchor
+            // or tag is emitted in that gap (`key: &a # note`), so measuring
+            // across it would overcount; those fall back to a single space, as
+            // the `value_pad` rule does.
+            if node.anchor.is_none() && node.tag.is_none() {
+                node.comments.inline_spaces = comment.span.column - after_intro;
+            }
+            node.comments.inline_before_value = true;
+        }
+        // A standalone line above the node. One reaching here *after* the
+        // introducer's own comment was claimed was written below it.
+        _ => node.comments.head.push(HeadComment {
+            text: comment.text.as_str().into(),
+            below_introducer: node.comments.inline_before_value,
+        }),
+    }
+}
+
 /// Walk a single node, recording its leading blank lines, consuming head
 /// comments before it, and capturing an inline comment (with its spacing) after
-/// it. `prev_line` threads the last source line seen so blank gaps can be
-/// measured. `is_value` marks nodes that may own a trailing inline comment
-/// (mapping values, sequence items, document roots); mapping keys never do.
+/// it. `is_value` marks nodes that may own a trailing inline comment (mapping
+/// values, sequence items, document roots); mapping keys never do. `intro` says
+/// what introduced this node, for a comment left on that line.
 fn visit_for_comments(
     node: &mut YamlNode,
-    comments: &[Comment],
-    blank_lines: &std::collections::HashSet<u32>,
-    cursor: &mut usize,
-    prev_line: &mut Option<u32>,
+    context: &CommentContext<'_>,
+    state: &mut WalkState,
     is_value: bool,
+    intro: Intro,
 ) {
     // Grow the native stack on demand so reattaching comments over a deeply
     // nested document cannot overflow a small thread stack. See [`crate::stack`].
-    crate::stack::guard(|| {
-        visit_for_comments_inner(node, comments, blank_lines, cursor, prev_line, is_value)
-    })
+    crate::stack::guard(|| visit_for_comments_inner(node, context, state, is_value, intro))
 }
 
 fn visit_for_comments_inner(
     node: &mut YamlNode,
-    comments: &[Comment],
-    blank_lines: &std::collections::HashSet<u32>,
-    cursor: &mut usize,
-    prev_line: &mut Option<u32>,
+    context: &CommentContext<'_>,
+    state: &mut WalkState,
     is_value: bool,
+    intro: Intro,
 ) {
     let line = node.span.line;
     let column = node.span.column;
+    let style = node.style;
 
-    // This node's leading block starts at its first head comment (if one sits
-    // above it) or at the node's own line. Blank source lines between the
-    // previous content and that start are preserved so section spacing survives.
-    let block_start = if *cursor < comments.len() && comments[*cursor].span.line < line {
-        comments[*cursor].span.line
-    } else {
-        line
+    // This node's leading block starts at the first comment above it (its
+    // introducer's own comment, or a standalone one) or at the node's own line.
+    // Blank source lines between the previous content and that start are
+    // preserved so section spacing survives. Measured before the claim below,
+    // which advances past the introducer's line: the blank lines above a
+    // commented `-` still belong to this entry.
+    let block_start = match context.comments.get(state.cursor) {
+        Some(comment) if comment.span.line < line => comment.span.line,
+        _ => line,
     };
-    if let Some(prev) = *prev_line {
-        node.comments.blank_before = blanks_between(blank_lines, prev, block_start);
+    if let Some(prev) = state.prev_line {
+        node.comments.blank_before = blanks_between(context.blank_lines, prev, block_start);
     }
 
-    // Head: standalone comment lines strictly above this node.
-    while *cursor < comments.len() && comments[*cursor].span.line < line {
-        node.comments.head.push(comments[*cursor].text.clone());
-        bump(prev_line, comments[*cursor].span.line);
-        *cursor += 1;
+    // The comments above this node's own line: the one written on the line that
+    // introduced it trails this entry, the rest are standalone lines above it.
+    while let Some(comment) = context.comments.get(state.cursor) {
+        if comment.span.line >= line {
+            break;
+        }
+        attach_comment_above(node, comment, intro, context);
+        state.bump(comment.span.line);
+        state.cursor += 1;
     }
-    bump(prev_line, line);
+    state.bump(line);
 
     // Recurse into children in document order.
     match &mut node.kind {
         YamlNodeKind::Mapping(pairs) => {
             for (key, val) in pairs.iter_mut() {
-                visit_for_comments(key, comments, blank_lines, cursor, prev_line, false);
+                visit_for_comments(key, context, state, false, Intro::None);
                 // Padding between the key's `:` and an inline value sharing its
                 // line (`example:      true`). The colon sits just past the key,
                 // so the gap is the value column minus the key end, less one.
@@ -463,12 +579,25 @@ fn visit_for_comments_inner(
                 {
                     val.comments.value_pad = val.span.column - key_end_col - 1;
                 }
-                visit_for_comments(val, comments, blank_lines, cursor, prev_line, true);
+                // An explicit key (`? key`) carries its `:` on a line of its own,
+                // which the key's end position does not locate, and a flow mapping
+                // has no line for a comment to trail; both keep the plain
+                // head-comment handling. So does a key with no source position of
+                // its own: an empty implicit key (`: value`) is a synthetic null
+                // that reports the start of the document, which would measure the
+                // introducer against an unrelated line.
+                let key_located = key.end_line >= line;
+                let intro = if style == NodeStyle::Block && !key.explicit_key && key_located {
+                    Intro::AfterKey(key.end_line, key.end_column)
+                } else {
+                    Intro::None
+                };
+                visit_for_comments(val, context, state, true, intro);
             }
         }
         YamlNodeKind::Sequence(items) => {
             for item in items.iter_mut() {
-                visit_for_comments(item, comments, blank_lines, cursor, prev_line, true);
+                visit_for_comments(item, context, state, true, Intro::AfterDash(column));
             }
         }
         _ => {}
@@ -478,24 +607,25 @@ fn visit_for_comments_inner(
     // this also covers the trailing blank lines that source includes, so the
     // next node's `blank_before` does not re-count them.
     match &node.comments.raw {
-        Some(raw) => bump(prev_line, line + raw.matches('\n').count() as u32),
-        None => bump(prev_line, node.end().0),
+        Some(raw) => state.bump(line + raw.matches('\n').count() as u32),
+        None => state.bump(node.end().0),
     }
 
     // Inline: a comment trailing this value on its own start line.
-    if is_value && *cursor < comments.len() {
-        let comment = &comments[*cursor];
-        if comment.span.line == line && comment.span.column > column {
-            // Preserve the gap between the value's end and the `#` so alignment
-            // padding survives a re-emit. The value ends on this line for the
-            // single-line scalars inline comments attach to; otherwise the gap is
-            // left uncaptured (re-emits as one space).
-            let (end_line, end_col) = node.end();
-            if end_line == comment.span.line && comment.span.column > end_col {
-                node.comments.inline_spaces = comment.span.column - end_col;
+    if is_value {
+        if let Some(comment) = context.comments.get(state.cursor) {
+            if comment.span.line == line && comment.span.column > column {
+                // Preserve the gap between the value's end and the `#` so
+                // alignment padding survives a re-emit. The value ends on this
+                // line for the single-line scalars inline comments attach to;
+                // otherwise the gap is left uncaptured (re-emits as one space).
+                let (end_line, end_col) = node.end();
+                if end_line == comment.span.line && comment.span.column > end_col {
+                    node.comments.inline_spaces = comment.span.column - end_col;
+                }
+                node.comments.inline = Some(comment.text.clone());
+                state.cursor += 1;
             }
-            node.comments.inline = Some(comment.text.clone());
-            *cursor += 1;
         }
     }
 }
@@ -558,6 +688,13 @@ struct Composer<'input> {
     /// (an unknown or forward reference), matching the fast decoder and PyYAML.
     /// Anchors do not cross documents, so this is cleared at each document start.
     anchors_seen: HashSet<String>,
+    /// The `(line, column)` of every block sequence `-` whose item begins on a
+    /// *later* line, the only shape where a comment can sit between the two
+    /// (`- # note`). Comment attachment uses it to tell such a comment from a
+    /// standalone comment line above the item. Recorded here because the dash
+    /// position exists only while composing, and kept to the rare shape so an
+    /// ordinary document allocates nothing.
+    dash_positions: HashSet<(u32, u32)>,
 }
 
 impl<'input> Composer<'input> {
@@ -571,6 +708,18 @@ impl<'input> Composer<'input> {
             pending_comments: Vec::new(),
             depth: 0,
             anchors_seen: HashSet::new(),
+            dash_positions: HashSet::new(),
+        }
+    }
+
+    /// Remember a block sequence `-` whose item starts on a later line, so
+    /// comment attachment can recognise a comment left on the dash's own line.
+    /// An item that opens on the dash line (the ordinary `- item`) has no room
+    /// for one and is not recorded.
+    fn record_detached_dash(&mut self, node: &YamlNode, dash_span: Span) {
+        if node.span.line > dash_span.line {
+            self.dash_positions
+                .insert((dash_span.line, dash_span.column));
         }
     }
 
@@ -744,7 +893,10 @@ impl<'input> Composer<'input> {
         let tag = self.pending_tag.take();
         let anchor = self.pending_anchor.take();
         let comments = Comments {
-            head: std::mem::take(&mut self.pending_comments),
+            head: std::mem::take(&mut self.pending_comments)
+                .into_iter()
+                .map(HeadComment::above)
+                .collect(),
             ..Comments::default()
         };
 
@@ -941,9 +1093,21 @@ impl<'input> Composer<'input> {
                             span,
                         ));
                     }
-                    let key = self
-                        .compose_node(events, false)?
-                        .unwrap_or_else(|| YamlNode::new(YamlNodeKind::Null, Span::default()));
+                    let key = match self.compose_node(events, false)? {
+                        Some(node) => node,
+                        // An implicit key with no node of its own (`: value`) has
+                        // no source text to point at. Place it at the `:` that
+                        // introduces the pair, so its position - and the
+                        // introducer a trailing comment is measured against - is
+                        // the real one rather than the start of the document.
+                        None => {
+                            let span = events
+                                .get(self.pos)
+                                .filter(|event| matches!(event.kind, EventKind::Value))
+                                .map_or_else(Span::default, |event| event.span);
+                            YamlNode::new(YamlNodeKind::Null, span)
+                        }
+                    };
                     let has_value = self.pos < events.len()
                         && matches!(events[self.pos].kind, EventKind::Value);
                     if has_value {
@@ -1009,6 +1173,7 @@ impl<'input> Composer<'input> {
                         mark_compact_nested_sequence(&mut node, dash_span.line);
                         if block {
                             mark_dash_pad(&mut node, dash_span);
+                            self.record_detached_dash(&node, dash_span);
                         }
                         items.push(node);
                     }
@@ -1155,6 +1320,7 @@ impl<'input> Composer<'input> {
                     if let Some(mut node) = self.compose_block_entry(events, dash_span)? {
                         mark_compact_nested_sequence(&mut node, dash_span.line);
                         mark_dash_pad(&mut node, dash_span);
+                        self.record_detached_dash(&node, dash_span);
                         items.push(node);
                     }
                 }
@@ -1278,8 +1444,41 @@ mod tests {
         // A leading comment before the first key is preserved in head position
         // (on the document root or the key itself, depending on attachment).
         let head_seen = r.comments.head.iter().chain(&k.comments.head);
-        assert!(head_seen.into_iter().any(|c| c.contains("leading")));
+        assert!(head_seen.into_iter().any(|c| c.text.contains("leading")));
         assert_eq!(v.comments.inline.as_deref(), Some("trailing"));
+    }
+
+    #[test]
+    fn key_line_comment_belongs_to_a_block_value() {
+        // `key: # note` trails the entry, so it is the value's inline comment
+        // even though the value itself starts on the next line. Filing it as a
+        // head comment would hide it from `.comment` and, for a collection,
+        // hand it to the first child.
+        let r = root("key: # note\n  a: 1\n");
+        let v = get(&r, "key");
+        assert_eq!(v.comments.inline.as_deref(), Some("note"));
+        assert!(v.comments.inline_before_value);
+        assert!(v.comments.head.is_empty());
+    }
+
+    #[test]
+    fn dash_line_comment_belongs_to_the_item() {
+        let r = root("- # note\n  a: 1\n");
+        let YamlNodeKind::Sequence(items) = &r.kind else {
+            panic!("expected a sequence");
+        };
+        assert_eq!(items[0].comments.inline.as_deref(), Some("note"));
+        assert!(items[0].comments.inline_before_value);
+    }
+
+    #[test]
+    fn standalone_comment_above_a_value_stays_a_head_comment() {
+        // Only the introducer's own line counts: a comment on a line of its own
+        // still belongs above the value it precedes.
+        let r = root("key:\n  # note\n  a: 1\n");
+        let v = get(&r, "key");
+        assert!(v.comments.inline.is_none());
+        assert_eq!(v.comments.head[0].text.as_ref(), "note");
     }
 
     #[test]

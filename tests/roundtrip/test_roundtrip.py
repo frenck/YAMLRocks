@@ -85,6 +85,54 @@ def test_sequence_comments_preserved():
     assert roundtrip(src) == src
 
 
+def test_key_line_comment_stays_on_the_key_after_an_edit():
+    """A comment after `key:` stays there when the value is a block below it.
+
+    Unmodified documents re-emit from the source cache, which hides the
+    placement; an edit forces the AST path, where the comment used to slide down
+    and become a standalone line above the first child.
+    """
+    doc = yamlrocks.loads(b"servers: # the pool\n  - alpha\nport: 80\n", option=RT)
+    doc["port"] = 8080
+    assert doc.to_yaml() == b"servers: # the pool\n  - alpha\nport: 8080\n"
+
+
+def test_key_line_comment_survives_an_edit_for_a_scalar_below_the_key():
+    """The same for a plain scalar written under its key, where it was dropped."""
+    doc = yamlrocks.loads(b"name: # explain\n  app\nport: 80\n", option=RT)
+    doc["port"] = 8080
+    assert doc.to_yaml() == b"name: # explain\n  app\nport: 8080\n"
+
+
+def test_key_line_comment_keeps_its_alignment_padding():
+    """The gap between the `:` and the `#` survives the AST path."""
+    doc = yamlrocks.loads(b"servers:    # the pool\n  - alpha\nport: 80\n", option=RT)
+    doc["port"] = 8080
+    assert doc.to_yaml() == b"servers:    # the pool\n  - alpha\nport: 8080\n"
+
+
+def test_dash_line_comment_stays_on_the_dash_after_an_edit():
+    """A comment after a `-` keeps its place, with the item below it."""
+    doc = yamlrocks.loads(b"- # the first one\n  a: 1\n- b: 2\n", option=RT)
+    doc[1]["b"] = 9
+    assert doc.to_yaml() == b"- # the first one\n  a: 1\n- b: 9\n"
+
+
+def test_comments_below_a_dash_line_comment_stay_below_it():
+    """Head comments written under `- # note` belong there, not above the dash."""
+    src = b"- # first\n  # second\n  a: 1\n- b: 2\n"
+    doc = yamlrocks.loads(src, option=RT)
+    doc[1]["b"] = 9
+    assert doc.to_yaml() == b"- # first\n  # second\n  a: 1\n- b: 9\n"
+
+
+def test_key_line_comment_kept_when_the_value_itself_is_replaced():
+    """Replacing a block value keeps the comment on the key line."""
+    doc = yamlrocks.loads(b"servers: # the pool\n  - alpha\n", option=RT)
+    doc.node["servers"].value = ["beta", "gamma"]
+    assert doc.to_yaml().startswith(b"servers: # the pool\n")
+
+
 def test_quoting_styles_preserved():
     """Round-trip preserves single and double quoting styles."""
     src = "double: \"quoted value\"\nsingle: 'sq'\n"

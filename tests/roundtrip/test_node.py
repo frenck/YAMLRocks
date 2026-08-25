@@ -148,6 +148,54 @@ def test_comment_before_absent_is_none():
     assert load().node["server"]["host"].comment_before is None
 
 
+def test_read_comment_on_a_block_mapping_value():
+    """A comment after a key whose value is a block mapping is that node's.
+
+    YAML has nowhere else to put it: the value starts on the next line, so the
+    trailing comment sits on the key's line.
+    """
+    doc = load(b"server: # the http front end\n  host: localhost\n")
+    assert doc.node["server"].comment == "the http front end"
+
+
+def test_read_comment_on_a_block_sequence_value():
+    """The same holds when the value is a block sequence."""
+    doc = load(b"my_cool_list: # hey its a comment\n  - cool-thing\n  - other\n")
+    assert doc.node["my_cool_list"].comment == "hey its a comment"
+
+
+def test_key_line_comment_does_not_leak_to_the_first_child():
+    """The comment belongs to the entry, not to the first key inside it.
+
+    ``comment_before`` of a mapping's first key resolves to the mapping node, so
+    a key-line comment filed as that mapping's head comment would surface as a
+    comment above a child it was never written above.
+    """
+    doc = load(b"server: # the http front end\n  host: localhost\n")
+    assert doc.node["server"]["host"].comment_before is None
+
+
+def test_read_comment_on_a_sequence_item_written_below_its_dash():
+    """A comment after a `-` belongs to that item, not to what follows it."""
+    doc = load(b"- # the first one\n  a: 1\n- b: 2\n")
+    assert doc.node[0].comment == "the first one"
+    assert doc.node[0].comment_before is None
+    assert doc.node[0]["a"].comment_before is None
+
+
+def test_read_comment_on_a_value_written_below_its_key():
+    """A plain scalar written under its key still reports the key-line comment."""
+    doc = load(b"key: # explain\n  value\n")
+    assert doc.node["key"].comment == "explain"
+
+
+def test_standalone_comment_above_a_value_is_not_its_comment():
+    """A comment on a line of its own stays a "before" comment, not a trailing one."""
+    doc = load(b"server:\n  # about host\n  host: localhost\n")
+    assert doc.node["server"].comment is None
+    assert doc.node["server"]["host"].comment_before == "about host"
+
+
 # -- Comments: writing -------------------------------------------------------
 
 
@@ -165,6 +213,21 @@ def test_clear_inline_comment():
     doc = load()
     doc.node["server"]["port"].comment = None
     assert "#" not in doc.to_yaml().decode().split("port: 8080")[1].splitlines()[0]
+
+
+def test_set_comment_on_a_block_value_writes_it_on_the_key_line():
+    """A comment set on a collection lands where YAML puts it: after the key."""
+    doc = load(b"server:\n  host: localhost\n")
+    doc.node["server"].comment = "the http front end"
+    assert doc.to_yaml() == b"server: # the http front end\n  host: localhost\n"
+
+
+def test_clear_comment_on_a_block_value():
+    """Clearing it removes the comment and leaves the key bare."""
+    doc = load(b"server: # the http front end\n  host: localhost\n")
+    doc.node["server"].comment = None
+    doc.node["server"]["host"].value = "127.0.0.1"
+    assert doc.to_yaml() == b"server:\n  host: 127.0.0.1\n"
 
 
 def test_set_comment_before_adds_a_line_above_the_key():

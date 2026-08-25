@@ -215,6 +215,13 @@ pub struct Comments {
     /// preserving alignment padding (`x: 1      # note`) across a re-emit. `0`
     /// means "not captured" (a synthetic comment), which emits as a single space.
     pub inline_spaces: u32,
+    /// Whether [`inline`](Self::inline) was written on the line that *introduces*
+    /// this value (after a mapping key's `:` or a sequence `-`) while the value
+    /// itself begins on a later line, as in `key: # note`. The emitter keeps such
+    /// a comment on the introducer line instead of moving it past the value.
+    /// `false` for the usual trailing comment (`key: value # note`), which the
+    /// emitter writes after the value.
+    pub inline_before_value: bool,
     /// Number of spaces between this node's introducer (a mapping key's `:` or a
     /// sequence `-`) and an inline value sharing its line, preserving alignment
     /// like `example:      true` or `-    item`. `0` means "not captured" (a

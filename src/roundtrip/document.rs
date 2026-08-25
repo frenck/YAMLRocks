@@ -838,8 +838,9 @@ impl YAMLRocksDocumentView {
 ///
 /// Comments follow YAML's own placement. `comment_before` is the standalone
 /// comment above a node (above its key, for a mapping value) and `comment` is
-/// the inline comment trailing the value on the same line. Both read and write
-/// the bare comment text, without the leading `#`.
+/// the comment trailing the entry: after the value on its own line, or after the
+/// `key:`/`-` that introduces it when the value is a block written below. Both
+/// read and write the bare comment text, without the leading `#`.
 #[pyclass(name = "YAMLRocksNode")]
 pub struct YAMLRocksNode {
     root: Py<YAMLRocksDocument>,
@@ -949,8 +950,14 @@ impl YAMLRocksNode {
             .map(|p| p.to_string_lossy().into_owned()))
     }
 
-    /// The inline comment trailing this node's value, or `None`. The returned
-    /// text has no leading `#` or surrounding whitespace.
+    /// The comment trailing this node, or `None`. The returned text has no
+    /// leading `#` or surrounding whitespace.
+    ///
+    /// For a value written on the key's own line this is the comment after it
+    /// (`port: 8080  # the http port`). For a block mapping or sequence, whose
+    /// value starts on the line below, YAML puts that comment after the key
+    /// instead (`servers: # the whole pool`), and it is read there. A sequence
+    /// item written under its own dash (`- # note`) works the same way.
     #[getter]
     fn comment(&self, py: Python<'_>) -> PyResult<Option<String>> {
         let doc = self.root.borrow(py);
@@ -958,7 +965,9 @@ impl YAMLRocksNode {
         Ok(node.comments.inline.clone())
     }
 
-    /// Set or clear the inline comment. Pass the bare text (no `#`) or `None`.
+    /// Set or clear the trailing comment. Pass the bare text (no `#`) or `None`.
+    /// It is written where YAML puts it for this node: after the value, or after
+    /// the `key:`/`-` when the value is a block written on the lines below.
     #[setter]
     fn set_comment(&self, py: Python<'_>, text: Option<String>) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);

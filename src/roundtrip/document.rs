@@ -873,6 +873,7 @@ impl YAMLRocksNode {
         let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
         let mut new_val = python_to_node(py, value, double_quotes, schema)?;
         new_val.comments.head = std::mem::take(&mut node.comments.head);
+        new_val.comments.head_below = node.comments.head_below;
         new_val.comments.inline = node.comments.inline.take();
         // Keep the alignment padding around the value so an edit preserves the
         // author's layout: the gap between the key's `:` and the value, and the
@@ -1000,6 +1001,9 @@ impl YAMLRocksNode {
         let mut doc = self.root.borrow_mut(py);
         let node = resolve_head_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
         node.comments.head = split_comment_lines(text);
+        // A comment written through this setter sits *before* the node, which for
+        // a sequence item means above its `-`, not below a comment on it.
+        node.comments.head_below = 0;
         node.mark_modified();
         Ok(())
     }
@@ -1613,6 +1617,7 @@ fn set_child(
                 // comments, anchor, and tag), matching `YAMLRocksNode.set_value`, so
                 // an edit does not silently drop nearby comments or markup.
                 new_val.comments.head = std::mem::take(&mut v.comments.head);
+                new_val.comments.head_below = v.comments.head_below;
                 new_val.comments.inline = v.comments.inline.take();
                 new_val.comments.value_pad = v.comments.value_pad;
                 new_val.comments.inline_spaces = v.comments.inline_spaces;
@@ -1642,6 +1647,7 @@ fn set_child(
             // the new value so editing a list entry preserves the markup around
             // it, matching `YAMLRocksNode.set_value`.
             new_val.comments.head = std::mem::take(&mut target.comments.head);
+            new_val.comments.head_below = target.comments.head_below;
             new_val.comments.inline = target.comments.inline.take();
             new_val.comments.value_pad = target.comments.value_pad;
             new_val.comments.inline_spaces = target.comments.inline_spaces;

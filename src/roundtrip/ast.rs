@@ -222,6 +222,19 @@ pub struct Comments {
     /// `false` for the usual trailing comment (`key: value # note`), which the
     /// emitter writes after the value.
     pub inline_before_value: bool,
+    /// How many of the trailing [`head`](Self::head) comments were written
+    /// *below* that introducer line rather than above it. A section comment can
+    /// sit above a `-` while the dash carries its own comment and further
+    /// comments follow underneath, so the two groups have to be told apart to
+    /// re-emit each on its own side of the dash.
+    ///
+    /// A `u8` because it costs nothing here: the struct's other scalars leave
+    /// exactly this much padding, and widening it would grow every node of the
+    /// tree for a count that never exceeds a handful. It saturates at
+    /// [`u8::MAX`], which then means *all* of them: 255 comment lines under a
+    /// single `-` is past any real document, and keeping that block together is
+    /// the least surprising thing to do with it.
+    pub head_below: u8,
     /// Number of spaces between this node's introducer (a mapping key's `:` or a
     /// sequence `-`) and an inline value sharing its line, preserving alignment
     /// like `example:      true` or `-    item`. `0` means "not captured" (a
@@ -240,6 +253,32 @@ pub struct Comments {
     pub foot: Vec<String>,
     /// Whether this node was modified since loading (for diff-based emission).
     pub modified: bool,
+}
+
+impl Comments {
+    /// The head comments written above this node's introducer (a sequence `-`).
+    /// Everything, for a node whose introducer carries no comment of its own.
+    pub fn head_above_introducer(&self) -> &[String] {
+        &self.head[..self.head.len() - self.head_below_count()]
+    }
+
+    /// The head comments written below that introducer, between its own comment
+    /// and the node's first line.
+    pub fn head_below_introducer(&self) -> &[String] {
+        &self.head[self.head.len() - self.head_below_count()..]
+    }
+
+    /// The recorded split, clamped to the comments actually present: an edit can
+    /// replace `head` wholesale (`comment_before = ...`), and a stale count must
+    /// not slice out of range. A saturated count means the whole block sits
+    /// below the introducer (see [`head_below`](Self::head_below)).
+    fn head_below_count(&self) -> usize {
+        if self.head_below == u8::MAX {
+            self.head.len()
+        } else {
+            (self.head_below as usize).min(self.head.len())
+        }
+    }
 }
 
 /// The presentation style of a node.
@@ -306,6 +345,26 @@ mod tests {
         assert_eq!(node.style, NodeStyle::Flow);
         assert_eq!(node.comments.head, vec!["note".to_owned()]);
         assert!(matches!(node.kind, YamlNodeKind::Scalar(..)));
+    }
+
+    #[test]
+    fn head_comments_split_around_their_introducer() {
+        let mut comments = Comments {
+            head: vec!["above".to_owned(), "below".to_owned()],
+            ..Default::default()
+        };
+        comments.head_below = 1;
+        assert_eq!(comments.head_above_introducer(), ["above".to_owned()]);
+        assert_eq!(comments.head_below_introducer(), ["below".to_owned()]);
+
+        // A count left over from a replaced block cannot slice out of range.
+        comments.head_below = 9;
+        assert_eq!(comments.head_below_introducer().len(), 2);
+
+        // A saturated count keeps the whole block below the introducer.
+        comments.head_below = u8::MAX;
+        assert!(comments.head_above_introducer().is_empty());
+        assert_eq!(comments.head_below_introducer().len(), 2);
     }
 
     #[test]

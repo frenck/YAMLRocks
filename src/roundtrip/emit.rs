@@ -468,7 +468,11 @@ impl RoundTripEmitter {
     /// *below* that dash instead, where the author wrote them, so they are left
     /// to [`emit_head_below_dash`](Self::emit_head_below_dash).
     fn emit_head_above_dash(&mut self, item: &YamlNode, indent: usize) {
-        if !item.comments.inline_before_value {
+        if item.comments.inline_before_value {
+            for comment in item.comments.head_above_introducer() {
+                self.emit_comment_line(comment, indent);
+            }
+        } else {
             self.emit_head(&item.comments, indent);
         }
     }
@@ -477,7 +481,9 @@ impl RoundTripEmitter {
     /// on the lines between a dash-line comment and the item's own content.
     fn emit_head_below_dash(&mut self, item: &YamlNode, indent: usize) {
         if item.comments.inline_before_value {
-            self.emit_head(&item.comments, indent);
+            for comment in item.comments.head_below_introducer() {
+                self.emit_comment_line(comment, indent);
+            }
         }
     }
 

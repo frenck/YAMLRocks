@@ -442,58 +442,66 @@ enum Intro {
     AfterDash(u32),
 }
 
-/// Give `node` the comment written after the `:` or `-` that introduced it, when
-/// the value itself starts on a later line (`key: # note`).
-///
-/// Such a comment belongs to the entry. Left to the head walk in
-/// [`visit_for_comments`], it would become a standalone comment above the value:
-/// invisible to `.comment`, and for a collection value leaking onto its first
-/// child's `comment_before`.
-fn claim_introducer_comment(
-    node: &mut YamlNode,
-    context: &CommentContext<'_>,
-    state: &mut WalkState,
-    intro: Intro,
-) {
-    let Some(comment) = context.comments.get(state.cursor) else {
-        return;
-    };
-    // Only a comment above the node's own first line can sit on the introducer.
-    if comment.span.line >= node.span.line {
-        return;
-    }
-    // The column just past the introducer, which the comment must follow.
+/// The column just past the introducer when `comment` was written on the
+/// introducer's own line, or `None` when it is a standalone line above the node.
+fn introducer_gap(intro: Intro, comment: &Comment, context: &CommentContext<'_>) -> Option<u32> {
     let after_intro = match intro {
-        Intro::None => return,
+        Intro::None => return None,
         // The `:` follows the key directly, so the introducer ends one column
         // past the key's exact end.
         Intro::AfterKey(line, column) if line == comment.span.line => column + 1,
         // Every `-` of a block sequence sits at the sequence's own column, and
-        // the composer recorded the ones whose item begins further down. A
-        // comment on any other line above the item is a standalone comment and
-        // stays a head comment.
+        // the composer recorded the ones whose item begins further down. That set
+        // is empty for a document that has no such dash at all, which is nearly
+        // all of them, so check that before hashing a lookup for every comment.
         Intro::AfterDash(column)
-            if context
-                .dash_positions
-                .contains(&(comment.span.line, column)) =>
+            if !context.dash_positions.is_empty()
+                && context
+                    .dash_positions
+                    .contains(&(comment.span.line, column)) =>
         {
             column + 1
         }
-        _ => return,
+        _ => return None,
     };
-    if comment.span.column < after_intro {
-        return;
+    (comment.span.column >= after_intro).then_some(after_intro)
+}
+
+/// Attach one comment written above `node`.
+///
+/// A comment on the line that *introduces* the node (`key: # note`, `- # note`)
+/// trails the entry, and is its inline comment even though the value starts
+/// further down. Filed as a head comment instead it would be invisible to
+/// `.comment`, and for a collection value would leak onto its first child's
+/// `comment_before`. Every other comment above the node is a standalone line and
+/// becomes a head comment, so the two can interleave: a section comment above a
+/// `-`, the dash's own comment, then more lines below it.
+fn attach_comment_above(
+    node: &mut YamlNode,
+    comment: &Comment,
+    intro: Intro,
+    context: &CommentContext<'_>,
+) {
+    match introducer_gap(intro, comment, context) {
+        Some(after_intro) if node.comments.inline.is_none() => {
+            node.comments.inline = Some(comment.text.clone());
+            // Alignment padding, measured from just past the `:`/`-`. An anchor
+            // or tag is emitted in that gap (`key: &a # note`), so measuring
+            // across it would overcount; those fall back to a single space, as
+            // the `value_pad` rule does.
+            if node.anchor.is_none() && node.tag.is_none() {
+                node.comments.inline_spaces = comment.span.column - after_intro;
+            }
+            node.comments.inline_before_value = true;
+        }
+        _ => {
+            node.comments.head.push(comment.text.clone());
+            // Comments reaching here after the introducer's own belong below it.
+            if node.comments.inline_before_value {
+                node.comments.head_below = node.comments.head_below.saturating_add(1);
+            }
+        }
     }
-    node.comments.inline = Some(comment.text.clone());
-    // Alignment padding, measured from just past the `:`/`-`. An anchor or tag is
-    // emitted in that gap (`key: &a # note`), so measuring across it would
-    // overcount; those fall back to a single space, as the `value_pad` rule does.
-    if node.anchor.is_none() && node.tag.is_none() {
-        node.comments.inline_spaces = comment.span.column - after_intro;
-    }
-    node.comments.inline_before_value = true;
-    state.bump(comment.span.line);
-    state.cursor += 1;
 }
 
 /// Walk a single node, recording its leading blank lines, consuming head
@@ -538,14 +546,13 @@ fn visit_for_comments_inner(
         node.comments.blank_before = blanks_between(context.blank_lines, prev, block_start);
     }
 
-    claim_introducer_comment(node, context, state, intro);
-
-    // Head: standalone comment lines strictly above this node.
+    // The comments above this node's own line: the one written on the line that
+    // introduced it trails this entry, the rest are standalone lines above it.
     while let Some(comment) = context.comments.get(state.cursor) {
         if comment.span.line >= line {
             break;
         }
-        node.comments.head.push(comment.text.clone());
+        attach_comment_above(node, comment, intro, context);
         state.bump(comment.span.line);
         state.cursor += 1;
     }
@@ -1084,9 +1091,21 @@ impl<'input> Composer<'input> {
                             span,
                         ));
                     }
-                    let key = self
-                        .compose_node(events, false)?
-                        .unwrap_or_else(|| YamlNode::new(YamlNodeKind::Null, Span::default()));
+                    let key = match self.compose_node(events, false)? {
+                        Some(node) => node,
+                        // An implicit key with no node of its own (`: value`) has
+                        // no source text to point at. Place it at the `:` that
+                        // introduces the pair, so its position - and the
+                        // introducer a trailing comment is measured against - is
+                        // the real one rather than the start of the document.
+                        None => {
+                            let span = events
+                                .get(self.pos)
+                                .filter(|event| matches!(event.kind, EventKind::Value))
+                                .map_or_else(Span::default, |event| event.span);
+                            YamlNode::new(YamlNodeKind::Null, span)
+                        }
+                    };
                     let has_value = self.pos < events.len()
                         && matches!(events[self.pos].kind, EventKind::Value);
                     if has_value {

@@ -1022,10 +1022,15 @@ pub(crate) fn emittable_tag(tag: &str) -> Result<(), String> {
     }
     if let Some(verbatim) = tag.strip_prefix("!<") {
         // A verbatim tag is `!<` + non-empty URI + `>`; the scanner rejects an
-        // unterminated or empty one on read, so refuse to emit one here too.
-        if verbatim.strip_suffix('>').map_or(true, str::is_empty) {
+        // unterminated or empty one on read, so refuse to emit one here too. It
+        // also stops at the *first* `>`, so an interior one would truncate the
+        // tag and spill the remainder into the document as content: `!<tag:a>b>`
+        // reloads as the tag `!<tag:a>` on a value that starts with `b>`.
+        let uri = verbatim.strip_suffix('>').unwrap_or_default();
+        if uri.is_empty() || uri.contains('>') {
             return Err(format!(
-                "invalid tag {tag:?}: a verbatim tag must be '!<...>' with non-empty content"
+                "invalid tag {tag:?}: a verbatim tag must be '!<...>' with non-empty content \
+                 and no interior '>'"
             ));
         }
     } else {
@@ -1523,6 +1528,10 @@ mod tests {
         assert!(emittable_tag("!foo,bar").is_err());
         assert!(emittable_tag("!foo bar").is_err());
         assert!(emittable_tag("!<>").is_err());
+        // The scanner stops at the first `>`, so an interior one would truncate
+        // the tag and leave the rest as document content.
+        assert!(emittable_tag("!<tag:a>b>").is_err());
+        assert!(emittable_tag("!<unterminated").is_err());
         assert!(emittable_tag("").is_err());
     }
 }

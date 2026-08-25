@@ -189,16 +189,51 @@ def test_tag_stays_on_the_key_line_beside_its_comment():
     assert doc.to_yaml() == b"key: !t # note\n  value\nz: 2\n"
 
 
-def test_empty_implicit_key_does_not_claim_an_unrelated_comment():
-    """An empty key (`: value`) has no source position, so it introduces nothing.
+def test_section_comment_above_a_commented_dash_stays_above_it():
+    """A comment above the `-` and one on it keep their own sides of the dash.
 
-    Its synthetic null reports the start of the document, which must not be
-    mistaken for an introducer sitting on some other line's comment.
+    They arrive as one run of comments, so the split between them has to be
+    recorded: re-emitting the lot on either side reorders them against the
+    comment written on the dash itself.
     """
-    src = b"outer:\n  : # note\n    child: value\nz: 1\n"
+    src = b"- a\n# about next\n- # inline\n  b: 1\n"
+    doc = yamlrocks.loads(src, option=RT)
+    assert doc.node[1].comment == "inline"
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# about next\n- # inline\n  b: 1\n"
+
+
+def test_comments_on_both_sides_of_a_commented_dash_survive():
+    """A comment above the dash, one on it, and one below all keep their place."""
+    src = b"- a\n# above\n- # inline\n  # below\n  b: 1\n"
+    doc = yamlrocks.loads(src, option=RT)
+    doc.node[0].value = "A"
+    assert doc.to_yaml() == b"- A\n# above\n- # inline\n  # below\n  b: 1\n"
+    # The split travels with the comments when the item itself is replaced.
+    doc = yamlrocks.loads(src, option=RT)
+    doc.node[1].value = {"b": 9}
+    assert doc.to_yaml() == b"- a\n# above\n- # inline\n  # below\n  b: 9\n"
+
+
+def test_comment_before_on_an_item_lands_above_its_dash():
+    """``comment_before`` replaces the head block and writes above the `-`."""
+    doc = yamlrocks.loads(b"- a\n# above\n- # inline\n  b: 1\n", option=RT)
+    doc.node[1].comment_before = "fresh"
+    assert doc.to_yaml() == b"- a\n# fresh\n- # inline\n  b: 1\n"
+
+
+def test_empty_implicit_key_introduces_from_its_own_colon():
+    """An empty key (`: value`) is placed at its `:`, so it introduces from there.
+
+    The node has no source text of its own; left at the document start (the
+    obvious default) it would measure the introducer against an unrelated line,
+    either missing the comment or claiming one written somewhere else entirely.
+    """
+    src = b"a: 1\n: # note\n  child: v\n"
     doc = yamlrocks.loads(src, option=RT)
     assert doc.to_yaml() == src
-    assert doc.node["outer"].comment is None
+    doc.node["a"].value = 2
+    assert doc.to_yaml() == b"a: 2\nnull: # note\n  child: v\n"
 
 
 def test_quoting_styles_preserved():

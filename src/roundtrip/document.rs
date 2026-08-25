@@ -986,18 +986,27 @@ impl YAMLRocksNode {
 
     /// The standalone comment line(s) above this node, joined by newlines, or
     /// `None`. For a mapping value this is the comment above its key.
+    ///
+    /// A sequence item reports only the block above its `-`. Comments written
+    /// *below* a comment on that dash (`- # note`) sit inside the entry, and
+    /// this property both reads and writes the block above it.
     #[getter]
     fn comment_before(&self, py: Python<'_>) -> PyResult<Option<String>> {
         let doc = self.root.borrow(py);
         let node = resolve_head(&doc.nodes, &self.path).ok_or_else(stale_node)?;
-        Ok(join_comment_lines(
-            &node
-                .comments
+        let lines: Vec<String> = if self.heads_a_sequence_item() {
+            node.comments
+                .head_above_introducer()
+                .map(str::to_owned)
+                .collect()
+        } else {
+            node.comments
                 .head
                 .iter()
                 .map(|comment| comment.text.to_string())
-                .collect::<Vec<_>>(),
-        ))
+                .collect()
+        };
+        Ok(join_comment_lines(&lines))
     }
 
     /// Set or clear the standalone comment above this node. A multi-line string
@@ -1005,15 +1014,39 @@ impl YAMLRocksNode {
     #[setter]
     fn set_comment_before(&self, py: Python<'_>, text: Option<String>) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);
+        // Keep whatever sits below a sequence item's dash comment: the getter
+        // does not report it, so replacing it here would delete a comment the
+        // caller never saw.
+        let keep_below: Vec<HeadComment> = if self.heads_a_sequence_item() {
+            let node = resolve_head(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+            node.comments
+                .head
+                .iter()
+                .filter(|comment| comment.below_introducer)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         let node = resolve_head_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
         // A comment written through this setter sits *before* the node, which for
         // a sequence item means above its `-`, not below a comment on it.
         node.comments.head = split_comment_lines(text)
             .into_iter()
             .map(HeadComment::above)
+            .chain(keep_below)
             .collect();
         node.mark_modified();
         Ok(())
+    }
+
+    /// Whether `comment_before` on this cursor addresses a sequence item's own
+    /// head comments. Every other path resolves either to a node that cannot
+    /// carry an introducer comment (a mapping key, the document root) or, for a
+    /// mapping's first key, to the mapping node itself - whose head comments are
+    /// that mapping's leading block, and must stay readable in full.
+    fn heads_a_sequence_item(&self) -> bool {
+        matches!(self.path.last(), Some(PathSeg::Index(_)))
     }
 
     /// The trailing comment line(s) after this node, joined by newlines, or

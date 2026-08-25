@@ -244,6 +244,36 @@ def test_set_multiline_comment_before():
     assert doc.to_yaml().decode() == "# line one\n# line two\nkey: value\n"
 
 
+def test_comment_before_on_an_item_is_the_block_above_its_dash():
+    """A sequence item reports the comments above its `-`, not the ones inside it.
+
+    A comment written below `- # note` sits in the entry's interior, and the
+    setter writes above the dash, so reporting it here would make reading a
+    comment and writing it straight back move it.
+    """
+    doc = load(b"- # inline\n  # below\n  value\n- x\n")
+    assert doc.node[0].comment == "inline"
+    assert doc.node[0].comment_before is None
+    assert doc.node[1].comment_before is None
+
+
+def test_setting_comment_before_keeps_an_item_interior_comment():
+    """Writing the block above a dash leaves the comments below it alone."""
+    doc = load(b"- # inline\n  # below\n  value\n- x\n")
+    doc.node[0].comment_before = "section"
+    assert doc.to_yaml() == b"# section\n- # inline\n  # below\n  value\n- x\n"
+
+
+def test_comment_before_round_trips_through_the_api():
+    """Reading ``comment_before`` and writing it back changes nothing."""
+    src = b"- a\n# above\n- # inline\n  # below\n  value\n"
+    doc = load(src)
+    assert doc.node[1].comment_before == "above"
+    doc.node[1].comment_before = doc.node[1].comment_before
+    doc.node[0].value = "a"
+    assert doc.to_yaml() == src
+
+
 def test_comment_before_on_first_key_replaces_leading_comment():
     """The leading comment lives above the first key; setting it replaces it."""
     doc = load(b"# old leading\nkey: value\nother: 2\n")

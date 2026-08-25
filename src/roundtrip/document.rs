@@ -987,24 +987,31 @@ impl YAMLRocksNode {
     /// The standalone comment line(s) above this node, joined by newlines, or
     /// `None`. For a mapping value this is the comment above its key.
     ///
-    /// A sequence item reports only the block above its `-`. Comments written
-    /// *below* a comment on that dash (`- # note`) sit inside the entry, and
-    /// this property both reads and writes the block above it.
+    /// A sequence item's head block can straddle its `-`: the item itself
+    /// reports the comments above the dash, while the first key inside it
+    /// reports the ones written below a comment on that dash, which is where
+    /// they sit relative to that key. Each writes back the part it reads.
     #[getter]
     fn comment_before(&self, py: Python<'_>) -> PyResult<Option<String>> {
         let doc = self.root.borrow(py);
-        let node = resolve_head(&doc.nodes, &self.path).ok_or_else(stale_node)?;
-        let lines: Vec<String> = if self.heads_a_sequence_item() {
-            node.comments
-                .head_above_introducer()
-                .map(str::to_owned)
-                .collect()
-        } else {
-            node.comments
+        let (node, scope) = resolve_head(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+        let lines: Vec<String> = match scope {
+            HeadScope::All => node
+                .comments
                 .head
                 .iter()
                 .map(|comment| comment.text.to_string())
-                .collect()
+                .collect(),
+            HeadScope::AboveDash => node
+                .comments
+                .head_above_introducer()
+                .map(str::to_owned)
+                .collect(),
+            HeadScope::BelowDash => node
+                .comments
+                .head_below_introducer()
+                .map(str::to_owned)
+                .collect(),
         };
         Ok(join_comment_lines(&lines))
     }
@@ -1014,39 +1021,34 @@ impl YAMLRocksNode {
     #[setter]
     fn set_comment_before(&self, py: Python<'_>, text: Option<String>) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);
-        // Keep whatever sits below a sequence item's dash comment: the getter
-        // does not report it, so replacing it here would delete a comment the
-        // caller never saw.
-        let keep_below: Vec<HeadComment> = if self.heads_a_sequence_item() {
-            let node = resolve_head(&doc.nodes, &self.path).ok_or_else(stale_node)?;
-            node.comments
+        let (node, scope) = resolve_head_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
+        // Replace only the part this cursor reads, and keep the other side of the
+        // dash: the caller never saw it, so overwriting it would delete a comment
+        // out from under them.
+        let kept: Vec<HeadComment> = match scope {
+            HeadScope::All => Vec::new(),
+            HeadScope::AboveDash | HeadScope::BelowDash => node
+                .comments
                 .head
                 .iter()
-                .filter(|comment| comment.below_introducer)
+                .filter(|comment| comment.below_introducer == (scope == HeadScope::AboveDash))
                 .cloned()
-                .collect()
-        } else {
-            Vec::new()
+                .collect(),
         };
-        let node = resolve_head_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
-        // A comment written through this setter sits *before* the node, which for
-        // a sequence item means above its `-`, not below a comment on it.
-        node.comments.head = split_comment_lines(text)
+        let written = split_comment_lines(text)
             .into_iter()
-            .map(HeadComment::above)
-            .chain(keep_below)
-            .collect();
+            .map(|text| HeadComment {
+                text: text.into_boxed_str(),
+                below_introducer: scope == HeadScope::BelowDash,
+            });
+        // Source order: everything above the dash, then everything below it.
+        node.comments.head = if scope == HeadScope::BelowDash {
+            kept.into_iter().chain(written).collect()
+        } else {
+            written.chain(kept).collect()
+        };
         node.mark_modified();
         Ok(())
-    }
-
-    /// Whether `comment_before` on this cursor addresses a sequence item's own
-    /// head comments. Every other path resolves either to a node that cannot
-    /// carry an introducer comment (a mapping key, the document root) or, for a
-    /// mapping's first key, to the mapping node itself - whose head comments are
-    /// that mapping's leading block, and must stay readable in full.
-    fn heads_a_sequence_item(&self) -> bool {
-        matches!(self.path.last(), Some(PathSeg::Index(_)))
     }
 
     /// The trailing comment line(s) after this node, joined by newlines, or
@@ -1419,9 +1421,33 @@ fn renders_foot(node: &YamlNode) -> bool {
 /// comment the composer attaches to the enclosing mapping (which is rendered
 /// just above that first key). This returns whichever node actually holds it, so
 /// `comment_before` reads and writes the same place the emitter renders.
-fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<&'a YamlNode> {
+/// Which part of a node's head comments a `comment_before` cursor addresses.
+///
+/// A sequence item's head block can straddle its `-`: comments above the dash
+/// precede the whole entry, while comments below a dash comment (`- # note`) sit
+/// inside it, directly above its first key. The two are stored together, so the
+/// cursor decides which of them it means.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeadScope {
+    /// The whole block: a mapping's leading comments, a key node's own, or the
+    /// document root's. Nothing divides these.
+    All,
+    /// The comments above a sequence item's `-`.
+    AboveDash,
+    /// The comments below that dash's own comment, which are the ones directly
+    /// above the first key inside the item.
+    BelowDash,
+}
+
+/// Resolve the node holding this cursor's "before" comments, and which part of
+/// them the cursor addresses.
+///
+/// Returning both together is deliberate: deciding the scope separately means a
+/// second copy of this walk, and the two then disagree about which node a path
+/// reached.
+fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<(&'a YamlNode, HeadScope)> {
     match path.split_last() {
-        None => roots.first(),
+        None => roots.first().map(|node| (node, HeadScope::All)),
         Some((PathSeg::Key(k), parent)) => {
             let parent_node = resolve_path(roots, parent)?;
             let YamlNodeKind::Mapping(pairs) = &parent_node.kind else {
@@ -1432,20 +1458,39 @@ fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<&'a YamlN
             // above the first key); any later pair carries its own.
             let idx = pairs.iter().rposition(|(key, _)| scalar_eq(key, k))?;
             if idx == 0 {
-                Some(parent_node)
+                Some((parent_node, head_scope_of_parent(parent)))
             } else {
-                Some(&pairs[idx].0)
+                Some((&pairs[idx].0, HeadScope::All))
             }
         }
-        // A sequence element or a key node holds its own head comment.
-        Some((PathSeg::Index(_) | PathSeg::KeyNode(_), _)) => resolve_path(roots, path),
+        // A sequence element holds its own head comment, and owns the block
+        // above its dash; a key node holds its own with nothing to divide.
+        Some((PathSeg::Index(_), _)) => {
+            resolve_path(roots, path).map(|node| (node, HeadScope::AboveDash))
+        }
+        Some((PathSeg::KeyNode(_), _)) => {
+            resolve_path(roots, path).map(|node| (node, HeadScope::All))
+        }
     }
 }
 
-/// Mutable counterpart to [`resolve_head`].
-fn resolve_head_mut<'a>(roots: &'a mut [YamlNode], path: &[PathSeg]) -> Option<&'a mut YamlNode> {
+/// The scope for a first-key cursor, whose head comments live on the mapping
+/// itself. When that mapping *is* a sequence item, they are the comments below
+/// its dash; anywhere else there is no dash to divide them.
+fn head_scope_of_parent(parent: &[PathSeg]) -> HeadScope {
+    match parent.last() {
+        Some(PathSeg::Index(_)) => HeadScope::BelowDash,
+        _ => HeadScope::All,
+    }
+}
+
+/// Mutable counterpart to [`resolve_head`], reporting the same scope.
+fn resolve_head_mut<'a>(
+    roots: &'a mut [YamlNode],
+    path: &[PathSeg],
+) -> Option<(&'a mut YamlNode, HeadScope)> {
     match path.split_last() {
-        None => roots.first_mut(),
+        None => roots.first_mut().map(|node| (node, HeadScope::All)),
         Some((PathSeg::Key(k), parent)) => {
             let parent_node = resolve_path_mut(roots, parent)?;
             // Mirror [`resolve_head`]: the last occurrence is the effective key,
@@ -1457,14 +1502,20 @@ fn resolve_head_mut<'a>(roots: &'a mut [YamlNode], path: &[PathSeg]) -> Option<&
                 _ => return None,
             }?;
             if idx == 0 {
-                Some(parent_node)
+                let scope = head_scope_of_parent(parent);
+                Some((parent_node, scope))
             } else if let YamlNodeKind::Mapping(pairs) = &mut parent_node.kind {
-                Some(&mut pairs[idx].0)
+                Some((&mut pairs[idx].0, HeadScope::All))
             } else {
                 None
             }
         }
-        Some((PathSeg::Index(_) | PathSeg::KeyNode(_), _)) => resolve_path_mut(roots, path),
+        Some((PathSeg::Index(_), _)) => {
+            resolve_path_mut(roots, path).map(|node| (node, HeadScope::AboveDash))
+        }
+        Some((PathSeg::KeyNode(_), _)) => {
+            resolve_path_mut(roots, path).map(|node| (node, HeadScope::All))
+        }
     }
 }
 

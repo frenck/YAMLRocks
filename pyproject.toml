@@ -106,7 +106,7 @@ charts = [
   "ryaml==0.5.1",
   "py-yaml12==0.2.0",
   "yaml-rs==0.1.6",
-  "fastyaml-rs==0.6.5",
+  "fastyaml-rs==0.6.6",
   "oyaml==1.0",
   "strictyaml==1.7.3",
   "matplotlib==3.11.1",

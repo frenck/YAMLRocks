@@ -92,7 +92,7 @@ numpy = ["numpy==2.5.2"]
 # absent. The full suite (coverage.yaml) runs on a target that has a wheel.
 proptest = ["hypothesis==6.165.10"]
 # Type checkers and linters (no build needed; they check the source and stub).
-typing = ["mypy==2.3.1", "ty==0.0.74"]
+typing = ["mypy==2.3.1", "ty==0.0.75"]
 lint = ["ruff==0.16.4", "codespell==2.4.3", "zizmor==1.29.0"]
 # Continuous performance testing (bench/test_benchmarks.py, run by CodSpeed).
 codspeed = [{ include-group = "test" }, "pytest-codspeed==5.0.3"]

@@ -94,7 +94,7 @@ jobs:
             --require-hashes --requirement /tmp/smoke-requirements.txt
           /tmp/smoke/bin/python -c "import yamlrocks; assert yamlrocks.loads(b'x: 1') == {'x': 1}; print('smoke OK', yamlrocks.dumps({'a': [1, 2]}))"
       - name: 📝 Generate CycloneDX SBOM
-        uses: anchore/sbom-action@aa80c8c5bd439a416a62804f2151ab38c671a638 # v0.24.1
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           path: dist
           format: cyclonedx-json

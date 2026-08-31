@@ -39,7 +39,7 @@ jobs:
     name: Wheels
     permissions:
       contents: read
-    uses: ./.github/workflows/build-wheels.yaml
+    uses: ./.github/workflows/build-wheels.yaml # zizmor: ignore[self-repository] actionlint does not support the $/ self-repository syntax yet
     with:
       full: ${{ github.event_name != 'pull_request' }}
 

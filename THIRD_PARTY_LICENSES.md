@@ -705,7 +705,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [smallvec 1.15.2](https://crates.io/crates/smallvec)
+- [smallvec 1.16.0](https://crates.io/crates/smallvec)
 
 ```
 Copyright (c) 2018 The Servo Project Developers

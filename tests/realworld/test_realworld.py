@@ -191,6 +191,10 @@ KNOWN_INVALID: dict[str, str] = {
     "serverless/serverless-patterns/documentdb-lambda-java-sam/DocumentDBAndMongoClientEC2.yaml": (
         "a Go/`{{ }}`-templated file, not standalone YAML (PyYAML rejects it too)"
     ),
+    "serverless/serverless-patterns/documentdb-lambda-python-sam/DocumentDBAndMongoClientEC2.yaml": (
+        "multi-line single-quoted scalar continued at the block indent (QB6E spec "
+        "error); yamlrocks rejects, PyYAML is lenient"
+    ),
     "serverless/serverless-patterns/eventbridge-webhooks/2-github/template.yaml": (
         "an intentionally-invalid negative-test fixture (PyYAML rejects it too)"
     ),
@@ -211,6 +215,10 @@ KNOWN_INVALID: dict[str, str] = {
     ),
     "serverless/serverless-patterns/rabbitmq-private-lambda-java-sam/RabbitMQAndClientEC2.yaml": (
         "an intentionally-invalid negative-test fixture (PyYAML rejects it too)"
+    ),
+    "serverless/serverless-patterns/rabbitmq-private-lambda-python-sam/RabbitMQAndClientEC2.yaml": (
+        "multi-line single-quoted scalar continued at the block indent (QB6E spec "
+        "error); yamlrocks rejects, PyYAML is lenient"
     ),
     "serverless/serverless-patterns/rds-sns-event-notification/template.yaml": (
         "an intentionally-invalid negative-test fixture (PyYAML rejects it too)"
@@ -267,10 +275,6 @@ KNOWN_INVALID: dict[str, str] = {
     "argo-workflows/argo-rollouts/test/e2e/crds/istio.yaml": (
         "multi-line single-quoted scalar continued at the block indent (QB6E spec "
         "error); yamlrocks rejects, PyYAML is lenient"
-    ),
-    "opentelemetry/collector-contrib/.github/workflows/build-and-test.yml": (
-        "multi-line single-quoted flow scalar continued at the block indent (QB6E "
-        "spec error); yamlrocks rejects, PyYAML is lenient"
     ),
     # Mis-indented block structure that puts a block collection in mapping-key
     # position, or a bare key with no `:`. Invalid YAML the fast decoder and
@@ -329,6 +333,9 @@ _OTEL_TEMPLATE_FIXTURES: tuple[str, ...] = (
     "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/clusterrbac/telemetrygen/deployment.yaml",
     "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/clusterrbac/telemetrygen/job.yaml",
     "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/clusterrbac/telemetrygen/statefulset.yaml",
+    "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/bothschema/collector/configmap.yaml",
+    "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/bothschema/collector/deployment.yaml",
+    "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/bothschema/telemetrygen/deployment.yaml",
     "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/container_id_association_only/collector/configmap.yaml",
     "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/container_id_association_only/collector/deployment.yaml",
     "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/mixrbac/collector/configmap.yaml",
@@ -343,6 +350,9 @@ _OTEL_TEMPLATE_FIXTURES: tuple[str, ...] = (
     "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/sharedprocessor/collector/configmap.yaml",
     "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/sharedprocessor/collector/deployment.yaml",
     "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/sharedprocessor/telemetrygen/deployment.yaml",
+    "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/v0schema/collector/configmap.yaml",
+    "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/v0schema/collector/deployment.yaml",
+    "opentelemetry/collector-contrib/processor/k8sattributesprocessor/testdata/e2e/v0schema/telemetrygen/deployment.yaml",
     "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/akamai/collector/01-metadata-configmap.yaml",
     "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/akamai/collector/02-configmap.yaml",
     "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/akamai/collector/03-serviceaccount.yaml",
@@ -359,6 +369,12 @@ _OTEL_TEMPLATE_FIXTURES: tuple[str, ...] = (
     "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/azure/collector/02-configmap.yaml",
     "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/azure/collector/03-serviceaccount.yaml",
     "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/azure/collector/05-deployment.yaml",
+    "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/azureappservice/collector/configmap.yaml",
+    "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/azureappservice/collector/deployment.yaml",
+    "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/azureappservice/collector/serviceaccount.yaml",
+    "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/azurecontainerapps/collector/configmap.yaml",
+    "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/azurecontainerapps/collector/deployment.yaml",
+    "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/azurecontainerapps/collector/serviceaccount.yaml",
     "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/consul/collector/configmap.yaml",
     "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/consul/collector/deployment.yaml",
     "opentelemetry/collector-contrib/processor/resourcedetectionprocessor/testdata/e2e/consul/collector/serviceaccount.yaml",

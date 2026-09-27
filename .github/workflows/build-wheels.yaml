@@ -257,7 +257,7 @@ jobs:
         # time, so latest is fine for an arch smoke. (The old tests-arch.yaml did
         # the same.)
         if: matrix.target != 'x86'
-        uses: uraimo/run-on-arch-action@460cb8e6d9f726a588fc9b5e681c8a6cab09ae41 # v3.2.0
+        uses: uraimo/run-on-arch-action@fa1f3e7de95534497266c7265950b5188355fbfb # v3.2.1
         with:
           arch: ${{ matrix.target }}
           distro: ubuntu24.04
@@ -380,7 +380,7 @@ jobs:
         # deliberate: it gives a prebuilt musl pyyaml and avoids compiling it
         # under QEMU on armv7.
         if: matrix.target == 'aarch64' || matrix.target == 'armv7'
-        uses: uraimo/run-on-arch-action@460cb8e6d9f726a588fc9b5e681c8a6cab09ae41 # v3.2.0
+        uses: uraimo/run-on-arch-action@fa1f3e7de95534497266c7265950b5188355fbfb # v3.2.1
         with:
           arch: ${{ matrix.target }}
           distro: alpine_latest

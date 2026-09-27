@@ -312,3 +312,42 @@ mod tests {
         assert_eq!(buf, "\"héllo\"".as_bytes());
     }
 }
+
+/// Byte column at the current output position.
+pub(crate) fn current_column(buf: &[u8]) -> usize {
+    buf.iter()
+        .rposition(|&byte| byte == b'\n')
+        .map_or(buf.len(), |newline| buf.len() - newline - 1)
+}
+
+/// Fold an escaped quoted-scalar body at isolated spaces, preserving its value.
+pub(crate) fn push_folded(buf: &mut Vec<u8>, content: &str, cont_indent: usize, width: usize) {
+    let bytes = content.as_bytes();
+    let breakable = |i: usize| -> bool {
+        bytes[i] == b' '
+            && i > 0
+            && bytes[i - 1] != b' '
+            && bytes.get(i + 1).is_some_and(|&b| b != b' ')
+    };
+    let next_break = |from: usize| (from..bytes.len()).find(|&i| breakable(i));
+
+    let mut col = current_column(buf);
+    let mut pos = 0;
+    while let Some(brk) = next_break(pos) {
+        buf.extend_from_slice(&bytes[pos..brk]);
+        col += brk - pos;
+        // Look ahead to the next unbreakable piece to decide fold vs. space.
+        let after = brk + 1;
+        let piece_end = next_break(after).unwrap_or(bytes.len());
+        if col + 1 + (piece_end - after) > width {
+            buf.push(b'\n');
+            buf.resize(buf.len() + cont_indent, b' ');
+            col = cont_indent;
+        } else {
+            buf.push(b' ');
+            col += 1;
+        }
+        pos = after;
+    }
+    buf.extend_from_slice(&bytes[pos..]);
+}

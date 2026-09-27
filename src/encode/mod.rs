@@ -595,35 +595,7 @@ impl<'a> Emitter<'a> {
     /// width. Used only for quoted scalar bodies (a break inside quotes is safe);
     /// a plain scalar that needs wrapping is quoted first (see `emit_string_inline`).
     fn emit_folded(&mut self, content: &str, cont_indent: usize) {
-        let width = self.options.width;
-        let bytes = content.as_bytes();
-        let breakable = |i: usize| -> bool {
-            bytes[i] == b' '
-                && i > 0
-                && bytes[i - 1] != b' '
-                && bytes.get(i + 1).is_some_and(|&b| b != b' ')
-        };
-        let next_break = |from: usize| (from..bytes.len()).find(|&i| breakable(i));
-
-        let mut col = self.current_column();
-        let mut pos = 0;
-        while let Some(brk) = next_break(pos) {
-            self.buf.extend_from_slice(&bytes[pos..brk]);
-            col += brk - pos;
-            // Look ahead to the next unbreakable piece to decide fold vs. space.
-            let after = brk + 1;
-            let piece_end = next_break(after).unwrap_or(bytes.len());
-            if col + 1 + (piece_end - after) > width {
-                self.buf.push(b'\n');
-                self.write_indent(cont_indent);
-                col = cont_indent;
-            } else {
-                self.buf.push(b' ');
-                col += 1;
-            }
-            pos = after;
-        }
-        self.buf.extend_from_slice(&bytes[pos..]);
+        crate::emit_util::push_folded(&mut self.buf, content, cont_indent, self.options.width);
     }
 }
 
@@ -689,7 +661,7 @@ fn has_flow_indicator(value: &str) -> bool {
 /// Whether `value` contains a space flanked by non-spaces: the only place a fold
 /// may break, since breaking inside a run of spaces would drop one. Used to
 /// decide whether wrapping a long scalar can actually shorten any line.
-fn has_breakable_space(value: &str) -> bool {
+pub(crate) fn has_breakable_space(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.iter().enumerate().any(|(i, &b)| {
         b == b' ' && i > 0 && bytes[i - 1] != b' ' && bytes.get(i + 1).is_some_and(|&n| n != b' ')

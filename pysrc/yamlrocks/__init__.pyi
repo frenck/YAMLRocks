@@ -329,8 +329,21 @@ class YAMLRocksTag:
 _Style = Literal["auto", "plain", "single", "double", "literal", "folded"]
 
 class YAMLRocksScalar:
+    @property
+    def comment(self) -> str | None: ...
+    @property
+    def comment_before(self) -> str | None: ...
+    @property
+    def comment_after(self) -> str | None: ...
     def __init__(
-        self, value: str, *, tag: str | None = None, style: _Style = "auto"
+        self,
+        value: str,
+        *,
+        tag: str | None = None,
+        style: _Style = "auto",
+        comment: str | None = None,
+        comment_before: str | None = None,
+        comment_after: str | None = None,
     ) -> None: ...
     @property
     def value(self) -> str: ...
@@ -340,8 +353,21 @@ class YAMLRocksScalar:
     def style(self) -> _Style: ...
 
 class YAMLRocksSequence:
+    @property
+    def comment(self) -> str | None: ...
+    @property
+    def comment_before(self) -> str | None: ...
+    @property
+    def comment_after(self) -> str | None: ...
     def __init__(
-        self, items: Iterable[Any], *, tag: str | None = None, flow: bool | None = None
+        self,
+        items: Iterable[Any],
+        *,
+        tag: str | None = None,
+        flow: bool | None = None,
+        comment: str | None = None,
+        comment_before: str | None = None,
+        comment_after: str | None = None,
     ) -> None: ...
     @property
     def items(self) -> list[Any] | tuple[Any, ...]: ...
@@ -351,12 +377,21 @@ class YAMLRocksSequence:
     def flow(self) -> bool | None: ...
 
 class YAMLRocksMapping:
+    @property
+    def comment(self) -> str | None: ...
+    @property
+    def comment_before(self) -> str | None: ...
+    @property
+    def comment_after(self) -> str | None: ...
     def __init__(
         self,
         pairs: Iterable[tuple[Any, Any]],
         *,
         tag: str | None = None,
         flow: bool | None = None,
+        comment: str | None = None,
+        comment_before: str | None = None,
+        comment_after: str | None = None,
     ) -> None: ...
     @property
     def pairs(self) -> list[tuple[Any, Any]] | tuple[tuple[Any, Any], ...]: ...

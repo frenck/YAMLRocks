@@ -69,3 +69,20 @@ def test_multiple_outputs_do_not_consume_comments():
     assert yamlrocks.dumps(value, represent=represent) == yamlrocks.dumps(
         value, represent=represent
     )
+
+
+def test_flow_collection_comments():
+    """Comments inside flow containers are emitted on valid separate lines."""
+    value = yamlrocks.YAMLRocksScalar(
+        "text", comment="inline", comment_before="heading"
+    )
+    for descriptor, expected in (
+        (yamlrocks.YAMLRocksSequence([value, "other"], flow=True), ["text", "other"]),
+        (
+            yamlrocks.YAMLRocksMapping([("key", value), ("other", 1)], flow=True),
+            {"key": "text", "other": 1},
+        ),
+    ):
+        output = yamlrocks.dumps(descriptor, represent=represent)
+        assert b"# heading" in output and b"# inline" in output
+        assert yamlrocks.loads(output) == expected

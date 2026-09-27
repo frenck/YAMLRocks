@@ -433,15 +433,12 @@ pub fn loads_all(
 ) -> PyResult<Py<PyAny>> {
     let input = extract_input(data)?;
     let opts = option.unwrap_or(0);
-    // `loads_all` is a multi-document, value-returning API: it takes no
-    // `include_dir` and returns a list, so include/secret/env-var resolution and
-    // the single-document round-trip option cannot be honored. Reject them rather
-    // than silently ignoring them, which would hand back unresolved tags.
-    const UNSUPPORTED: u64 = OPT_INCLUDES | OPT_SECRETS | OPT_ENV_VAR | OPT_ROUND_TRIP;
+    // Includes and external config resolution still require `loads()`.
+    const UNSUPPORTED: u64 = OPT_INCLUDES | OPT_SECRETS | OPT_ENV_VAR;
     if opts & UNSUPPORTED != 0 {
         return Err(PyValueError::new_err(
-            "loads_all() does not support OPT_INCLUDES, OPT_SECRETS, OPT_ENV_VAR, or \
-             OPT_ROUND_TRIP; use loads() for include resolution and round-trip editing",
+            "loads_all() does not support OPT_INCLUDES, OPT_SECRETS, or OPT_ENV_VAR; \
+             use loads() for include resolution",
         ));
     }
     let pyyaml_compat = opts & OPT_PYYAML_COMPAT != 0;
@@ -469,6 +466,54 @@ pub fn loads_all(
         handler,
         passthrough: opts & OPT_PASSTHROUGH_TAG != 0,
     };
+
+    if opts & OPT_ROUND_TRIP != 0 {
+        let documents = composer::compose_all_with_source(&input)
+            .map_err(|e| errors::parse_error(py, &e, None))?;
+        let list = PyList::empty(py);
+        for (node, source) in documents {
+            let document_schema = match crate::version::leading_yaml_version(&source) {
+                Some(version) => {
+                    Schema::new(crate::version::selects_yaml_11(version), pyyaml_compat)
+                }
+                None => Schema::new(
+                    opts & (OPT_YAML_1_1 | OPT_UPGRADE_1_1) != 0 || pyyaml_compat,
+                    pyyaml_compat,
+                ),
+            };
+            let mut nodes = vec![node];
+            if dup_error {
+                composer::check_duplicate_keys(&nodes, document_schema)
+                    .map_err(|e| errors::duplicate_key_error(py, &e, None))?;
+            } else if dup_warn {
+                for warning in composer::collect_duplicate_keys(&nodes, document_schema) {
+                    errors::log_warning(py, &warning);
+                }
+            }
+            if opts & OPT_YAML_1_1_WARN != 0 && document_schema.is_yaml_11() {
+                for warning in composer::collect_yaml_11_divergences(&nodes, document_schema) {
+                    errors::log_warning(py, &warning);
+                }
+            }
+            let upgrade = opts & OPT_UPGRADE_1_1 != 0;
+            if upgrade {
+                crate::roundtrip::upgrade::upgrade_to_yaml_1_2(&mut nodes, document_schema);
+            }
+            let doc = YAMLRocksDocument::new(nodes)
+                .with_source(source)
+                .with_null_style(null_style_from_opts(opts)?)
+                .with_double_quotes(opts & OPT_SINGLE_QUOTES == 0)
+                .with_upgraded(upgrade)
+                .with_schema(if upgrade {
+                    Schema::Yaml12
+                } else {
+                    document_schema
+                })
+                .with_resolve_timestamps(resolve_timestamps);
+            list.append(Py::new(py, doc)?)?;
+        }
+        return Ok(list.into_any().unbind());
+    }
 
     // Annotated mode needs source spans, so each document routes through the
     // rich AST rather than the fast-path `Value` tree. Empty `---` documents are

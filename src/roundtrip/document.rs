@@ -381,6 +381,20 @@ impl YAMLRocksDocument {
         Ok(dict.into_any().unbind())
     }
 
+    /// Snapshot one document's values and metadata in a single tree traversal.
+    /// Empty input returns None; use `loads_all` for a multi-document stream.
+    fn to_tree(&self, py: Python<'_>) -> PyResult<Option<Py<super::tree::YAMLRocksTreeNode>>> {
+        if self.nodes.len() > 1 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "to_tree() requires one document; use loads_all(option=OPT_ROUND_TRIP)",
+            ));
+        }
+        self.nodes
+            .first()
+            .map(|node| super::tree::snapshot(py, node, self.schema, self.resolve_timestamps))
+            .transpose()
+    }
+
     /// Return the document as plain Python objects (a resolved snapshot).
     fn to_dict(&self, py: Python<'_>) -> Py<PyAny> {
         let anchors = build_anchor_map(&self.nodes);

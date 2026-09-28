@@ -13,12 +13,12 @@ Each node has `kind`, `value`, `style`, `tag`, `anchor`, `comment`,
 are attached to their actual AST node: a comment above a mapping entry belongs
 to its key node. They contain text without the `#` prefix.
 
-| kind | value |
-| --- | --- |
-| scalar | Python value resolved under the document's schema |
-| sequence | Tuple of child nodes |
-| mapping | Tuple of `(key_node, value_node)` pairs, in source order |
-| alias | Anchor name, as a string |
+| kind     | value                                                    |
+| -------- | -------------------------------------------------------- |
+| scalar   | Python value resolved under the document's schema        |
+| sequence | Tuple of child nodes                                     |
+| mapping  | Tuple of `(key_node, value_node)` pairs, in source order |
+| alias    | Anchor name, as a string                                 |
 
 Aliases and merge keys remain explicit, so callers can choose expansion.
 Quoted `"<<"` keys have `is_merge_key=False`; syntax recognition and scalar

@@ -44,6 +44,23 @@ pub fn compose_all(input: &str) -> Result<Vec<YamlNode>, ScanError> {
     Ok(nodes)
 }
 
+/// Compose every document together with its verbatim source slice. Boundaries
+/// come from the parser's document/directive events, never from scanning lines.
+pub fn compose_all_with_source(input: &str) -> Result<Vec<(YamlNode, String)>, ScanError> {
+    let mut parser = Parser::new(input);
+    let (events, comments) = parser.parse_all_with_comments()?;
+    let mut composer = Composer::new(input);
+    let mut nodes = composer.compose_stream(&events, true)?;
+    attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
+    mark_leading_bom(&mut nodes, parser.had_bom());
+    composer.document_starts.push(input.len());
+    Ok(nodes
+        .into_iter()
+        .zip(composer.document_starts.windows(2))
+        .map(|(node, range)| (node, input[range[0]..range[1]].to_owned()))
+        .collect())
+}
+
 /// Compose with an explicit `file_id` stamped on every span, for include
 /// resolution and source-file tracking.
 pub fn compose_with_file_id(input: &str, file_id: u32) -> Result<Vec<YamlNode>, ScanError> {
@@ -695,6 +712,7 @@ struct Composer<'input> {
     /// position exists only while composing, and kept to the rare shape so an
     /// ordinary document allocates nothing.
     dash_positions: HashSet<(u32, u32)>,
+    document_starts: Vec<usize>,
 }
 
 impl<'input> Composer<'input> {
@@ -709,6 +727,7 @@ impl<'input> Composer<'input> {
             depth: 0,
             anchors_seen: HashSet::new(),
             dash_positions: HashSet::new(),
+            document_starts: Vec::new(),
         }
     }
 
@@ -751,6 +770,7 @@ impl<'input> Composer<'input> {
         // they introduce; collect them until that document's node exists, then
         // hand them over so re-emission can replay them.
         let mut pending_directives: Vec<String> = Vec::new();
+        let mut directive_start = None;
 
         while self.pos < events.len() {
             match &events[self.pos].kind {
@@ -759,6 +779,7 @@ impl<'input> Composer<'input> {
                 }
                 EventKind::DocumentStart => {
                     let marker_span = events[self.pos].span;
+                    let document_start = directive_start.take().unwrap_or(marker_span.offset);
                     self.pos += 1;
                     // Anchors are document-scoped: a `*alias` cannot reach an
                     // `&anchor` from an earlier document.
@@ -768,6 +789,11 @@ impl<'input> Composer<'input> {
                         // marker is preserved on re-emission.
                         node.explicit_start = true;
                         node.directives = std::mem::take(&mut pending_directives);
+                        self.document_starts.push(if documents.is_empty() {
+                            0
+                        } else {
+                            document_start
+                        });
                         documents.push(node);
                     } else if keep_empty {
                         // A lone/trailing `---` with no body is still a document
@@ -775,6 +801,11 @@ impl<'input> Composer<'input> {
                         let mut node = YamlNode::new(YamlNodeKind::Null, marker_span);
                         node.explicit_start = true;
                         node.directives = std::mem::take(&mut pending_directives);
+                        self.document_starts.push(if documents.is_empty() {
+                            0
+                        } else {
+                            document_start
+                        });
                         documents.push(node);
                     } else {
                         // An empty document dropped here still consumed its own
@@ -789,11 +820,15 @@ impl<'input> Composer<'input> {
                     }
                 }
                 EventKind::Directive(text) => {
+                    directive_start.get_or_insert(events[self.pos].span.offset);
                     pending_directives.push(text.clone());
                     self.pos += 1;
                 }
                 _ => {
                     let start_pos = self.pos;
+                    let document_start = directive_start
+                        .take()
+                        .unwrap_or(events[self.pos].span.offset);
                     // A document with no leading `---` still starts fresh: its
                     // anchors must not leak from a previous document.
                     self.anchors_seen.clear();
@@ -806,6 +841,11 @@ impl<'input> Composer<'input> {
                         if !node.directives.is_empty() {
                             node.explicit_start = true;
                         }
+                        self.document_starts.push(if documents.is_empty() {
+                            0
+                        } else {
+                            document_start
+                        });
                         documents.push(node);
                     }
                     // Force progress past a bare terminator (e.g. a leading

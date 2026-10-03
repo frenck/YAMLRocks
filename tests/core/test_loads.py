@@ -395,14 +395,13 @@ def test_loads_all_annotated_keeps_trailing_empty_doc():
         yamlrocks.OPT_INCLUDES,
         yamlrocks.OPT_SECRETS,
         yamlrocks.OPT_ENV_VAR,
-        yamlrocks.OPT_ROUND_TRIP,
     ],
 )
 def test_loads_all_rejects_unsupported_options(option):
     """loads_all rejects options it cannot honor rather than silently ignoring.
 
     It has no include_dir parameter and returns a list, so include/secret/env-var
-    resolution and the single-document round-trip option are errors, not no-ops.
+    resolution are errors, not no-ops.
     """
     with pytest.raises(ValueError, match="loads_all"):
         yamlrocks.loads_all(b"a: 1\n", option=option)

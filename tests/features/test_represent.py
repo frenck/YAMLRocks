@@ -827,13 +827,12 @@ def test_deferred_root_tagged_collection_indents_under_tag():
     )
 
 
-def test_width_with_represent_raises():
-    """`width` line-wrapping is not implemented on the represent path."""
-    with pytest.raises(ValueError, match="width is not supported"):
-        yamlrocks.dumps({"k": "x" * 200}, width=80, represent=lambda _: None)
-
-
-# --- Regressions from the pre-merge audit rounds ---
+def test_width_with_represent():
+    """The represent path honors width without changing the decoded value."""
+    data = {"k": "some words that should wrap over several lines"}
+    output = yamlrocks.dumps(data, width=16, represent=lambda _: None)
+    assert len(output.splitlines()) > 1
+    assert yamlrocks.loads(output) == data
 
 
 def test_alias_as_mapping_key_reloads():

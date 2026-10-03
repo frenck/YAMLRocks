@@ -3,6 +3,7 @@ pub mod ast;
 pub mod composer;
 pub mod document;
 pub mod emit;
+pub mod tree;
 pub mod upgrade;
 pub(crate) mod value;
 

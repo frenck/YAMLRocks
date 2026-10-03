@@ -382,6 +382,7 @@ fn _yamlrocks(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // The exception hierarchy is defined in pure Python (yamlrocks.exceptions) and
     // raised from Rust via pyo3::import_exception!; it is not registered here.
     m.add_class::<roundtrip::document::YAMLRocksDocument>()?;
+    m.add_class::<roundtrip::tree::YAMLRocksTreeNode>()?;
     m.add_class::<roundtrip::document::YAMLRocksDocumentView>()?;
     m.add_class::<roundtrip::document::YAMLRocksNode>()?;
     m.add_class::<ffi::YAMLRocksTag>()?;

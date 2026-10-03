@@ -34,7 +34,7 @@ use crate::ffi::convert::{
 };
 use crate::ffi::YAMLRocksTag;
 use crate::resolver::{ScalarKind, Schema};
-use crate::roundtrip::ast::{NodeStyle, YamlNode, YamlNodeKind};
+use crate::roundtrip::ast::{HeadComment, NodeStyle, YamlNode, YamlNodeKind};
 use crate::roundtrip::value::assigned_string_style;
 use crate::scanner::{ScalarStyle, Span};
 
@@ -55,17 +55,33 @@ pub struct YAMLRocksScalar {
     tag: Option<String>,
     /// The chosen style, or `None` for `"auto"` (let the emitter decide).
     style: Option<ScalarStyle>,
+    #[pyo3(get)]
+    comment: Option<String>,
+    #[pyo3(get)]
+    comment_before: Option<String>,
+    #[pyo3(get)]
+    comment_after: Option<String>,
 }
 
 #[pymethods]
 impl YAMLRocksScalar {
     #[new]
-    #[pyo3(signature = (value, *, tag=None, style="auto"))]
-    fn new(value: String, tag: Option<String>, style: Option<&str>) -> PyResult<Self> {
+    #[pyo3(signature = (value, *, tag=None, style="auto", comment=None, comment_before=None, comment_after=None))]
+    fn new(
+        value: String,
+        tag: Option<String>,
+        style: Option<&str>,
+        comment: Option<String>,
+        comment_before: Option<String>,
+        comment_after: Option<String>,
+    ) -> PyResult<Self> {
         Ok(Self {
             value,
             tag,
             style: parse_style(style)?,
+            comment,
+            comment_before,
+            comment_after,
         })
     }
 
@@ -120,22 +136,34 @@ pub struct YAMLRocksSequence {
     items: Py<PyAny>,
     tag: Option<String>,
     flow: Option<bool>,
+    #[pyo3(get)]
+    comment: Option<String>,
+    #[pyo3(get)]
+    comment_before: Option<String>,
+    #[pyo3(get)]
+    comment_after: Option<String>,
 }
 
 #[pymethods]
 impl YAMLRocksSequence {
     #[new]
-    #[pyo3(signature = (items, *, tag=None, flow=None))]
+    #[pyo3(signature = (items, *, tag=None, flow=None, comment=None, comment_before=None, comment_after=None))]
     fn new(
         py: Python<'_>,
         items: Py<PyAny>,
         tag: Option<String>,
         flow: Option<bool>,
+        comment: Option<String>,
+        comment_before: Option<String>,
+        comment_after: Option<String>,
     ) -> PyResult<Self> {
         Ok(Self {
             items: snapshot_iterable(py, items)?,
             tag,
             flow,
+            comment,
+            comment_before,
+            comment_after,
         })
     }
 
@@ -169,22 +197,34 @@ pub struct YAMLRocksMapping {
     pairs: Py<PyAny>,
     tag: Option<String>,
     flow: Option<bool>,
+    #[pyo3(get)]
+    comment: Option<String>,
+    #[pyo3(get)]
+    comment_before: Option<String>,
+    #[pyo3(get)]
+    comment_after: Option<String>,
 }
 
 #[pymethods]
 impl YAMLRocksMapping {
     #[new]
-    #[pyo3(signature = (pairs, *, tag=None, flow=None))]
+    #[pyo3(signature = (pairs, *, tag=None, flow=None, comment=None, comment_before=None, comment_after=None))]
     fn new(
         py: Python<'_>,
         pairs: Py<PyAny>,
         tag: Option<String>,
         flow: Option<bool>,
+        comment: Option<String>,
+        comment_before: Option<String>,
+        comment_after: Option<String>,
     ) -> PyResult<Self> {
         Ok(Self {
             pairs: snapshot_iterable(py, pairs)?,
             tag,
             flow,
+            comment,
+            comment_before,
+            comment_after,
         })
     }
 
@@ -209,6 +249,23 @@ impl YAMLRocksMapping {
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.pairs)
     }
+}
+
+/// Attach descriptor comments to the existing emitter's node representation.
+fn with_comments(
+    mut node: YamlNode,
+    before: Option<&str>,
+    inline: Option<&str>,
+    after: Option<&str>,
+) -> YamlNode {
+    if let Some(text) = before {
+        node.comments.head = text.lines().map(HeadComment::above).collect();
+    }
+    node.comments.inline = inline.map(str::to_owned);
+    if let Some(text) = after {
+        node.comments.foot = text.lines().map(str::to_owned).collect();
+    }
+    node
 }
 
 /// Map a style name to a [`ScalarStyle`], or `None` for `"auto"` (and the
@@ -585,14 +642,20 @@ impl Lower<'_, '_, '_> {
     ) -> PyResult<YamlNode> {
         if let Ok(scalar) = described.cast::<YAMLRocksScalar>() {
             let scalar = scalar.borrow();
-            return scalar_node(
+            let node = scalar_node(
                 scalar.value.clone(),
                 scalar.style,
                 scalar.tag.clone(),
                 self.double_quotes,
                 self.schema,
                 in_flow || in_key,
-            );
+            )?;
+            return Ok(with_comments(
+                node,
+                scalar.comment_before.as_deref(),
+                scalar.comment.as_deref(),
+                scalar.comment_after.as_deref(),
+            ));
         }
         if let Ok(seq) = described.cast::<YAMLRocksSequence>() {
             let seq = seq.borrow();
@@ -601,7 +664,14 @@ impl Lower<'_, '_, '_> {
                 .bind(self.py)
                 .try_iter()?
                 .collect::<PyResult<_>>()?;
-            return self.sequence_node(items, depth, seq.tag.clone(), seq.flow, in_flow, in_key);
+            let node =
+                self.sequence_node(items, depth, seq.tag.clone(), seq.flow, in_flow, in_key)?;
+            return Ok(with_comments(
+                node,
+                seq.comment_before.as_deref(),
+                seq.comment.as_deref(),
+                seq.comment_after.as_deref(),
+            ));
         }
         if let Ok(map) = described.cast::<YAMLRocksMapping>() {
             let map = map.borrow();
@@ -623,7 +693,14 @@ impl Lower<'_, '_, '_> {
                 }
                 entries.push((pair.get_item(0)?, pair.get_item(1)?));
             }
-            return self.mapping_node(entries, depth, map.tag.clone(), map.flow, in_flow, in_key);
+            let node =
+                self.mapping_node(entries, depth, map.tag.clone(), map.flow, in_flow, in_key)?;
+            return Ok(with_comments(
+                node,
+                map.comment_before.as_deref(),
+                map.comment.as_deref(),
+                map.comment_after.as_deref(),
+            ));
         }
         Err(pyo3::exceptions::PyTypeError::new_err(
             "a represent callback must return a yamlrocks.YAMLRocksScalar, \
@@ -656,7 +733,7 @@ impl Lower<'_, '_, '_> {
             // iteratively before returning: their derived recursive `Drop` would
             // otherwise overflow the native stack when an earlier value was deeply
             // nested. Mirrors the success-path teardown in `dumps`.
-            let key_node = match self.lower(key, depth + 1, flow, true) {
+            let mut key_node = match self.lower(key, depth + 1, flow, true) {
                 Ok(node) => node,
                 Err(err) => {
                     drop_node_pairs(pairs);
@@ -664,7 +741,12 @@ impl Lower<'_, '_, '_> {
                 }
             };
             match self.lower(val, depth + 1, flow, false) {
-                Ok(val_node) => pairs.push((key_node, val_node)),
+                Ok(mut val_node) => {
+                    // A value's leading comment belongs above its mapping key,
+                    // just as it does through the live node comment API.
+                    key_node.comments.head.append(&mut val_node.comments.head);
+                    pairs.push((key_node, val_node));
+                }
                 Err(err) => {
                     crate::stack::drop_node_tree(key_node);
                     drop_node_pairs(pairs);

@@ -85,7 +85,7 @@ jobs:
       - name: 🧪 Test the built wheel
         shell: bash
         run: bash .github/scripts/test_wheel.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-linux-x86_64-cp${{ matrix.python }}
           path: dist
@@ -139,7 +139,7 @@ jobs:
       - name: 🧪 Test the built wheel
         shell: bash
         run: bash .github/scripts/test_wheel.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-windows-${{ matrix.platform.target }}-cp${{ matrix.python }}
           path: dist
@@ -191,7 +191,7 @@ jobs:
       - name: 🧪 Test the built wheel
         shell: bash
         run: bash .github/scripts/test_wheel.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-macos-${{ matrix.platform.target }}-cp${{ matrix.python }}
           path: dist
@@ -292,7 +292,7 @@ jobs:
               pip install --quiet --no-deps dist/*cp314-cp314-*.whl
               pytest -q
             '
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
@@ -392,7 +392,7 @@ jobs:
             pip install --break-system-packages --quiet \
               --no-index --no-deps --find-links dist yamlrocks
             pytest -q
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-musllinux-${{ matrix.target }}
           path: dist
@@ -418,7 +418,7 @@ jobs:
         with:
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-sdist
           path: dist

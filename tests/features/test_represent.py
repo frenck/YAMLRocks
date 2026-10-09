@@ -168,7 +168,9 @@ def test_deferred_non_first_tagged_key_uses_explicit_form():
 
 def test_deeply_nested_represent_tree_tears_down_without_overflow():
     """A deeply nested synthetic tree emits and is dismantled iteratively."""
-    doc = _deep_dict(500)
+    # Match the error-path teardown tests below: depth 500 can hit the native
+    # stack guard on Windows before reaching the teardown this test exercises.
+    doc = _deep_dict(300)
     out = yamlrocks.dumps(doc, represent=lambda _: None)
     assert yamlrocks.loads(out) is not None
 

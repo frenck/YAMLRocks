@@ -635,15 +635,6 @@ pub fn dumps(
     // speaks per-node style/tag/flow; the fast `Value` emitter does not. See
     // ADR-021.
     if let Some(represent) = represent {
-        // Width-based line folding is not implemented on the represent path (the
-        // round-trip emitter does not wrap). Rather than silently ignore a
-        // requested `width` and diverge from a plain `dumps`, reject the
-        // combination explicitly.
-        if width.unwrap_or(0) > 0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "width is not supported together with represent yet",
-            ));
-        }
         let double_quotes = opts & OPT_SINGLE_QUOTES == 0;
         let schema = Schema::new(opts & OPT_YAML_1_1 != 0, opts & OPT_PYYAML_COMPAT != 0);
         let null_style = null_style_from_opts(opts)?;
@@ -668,6 +659,7 @@ pub fn dumps(
             indent: if opts & OPT_INDENT_4 != 0 { 4 } else { 2 },
             indentless: opts & OPT_INDENTLESS_SEQUENCES != 0,
             single_quotes: opts & OPT_SINGLE_QUOTES != 0,
+            width: width.unwrap_or(0),
         };
         let bytes = py.detach(|| {
             let bytes = crate::roundtrip::emit::emit_roundtrip_dump(&node, null_style, dump);

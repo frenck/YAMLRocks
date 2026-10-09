@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from typing import Any
 
 from yamlrocks._yamlrocks import (
@@ -424,7 +424,7 @@ def _read_source(source: Any) -> tuple[bytes | str, str | None]:
 
 
 @contextlib.contextmanager
-def _origin(path: str | None) -> Iterator[None]:
+def _origin(path: str | None) -> Generator[None, None, None]:
     """Tag any raised ``YAMLRocksError`` with the source file when it has none.
 
     The Rust core only sees bytes, so it cannot know the path a file was read

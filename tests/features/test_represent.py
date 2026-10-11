@@ -13,6 +13,7 @@ import dataclasses
 import datetime
 import decimal
 import enum
+import sysconfig
 
 import pytest
 
@@ -29,6 +30,14 @@ def _deep_dict(depth: int) -> dict:
         cursor = child
     cursor["k"] = "leaf"
     return doc
+
+
+# The represent lowering re-enters Python at every level. CPython on musl budgets
+# a fixed C stack of about 1 MB instead of asking the OS, so the lowering tops out
+# near 275 levels there (a clean depth error past that), versus the 1000-level cap
+# elsewhere. Deep-nesting tests stay under that ceiling on musl.
+_ON_MUSL = "musl" in (sysconfig.get_config_var("HOST_GNU_TYPE") or "")
+_DEEP_REPRESENT = 250 if _ON_MUSL else 500
 
 
 def test_scalar_with_custom_tag_forces_single_quotes():
@@ -168,7 +177,7 @@ def test_deferred_non_first_tagged_key_uses_explicit_form():
 
 def test_deeply_nested_represent_tree_tears_down_without_overflow():
     """A deeply nested synthetic tree emits and is dismantled iteratively."""
-    doc = _deep_dict(500)
+    doc = _deep_dict(_DEEP_REPRESENT)
     out = yamlrocks.dumps(doc, represent=lambda _: None)
     assert yamlrocks.loads(out) is not None
 
@@ -186,6 +195,19 @@ def test_represent_deep_nesting_raises_cleanly():
         cursor = child
     with pytest.raises(yamlrocks.YAMLRocksEncodeError, match="too deeply nested"):
         yamlrocks.dumps(deep, represent=lambda _: None)
+
+
+def test_represent_recursion_error_becomes_depth_error():
+    """A ``RecursionError`` escaping the lowering is raised as the depth error, chained to the original."""
+
+    def represent(_value):
+        raise RecursionError("C stack budget exhausted")
+
+    with pytest.raises(
+        yamlrocks.YAMLRocksUnserializableError, match="too deeply nested"
+    ) as caught:
+        yamlrocks.dumps({"a": 1}, represent=represent)
+    assert isinstance(caught.value.__cause__, RecursionError)
 
 
 def test_mapping_error_after_deep_value_tears_down_iteratively():
@@ -249,7 +271,7 @@ def test_default_self_reference_after_deep_subtree_raises_cleanly():
     box = Box()
 
     def default(obj):
-        return {"deep": _deep_dict(300), "self": obj}
+        return {"deep": _deep_dict(_DEEP_REPRESENT // 2), "self": obj}
 
     with pytest.raises(ValueError, match="refers only to itself"):
         yamlrocks.dumps(box, default=default, represent=lambda _: None)

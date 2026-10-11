@@ -329,6 +329,7 @@ dependencies = [
  "ahash",
  "dunce",
  "itoa",
+ "libc",
  "memchr",
  "pyo3",
  "regex",

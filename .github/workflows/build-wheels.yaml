@@ -203,11 +203,20 @@ jobs:
   linux-cross:
     name: Linux ${{ matrix.target }} (emulated)
     if: inputs.full
-    runs-on: ubuntu-26.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target: [x86, aarch64, armv7, ppc64le]
+        target: [aarch64, armv7, ppc64le]
+        runner: [ubuntu-26.04]
+        include:
+          # i686 builds in the CentOS 7 based manylinux2014 image, where
+          # maturin-action installs libatomic with yum. Since the move to
+          # ubuntu-26.04 runners, that container cannot resolve vault.centos.org
+          # (the other images resolve fine), so this leg stays on the last runner
+          # where it worked until manylinux2014 is dropped.
+          - target: x86
+            runner: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

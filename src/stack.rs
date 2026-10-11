@@ -51,7 +51,80 @@ pub(crate) fn guard<R>(f: impl FnOnce() -> R) -> R {
 /// status quo, and every tier-one platform reports bounds.
 #[inline]
 pub(crate) fn python_call_headroom() -> bool {
-    stacker::remaining_stack().map_or(true, |remaining| remaining > RED_ZONE)
+    remaining_stack().map_or(true, |remaining| remaining > RED_ZONE)
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "musl")))]
+#[inline]
+fn remaining_stack() -> Option<usize> {
+    stacker::remaining_stack()
+}
+
+/// The remaining native stack, correcting for musl's main thread.
+///
+/// musl's `pthread_getattr_np` reports the main thread's stack as only the pages
+/// touched so far, not the `RLIMIT_STACK` the kernel lets it grow to, and
+/// `stacker` caches that bound on first use. A later, deeper call then sees
+/// almost no headroom and the `represent` lowering refuses even a shallow
+/// document. The main thread therefore measures against the real rlimit bound;
+/// every other thread (and a grown segment) keeps `stacker`'s answer, which musl
+/// reports correctly there.
+#[cfg(all(target_os = "linux", target_env = "musl"))]
+#[inline]
+fn remaining_stack() -> Option<usize> {
+    thread_local! {
+        static MAIN_THREAD_STACK: Option<(usize, usize)> = musl_main_thread_stack();
+    }
+
+    let marker = 0u8;
+    let stack_pointer = std::ptr::addr_of!(marker) as usize;
+    let on_main_stack = MAIN_THREAD_STACK
+        .with(|bounds| bounds.filter(|&(limit, top)| (limit..top).contains(&stack_pointer)));
+    match on_main_stack {
+        Some((limit, _)) => Some(stack_pointer - limit),
+        None => stacker::remaining_stack(),
+    }
+}
+
+/// The main thread's `(limit, top)` stack range, or `None` on any other thread.
+/// The top comes from `pthread_getattr_np` (accurate even where the size is
+/// not); the limit is the top minus `RLIMIT_STACK`, falling back to Linux's 8 MB
+/// default when the rlimit is unlimited.
+#[cfg(all(target_os = "linux", target_env = "musl"))]
+fn musl_main_thread_stack() -> Option<(usize, usize)> {
+    const DEFAULT_MAIN_STACK: usize = 8 * 1024 * 1024;
+
+    // SAFETY: plain libc queries on the calling thread, each checked for failure;
+    // `attr` is initialized by `pthread_getattr_np` before it is read and
+    // destroyed exactly once afterwards.
+    unsafe {
+        if libc::getpid() as libc::c_long != libc::syscall(libc::SYS_gettid) {
+            return None;
+        }
+
+        let mut attr: libc::pthread_attr_t = std::mem::zeroed();
+        if libc::pthread_getattr_np(libc::pthread_self(), &mut attr) != 0 {
+            return None;
+        }
+        let mut bottom: *mut libc::c_void = std::ptr::null_mut();
+        let mut size: libc::size_t = 0;
+        let queried = libc::pthread_attr_getstack(&attr, &mut bottom, &mut size);
+        libc::pthread_attr_destroy(&mut attr);
+        if queried != 0 {
+            return None;
+        }
+        let top = bottom as usize + size;
+
+        let mut rlimit: libc::rlimit = std::mem::zeroed();
+        let reserved = if libc::getrlimit(libc::RLIMIT_STACK, &mut rlimit) == 0
+            && rlimit.rlim_cur != libc::RLIM_INFINITY
+        {
+            rlimit.rlim_cur as usize
+        } else {
+            DEFAULT_MAIN_STACK
+        };
+        Some((top.saturating_sub(reserved), top))
+    }
 }
 
 use crate::decode::Value;

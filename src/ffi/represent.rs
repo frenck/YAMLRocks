@@ -21,6 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use pyo3::exceptions::PyRecursionError;
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::{
@@ -258,7 +259,9 @@ pub fn represent_to_node(
         delegated: false,
         retained: Vec::new(),
     };
-    let mut root = ctx.lower(obj, 0, false, false)?;
+    let mut root = ctx
+        .lower(obj, 0, false, false)
+        .map_err(|err| translate_recursion_error(py, err))?;
     // Turn the raw `id()` markers left on shared nodes into real anchor names,
     // dropping them from nodes that were never aliased.
     name_anchors(&mut root, &ctx.aliased, &mut HashMap::new(), &mut 0);
@@ -1136,6 +1139,25 @@ fn too_deep_error() -> PyErr {
     crate::ffi::errors::unserializable_error(
         "object is too deeply nested to serialize (possible self-reference)".to_string(),
     )
+}
+
+/// Turn a `RecursionError` that escaped the lowering into [`too_deep_error`],
+/// keeping the original as its cause; any other error passes through.
+///
+/// CPython can run out of stack before [`crate::stack::python_call_headroom`]
+/// does: on musl it budgets a fixed C stack (about 1 MB) instead of asking the
+/// OS, and raises a clean `RecursionError` at its own limit. This runs once the
+/// lowering has fully unwound, because building the replacement exception calls
+/// into Python, which at the depth the error was raised would just hit the
+/// limit again.
+fn translate_recursion_error(py: Python<'_>, err: PyErr) -> PyErr {
+    if !err.is_instance_of::<PyRecursionError>(py) {
+        return err;
+    }
+
+    let translated = too_deep_error();
+    translated.set_cause(py, Some(err));
+    translated
 }
 
 /// Block or flow layout for a collection node.

@@ -340,6 +340,13 @@ impl YAMLRocksDocument {
         }
     }
 
+    /// Whether the first document used an explicit `---` start marker.
+    /// Read directly from the parsed tree, including before any edits.
+    #[getter]
+    fn explicit_start(&self) -> bool {
+        self.nodes.first().is_some_and(|node| node.explicit_start)
+    }
+
     /// The root [`YAMLRocksNode`] cursor: a metadata-bearing handle from which any node
     /// in the tree can be reached by indexing (`doc.node["server"]["port"]`).
     /// Unlike item access, indexing a `YAMLRocksNode` always yields another `YAMLRocksNode`, so

@@ -47,3 +47,14 @@ def test_each_document_uses_its_schema():
         b"%YAML 1.1\n---\na: yes\n...\n---\na: yes\n", option=yamlrocks.OPT_ROUND_TRIP
     )
     assert [doc.to_dict() for doc in docs] == [{"a": True}, {"a": "yes"}]
+
+
+def test_editing_a_later_document_keeps_its_formatting():
+    """An edit to a document after the first re-emits that document with its comments intact."""
+    docs = yamlrocks.loads_all(
+        b"# first\na: 1  # one\n---\n# second\nb: 2  # two\nc: [3, 4]\n",
+        option=yamlrocks.OPT_ROUND_TRIP,
+    )
+    docs[1]["b"] = 20
+    assert docs[1].to_yaml() == b"---\n# second\nb: 20  # two\nc: [3, 4]\n"
+    assert docs[0].to_yaml() == b"# first\na: 1  # one\n"

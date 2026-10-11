@@ -109,6 +109,23 @@ yamlrocks.loads_all(source)
 # [{'a': 1}, {'b': 2}]
 ```
 
+With `OPT_ROUND_TRIP`, every entry is an independent
+[`YAMLRocksDocument`](#yamlrocksdocument). Each one keeps its own comments,
+anchors, and `%YAML` version, and editing one leaves the others alone. An
+explicit empty document (a bare `---`) is kept as a null document. Joining the
+`to_yaml()` output of the unedited documents reproduces the original stream.
+
+```python
+import yamlrocks
+
+docs = yamlrocks.loads_all(
+    b"name: app\n---\nport: 8080  # default\n", option=yamlrocks.OPT_ROUND_TRIP
+)
+docs[1]["port"] = 9090
+docs[1].to_yaml()
+# b'---\nport: 9090  # default\n'
+```
+
 ### `load`
 
 ```python

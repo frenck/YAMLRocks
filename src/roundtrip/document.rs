@@ -340,6 +340,13 @@ impl YAMLRocksDocument {
         }
     }
 
+    /// Whether the first document used an explicit `---` start marker.
+    /// Read directly from the parsed tree, including before any edits.
+    #[getter]
+    fn explicit_start(&self) -> bool {
+        self.nodes.first().is_some_and(|node| node.explicit_start)
+    }
+
     /// The root [`YAMLRocksNode`] cursor: a metadata-bearing handle from which any node
     /// in the tree can be reached by indexing (`doc.node["server"]["port"]`).
     /// Unlike item access, indexing a `YAMLRocksNode` always yields another `YAMLRocksNode`, so
@@ -974,6 +981,7 @@ impl YAMLRocksNode {
     /// the `key:`/`-` when the value is a block written on the lines below.
     #[setter]
     fn set_comment(&self, py: Python<'_>, text: Option<String>) -> PyResult<()> {
+        let text = inline_comment_text(text)?;
         let mut doc = self.root.borrow_mut(py);
         let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
         node.comments.inline = text;
@@ -1035,7 +1043,7 @@ impl YAMLRocksNode {
                 .cloned()
                 .collect(),
         };
-        let written = split_comment_lines(text)
+        let written = split_comment_lines(text)?
             .into_iter()
             .map(|text| HeadComment {
                 text: text.into_boxed_str(),
@@ -1084,7 +1092,7 @@ impl YAMLRocksNode {
                  sequence, or the document root",
             ));
         }
-        node.comments.foot = split_comment_lines(text);
+        node.comments.foot = split_comment_lines(text)?;
         node.mark_modified();
         Ok(())
     }
@@ -1388,12 +1396,47 @@ fn join_comment_lines(lines: &[String]) -> Option<String> {
     }
 }
 
-/// Split a user-supplied comment string into stored lines (one per line).
-fn split_comment_lines(text: Option<String>) -> Vec<String> {
-    match text {
-        None => Vec::new(),
-        Some(s) => s.split('\n').map(|line| line.to_owned()).collect(),
+/// The line breaks only a YAML 1.1 reader honors (NEL, LS, PS). This library
+/// does not break lines on them, but PyYAML does, so one inside a comment would
+/// end it there and turn the rest of the text into document content.
+const YAML_11_LINE_BREAKS: [char; 3] = ['\u{85}', '\u{2028}', '\u{2029}'];
+
+/// Validate a user-supplied inline comment. It must stay on one line: a line
+/// break would end the comment and emit the rest as document content (`k: v #
+/// a\nnot: comment` adds a `not` key), so any break is a `ValueError`.
+pub(crate) fn inline_comment_text(text: Option<String>) -> PyResult<Option<String>> {
+    let has_break = text
+        .as_deref()
+        .is_some_and(|text| text.contains(['\n', '\r']) || text.contains(YAML_11_LINE_BREAKS));
+    if has_break {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "an inline comment cannot contain a line break; use comment_before or \
+             comment_after for a multi-line comment",
+        ));
     }
+    Ok(text)
+}
+
+/// Split a user-supplied comment string into stored lines, one per line. Every
+/// YAML line break separates lines (`\r\n`, a lone `\r`, and `\n`), so none can
+/// survive inside a line and turn the rest of it into document content. The
+/// YAML 1.1-only breaks are rejected rather than guessed at.
+pub(crate) fn split_comment_lines(text: Option<String>) -> PyResult<Vec<String>> {
+    let Some(text) = text else {
+        return Ok(Vec::new());
+    };
+
+    if text.contains(YAML_11_LINE_BREAKS) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "a comment cannot contain NEL, LS, or PS line breaks; use \\n to \
+             separate comment lines",
+        ));
+    }
+    Ok(text
+        .replace("\r\n", "\n")
+        .split(['\n', '\r'])
+        .map(str::to_owned)
+        .collect())
 }
 
 /// Whether the emitter renders a node's foot comment in place: only after a

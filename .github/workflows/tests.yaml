@@ -8,10 +8,12 @@ name: Tests
 # (no-GIL) is covered by the build matrix, which builds and tests the real
 # cp313t/cp314t wheels and asserts the GIL is disabled.
 #
-# On pull requests only the fast native targets build and test. On pushes to
-# main, the weekly schedule, and manual runs, the full matrix runs too (the
-# QEMU-emulated Linux arches and musllinux). The release runs the same full
-# matrix via release.yaml before publishing.
+# Pushes to main, the weekly schedule, and manual runs build and test the full
+# matrix (the native targets plus the QEMU-emulated Linux arches and
+# musllinux). A pull request runs the full matrix only when it touches what the
+# wheels are built or tested from (see the `changes` job); otherwise only the
+# fast native targets run. The release runs the same full matrix via
+# release.yaml before publishing.
 
 # yamllint disable-line rule:truthy
 on:
@@ -31,17 +33,69 @@ permissions:
   contents: read
 
 jobs:
+  # Decide whether the wheels get the full matrix. Anything but a pull request
+  # always does. A pull request does when it touches the Rust crate, the Python
+  # package and its build configuration, the tests, or the wheel workflows: the
+  # musl and emulated legs once stayed red on main for months because pull
+  # requests never ran them. Other pull requests (docs, the real-world corpus,
+  # unrelated workflows) keep the fast native-only run.
+  changes:
+    name: Decide the wheel matrix
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read # List the files the pull request changes
+    outputs:
+      full: ${{ steps.decide.outputs.full }}
+    steps:
+      - name: 🔍 Check what the pull request touches
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            echo "full=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # A rename lists its destination as `filename` and its source as
+          # `previous_filename`; both count, so moving a file out of a relevant
+          # path still triggers the full matrix.
+          files=$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)')
+
+          # pyproject.toml carries the maturin build configuration, and
+          # test-requirements.txt is installed only by the i686 and musl legs.
+          # The real-world corpus and its tests live under tests/ but do not run
+          # in the wheel matrix (it does not check out the corpus submodules), so
+          # the monthly corpus bumps stay native-only.
+          relevant=$(printf '%s\n' "${files}" \
+            | grep -vE '^tests/(data/)?realworld/' \
+            | grep -E '^(src/|pysrc/|tests/|Cargo\.(toml|lock)$|pyproject\.toml$|\.github/scripts/test-requirements\.txt$|\.github/workflows/(tests|build-wheels)\.yaml$)' \
+            | sort -u \
+            || true)
+
+          if [ -n "${relevant}" ]; then
+            echo "Full matrix, this pull request touches:"
+            printf '%s\n' "${relevant}"
+            echo "full=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "Native targets only, nothing here affects the built wheels."
+            echo "full=false" >> "${GITHUB_OUTPUT}"
+          fi
+
   # Build every wheel and run the suite against it. `full` adds the emulated/
-  # cross matrix on everything except pull requests, where only native runs for
-  # fast feedback. Pushes to main, the schedule, and manual runs are all "not a
-  # pull request", so they get the full matrix.
+  # cross matrix and musllinux, as decided above.
   wheels:
     name: Wheels
+    needs: changes
     permissions:
       contents: read
     uses: ./.github/workflows/build-wheels.yaml # zizmor: ignore[self-repository] actionlint does not support the $/ self-repository syntax yet
     with:
-      full: ${{ github.event_name != 'pull_request' }}
+      full: ${{ needs.changes.outputs.full == 'true' }}
 
   realworld:
     name: Real-world configs (multi-ecosystem)
@@ -53,7 +107,7 @@ jobs:
           persist-credentials: false
           submodules: true
       - name: 🏗 Set up uv and Python
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           python-version: "3.13"

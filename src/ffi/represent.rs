@@ -701,6 +701,12 @@ impl Lower<'_, '_, '_> {
 
     /// Turn a `represent` return value (a `Scalar`/`Sequence`/`Mapping`) into a
     /// node.
+    ///
+    /// Kept out of line on purpose: inlined into the recursive `render`, its
+    /// locals would be reserved in every recursion frame, including the deferred
+    /// path that never calls it, and the supported nesting depth on a small
+    /// (1 MB) stack drops by about 6%.
+    #[inline(never)]
     fn descriptor_to_node(
         &mut self,
         described: &Bound<'_, PyAny>,

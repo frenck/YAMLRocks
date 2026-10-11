@@ -113,7 +113,10 @@ With `OPT_ROUND_TRIP`, every entry is an independent
 [`YAMLRocksDocument`](#yamlrocksdocument). Each one keeps its own comments,
 anchors, and `%YAML` version, and editing one leaves the others alone. An
 explicit empty document (a bare `---`) is kept as a null document. Joining the
-`to_yaml()` output of the unedited documents reproduces the original stream.
+`to_yaml()` output of the unedited documents reproduces the original stream. A
+stream with no documents at all (only comments) returns an empty list, as it
+does without `OPT_ROUND_TRIP`, so those comments are not kept; `loads` with
+`OPT_ROUND_TRIP` keeps them.
 
 ```python
 import yamlrocks

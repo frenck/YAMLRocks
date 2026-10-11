@@ -69,7 +69,7 @@ jobs:
           # 3.15 is still a prerelease (beta); without this, setup-python
           # cannot resolve it. Stable versions are unaffected.
           allow-prereleases: true
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: 🏗 Set package version from release tag
         if: inputs.release-tag != ''
         shell: bash
@@ -85,7 +85,7 @@ jobs:
       - name: 🧪 Test the built wheel
         shell: bash
         run: bash .github/scripts/test_wheel.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-linux-x86_64-cp${{ matrix.python }}
           path: dist
@@ -124,7 +124,7 @@ jobs:
           # cannot resolve it. Stable versions are unaffected.
           allow-prereleases: true
           architecture: ${{ matrix.platform.arch }}
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: 🏗 Set package version from release tag
         if: inputs.release-tag != ''
         shell: bash
@@ -139,7 +139,7 @@ jobs:
       - name: 🧪 Test the built wheel
         shell: bash
         run: bash .github/scripts/test_wheel.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-windows-${{ matrix.platform.target }}-cp${{ matrix.python }}
           path: dist
@@ -176,7 +176,7 @@ jobs:
           # 3.15 is still a prerelease (beta); without this, setup-python
           # cannot resolve it. Stable versions are unaffected.
           allow-prereleases: true
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: 🏗 Set package version from release tag
         if: inputs.release-tag != ''
         shell: bash
@@ -191,7 +191,7 @@ jobs:
       - name: 🧪 Test the built wheel
         shell: bash
         run: bash .github/scripts/test_wheel.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-macos-${{ matrix.platform.target }}-cp${{ matrix.python }}
           path: dist
@@ -203,11 +203,20 @@ jobs:
   linux-cross:
     name: Linux ${{ matrix.target }} (emulated)
     if: inputs.full
-    runs-on: ubuntu-26.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target: [x86, aarch64, armv7, ppc64le]
+        target: [aarch64, armv7, ppc64le]
+        runner: [ubuntu-26.04]
+        include:
+          # i686 builds in the CentOS 7 based manylinux2014 image, where
+          # maturin-action installs libatomic with yum. Since the move to
+          # ubuntu-26.04 runners, that container cannot resolve vault.centos.org
+          # (the other images resolve fine), so this leg stays on the last runner
+          # where it worked until manylinux2014 is dropped.
+          - target: x86
+            runner: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -284,7 +293,7 @@ jobs:
         shell: bash
         run: |
           docker run --rm --platform linux/386 -v "${PWD}:/io" -w /io \
-            python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d \
+            python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 \
             sh -ec '
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
@@ -292,7 +301,7 @@ jobs:
               pip install --quiet --no-deps dist/*cp314-cp314-*.whl
               pytest -q
             '
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
@@ -354,7 +363,7 @@ jobs:
         shell: bash
         run: |
           docker run --rm -v "${PWD}:/io" -w /io \
-            python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 \
+            python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 \
             sh -ec '
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
@@ -392,7 +401,7 @@ jobs:
             pip install --break-system-packages --quiet \
               --no-index --no-deps --find-links dist yamlrocks
             pytest -q
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-musllinux-${{ matrix.target }}
           path: dist
@@ -418,7 +427,7 @@ jobs:
         with:
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-sdist
           path: dist

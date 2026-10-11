@@ -41,6 +41,12 @@ smallvec = "1"
 # interpreter; the depth cap still bounds total work. See `stack::guard`.
 stacker = "0.1"
 
+[target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
+# Reads the main thread's real stack bound on musl, whose `pthread_getattr_np`
+# under-reports it (see `stack::remaining_stack`). Already in the tree
+# transitively (via stacker), so this adds no build cost.
+libc = "0.2"
+
 [profile.release]
 codegen-units = 1
 lto = "fat"

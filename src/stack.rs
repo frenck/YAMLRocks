@@ -51,7 +51,97 @@ pub(crate) fn guard<R>(f: impl FnOnce() -> R) -> R {
 /// status quo, and every tier-one platform reports bounds.
 #[inline]
 pub(crate) fn python_call_headroom() -> bool {
-    stacker::remaining_stack().map_or(true, |remaining| remaining > RED_ZONE)
+    remaining_stack().map_or(true, |remaining| remaining > RED_ZONE)
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "musl")))]
+#[inline]
+fn remaining_stack() -> Option<usize> {
+    stacker::remaining_stack()
+}
+
+/// The remaining native stack, correcting for musl's main thread.
+///
+/// musl's `pthread_getattr_np` reports the main thread's stack as only the pages
+/// touched so far, not the `RLIMIT_STACK` the kernel lets it grow to, and
+/// `stacker` caches that bound on first use. A later, deeper call then sees
+/// almost no headroom and the `represent` lowering refuses even a shallow
+/// document. A thread running on the kernel's grow-down `[stack]` mapping
+/// therefore measures against the real rlimit bound; every other thread (and a
+/// grown segment) keeps `stacker`'s answer, which musl reports correctly there.
+///
+/// Like `stacker`, the bound is computed once per thread, so a later change to
+/// `RLIMIT_STACK` is not picked up.
+#[cfg(all(target_os = "linux", target_env = "musl"))]
+#[inline]
+fn remaining_stack() -> Option<usize> {
+    thread_local! {
+        static GROWABLE_STACK: Option<(usize, usize)> = musl_growable_stack();
+    }
+
+    let marker = 0u8;
+    let stack_pointer = std::ptr::addr_of!(marker) as usize;
+    let on_growable_stack = GROWABLE_STACK
+        .with(|bounds| bounds.filter(|&(limit, top)| (limit..top).contains(&stack_pointer)));
+    match on_growable_stack {
+        Some((limit, _)) => Some(stack_pointer - limit),
+        None => stacker::remaining_stack(),
+    }
+}
+
+/// The `(limit, top)` range the calling thread's stack can grow to, when that
+/// thread runs on the kernel's grow-down `[stack]` mapping; `None` otherwise, or
+/// when anything cannot be established (the caller then keeps `stacker`'s
+/// bound).
+///
+/// Being the thread-group leader is not enough: a process forked from a worker
+/// thread has its leader on that worker's fixed-size pthread stack. So the stack
+/// pointer must lie inside the `[stack]` mapping from `/proc/self/maps`. The
+/// limit is that mapping's top minus `RLIMIT_STACK`, or minus Linux's 8 MB
+/// default when the rlimit is unlimited.
+#[cfg(all(target_os = "linux", target_env = "musl"))]
+fn musl_growable_stack() -> Option<(usize, usize)> {
+    const DEFAULT_MAIN_STACK: usize = 8 * 1024 * 1024;
+
+    // Only the thread-group leader can own the `[stack]` mapping; checking that
+    // first keeps every worker thread from reading `/proc`.
+    // SAFETY: argument-less syscalls with no memory access.
+    let is_leader = unsafe { libc::getpid() as libc::c_long == libc::syscall(libc::SYS_gettid) };
+    if !is_leader {
+        return None;
+    }
+
+    let marker = 0u8;
+    let stack_pointer = std::ptr::addr_of!(marker) as usize;
+    let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
+    let (start, top) = maps
+        .lines()
+        .filter(|line| line.ends_with("[stack]"))
+        .find_map(|line| {
+            let (start, end) = line.split_whitespace().next()?.split_once('-')?;
+            let start = usize::from_str_radix(start, 16).ok()?;
+            let end = usize::from_str_radix(end, 16).ok()?;
+            Some((start, end))
+        })?;
+    if !(start..top).contains(&stack_pointer) {
+        return None;
+    }
+
+    // SAFETY: `getrlimit` writes only into the `rlimit` passed to it, and the
+    // result is read only after it reports success.
+    let rlimit = unsafe {
+        let mut rlimit: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_STACK, &mut rlimit) != 0 {
+            return None;
+        }
+        rlimit
+    };
+    let reserved = if rlimit.rlim_cur == libc::RLIM_INFINITY {
+        DEFAULT_MAIN_STACK
+    } else {
+        rlimit.rlim_cur as usize
+    };
+    Some((top.saturating_sub(reserved), top))
 }
 
 use crate::decode::Value;

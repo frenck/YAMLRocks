@@ -214,15 +214,21 @@ def test_mapping_error_after_deep_value_tears_down_iteratively():
     """A mapping lowering error dismantles the already-built pairs iteratively."""
     # `object()` has no scalar rendering and no `default`, so lowering "bad" fails
     # after "deep" is already built.
-    doc = {"deep": _deep_dict(300), "bad": object()}
-    with pytest.raises(yamlrocks.YAMLRocksEncodeError):
+    doc = {"deep": _deep_dict(_DEEP_REPRESENT // 2), "bad": object()}
+    with pytest.raises(
+        yamlrocks.YAMLRocksUnserializableError, match="not YAML serializable"
+    ):
         yamlrocks.dumps(doc, represent=lambda _: None)
 
 
 def test_sequence_error_after_deep_item_tears_down_iteratively():
     """The sequence path likewise dismantles already-built items iteratively when a later item fails to lower."""
-    with pytest.raises(yamlrocks.YAMLRocksEncodeError):
-        yamlrocks.dumps([_deep_dict(300), object()], represent=lambda _: None)
+    with pytest.raises(
+        yamlrocks.YAMLRocksUnserializableError, match="not YAML serializable"
+    ):
+        yamlrocks.dumps(
+            [_deep_dict(_DEEP_REPRESENT // 2), object()], represent=lambda _: None
+        )
 
 
 def test_explicit_block_style_rejects_lossy_values():

@@ -35,9 +35,10 @@ permissions:
 jobs:
   # Decide whether the wheels get the full matrix. Anything but a pull request
   # always does. A pull request does when it touches the Rust crate, the Python
-  # package, the tests, or the wheel workflows: the musl and emulated legs once
-  # stayed red on main for months because pull requests never ran them. Other
-  # pull requests (docs, Python dev tooling) keep the fast native-only run.
+  # package and its build configuration, the tests, or the wheel workflows: the
+  # musl and emulated legs once stayed red on main for months because pull
+  # requests never ran them. Other pull requests (docs, the real-world corpus,
+  # unrelated workflows) keep the fast native-only run.
   changes:
     name: Decide the wheel matrix
     runs-on: ubuntu-latest
@@ -59,13 +60,21 @@ jobs:
             exit 0
           fi
 
+          # A rename lists its destination as `filename` and its source as
+          # `previous_filename`; both count, so moving a file out of a relevant
+          # path still triggers the full matrix.
+          files=$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)')
+
+          # pyproject.toml carries the maturin build configuration, and
+          # test-requirements.txt is installed only by the i686 and musl legs.
           # The real-world corpus and its tests live under tests/ but do not run
           # in the wheel matrix (it does not check out the corpus submodules), so
           # the monthly corpus bumps stay native-only.
-          files=$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')
           relevant=$(printf '%s\n' "${files}" \
             | grep -vE '^tests/(data/)?realworld/' \
-            | grep -E '^(src/|pysrc/|tests/|Cargo\.(toml|lock)$|\.github/workflows/(tests|build-wheels)\.yaml$)' \
+            | grep -E '^(src/|pysrc/|tests/|Cargo\.(toml|lock)$|pyproject\.toml$|\.github/scripts/test-requirements\.txt$|\.github/workflows/(tests|build-wheels)\.yaml$)' \
+            | sort -u \
             || true)
 
           if [ -n "${relevant}" ]; then

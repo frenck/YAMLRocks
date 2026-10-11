@@ -54,6 +54,26 @@ def test_flow_collection_wraps_and_round_trips():
     assert b"\n" in out  # it actually wrapped
 
 
+@pytest.mark.parametrize(
+    "obj",
+    [
+        {'has "quote"': "x"},
+        {"a": 1, ": leading": "x"},
+        {"a": 1, "{k: v}": "x"},
+        {"a": 1, (1, 2): "x"},
+    ],
+)
+def test_flow_mapping_keys_never_fold(obj):
+    """A key in a flow mapping stays on one line, so the output is a valid implicit key that PyYAML also loads."""
+    yaml = pytest.importorskip("yaml")
+    out = yamlrocks.dumps(obj, width=8, option=yamlrocks.OPT_FLOW_STYLE)
+    assert out.count(b"\n") == 1
+    assert yamlrocks.loads(out) == obj
+    # Parse only: PyYAML cannot construct a sequence key, but it must accept
+    # the syntax, which a key folded across lines is not.
+    list(yaml.parse(out))
+
+
 def test_runs_of_spaces_are_never_split():
     """A fold never lands inside a run of spaces, which would drop one."""
     obj = {"x": "alpha   beta gamma   delta epsilon zeta eta theta iota kappa lambda"}

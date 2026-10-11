@@ -44,6 +44,27 @@ pub fn compose_all(input: &str) -> Result<Vec<YamlNode>, ScanError> {
     Ok(nodes)
 }
 
+/// A block scalar's source slice without the indentation of the line after it.
+///
+/// The scanner reads past a block scalar's last line break into the next
+/// line's indentation to see that the scalar ended, so the event span (like
+/// PyYAML's `end_mark`) includes those spaces. Replaying them verbatim would put
+/// a whitespace-only line before the next key, since the emitter writes its own
+/// indentation. Whatever follows the last line break is never block scalar
+/// content when it is only spaces or tabs, so drop it.
+fn without_next_line_indent(raw: &str) -> &str {
+    match raw.rfind('\n') {
+        Some(newline)
+            if raw[newline + 1..]
+                .bytes()
+                .all(|byte| byte == b' ' || byte == b'\t') =>
+        {
+            &raw[..=newline]
+        }
+        _ => raw,
+    }
+}
+
 /// Compose with an explicit `file_id` stamped on every span, for include
 /// resolution and source-file tracking.
 pub fn compose_with_file_id(input: &str, file_id: u32) -> Result<Vec<YamlNode>, ScanError> {
@@ -1028,7 +1049,10 @@ impl<'input> Composer<'input> {
         // replay.
         if let YamlNodeKind::Scalar(_, ScalarStyle::Literal | ScalarStyle::Folded) = &node.kind {
             if event_end > span.offset {
-                node.comments.raw = self.input.get(span.offset..event_end).map(str::to_owned);
+                node.comments.raw = self
+                    .input
+                    .get(span.offset..event_end)
+                    .map(|raw| without_next_line_indent(raw).to_owned());
             }
         }
 

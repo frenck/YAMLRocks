@@ -577,6 +577,22 @@ def test_literal_block_keep_chomp_reemitted():
     assert doc.to_yaml() == b"text: |+\n  l1\n\n\nz: 9\n"
 
 
+@pytest.mark.parametrize("header", ["|", "|-", "|+", ">"])
+@pytest.mark.parametrize("blank", [b"", b"\n"])
+def test_nested_block_scalar_reemits_without_stray_indent(header, blank):
+    """A nested block scalar followed by a sibling key gains no whitespace-only line when another key is edited (#422)."""
+    source = (
+        b"a:\n  desc: "
+        + header.encode()
+        + b"\n    line one\n"
+        + blank
+        + b"  type: string\nz: 0\n"
+    )
+    doc = yamlrocks.loads(source, option=RT)
+    doc["z"] = 9
+    assert doc.to_yaml() == source.replace(b"z: 0", b"z: 9")
+
+
 def test_empty_key_reemitted_after_edit():
     """A key with no value re-emits as bare `key:` after a sibling edit."""
     doc = yamlrocks.loads(b"a:\nb: 1\n", option=RT)

@@ -214,12 +214,12 @@ impl<'a> Emitter<'a> {
     fn emit_block_pair(&mut self, key: &Value, val: &Value, indent: usize, not_first: bool) {
         if not_first && matches!(key, Value::Tagged(..)) {
             self.buf.extend_from_slice(b"? ");
-            self.emit_key(key);
+            self.emit_key(key, false);
             self.buf.push(b'\n');
             self.write_indent(indent);
             self.buf.push(b':');
         } else {
-            self.emit_key(key);
+            self.emit_key(key, false);
             self.buf.push(b':');
         }
         self.emit_value_after_colon(val, indent);
@@ -405,16 +405,17 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// Emit a mapping key inline. Keys are always rendered on a single line. A
-    /// scalar key sits in block context (`false`); a collection key descends into
-    /// flow internally, flagging its own elements.
-    fn emit_key(&mut self, key: &Value) {
+    /// Emit a mapping key inline. Keys are always rendered on a single line, in
+    /// a block mapping and a flow mapping alike. `in_flow` is whether the key
+    /// sits inside a flow collection (where flow indicators must be quoted); a
+    /// collection key descends into flow internally, flagging its own elements.
+    fn emit_key(&mut self, key: &Value, in_flow: bool) {
         // Suppress all width-driven line breaking for the whole key subtree: a
         // key folded or broken across lines is no longer a valid implicit key, so
         // the `:` after it detaches and the data changes on reload.
         let was_key = self.emitting_key;
         self.emitting_key = true;
-        self.emit_inline(key, false);
+        self.emit_inline(key, in_flow);
         self.emitting_key = was_key;
     }
 
@@ -513,7 +514,7 @@ impl<'a> Emitter<'a> {
             if i > 0 {
                 self.emit_flow_separator(cont_indent);
             }
-            self.emit_inline(key, true);
+            self.emit_key(key, true);
             self.buf.extend_from_slice(b": ");
             self.emit_inline(val, true);
         }

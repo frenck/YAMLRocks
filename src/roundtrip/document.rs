@@ -1436,7 +1436,7 @@ pub(crate) fn split_comment_lines(text: Option<String>) -> PyResult<Vec<String>>
 /// non-empty block mapping or sequence (an empty or flow collection emits inline
 /// with no foot position). The document root is handled separately by its caller,
 /// since its foot renders for any node kind.
-fn renders_foot(node: &YamlNode) -> bool {
+pub(crate) fn renders_foot(node: &YamlNode) -> bool {
     if node.style != NodeStyle::Block {
         return false;
     }

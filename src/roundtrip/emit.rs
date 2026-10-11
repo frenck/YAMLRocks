@@ -769,6 +769,10 @@ impl RoundTripEmitter {
         self.buf.push(b'}');
     }
 
+    /// A flow sequence whose items carry comments, one item per line so each
+    /// comment has a line to sit on (`[` / `  # above` / `  item, # note` / `]`).
+    /// Only head and inline comments reach here: a foot comment has no place
+    /// inside a flow collection and is rejected before emission.
     fn emit_commented_flow_sequence(&mut self, items: &[YamlNode], indent: usize) {
         self.buf.extend_from_slice(b"[\n");
         self.flow_depth += 1;
@@ -783,13 +787,15 @@ impl RoundTripEmitter {
             }
             self.emit_inline_comment(&item.comments);
             self.buf.push(b'\n');
-            self.emit_foot(&item.comments, child_indent);
         }
         self.flow_depth -= 1;
         self.write_indent(indent);
         self.buf.push(b']');
     }
 
+    /// A flow mapping whose entries carry comments, one entry per line. A key
+    /// never carries an inline or foot comment (it must stay on one line), so
+    /// only head comments above the entry and the value's inline comment render.
     fn emit_commented_flow_mapping(&mut self, pairs: &[(YamlNode, YamlNode)], indent: usize) {
         self.buf.extend_from_slice(b"{\n");
         self.flow_depth += 1;
@@ -797,9 +803,6 @@ impl RoundTripEmitter {
         for (index, (key, value)) in pairs.iter().enumerate() {
             self.emit_head(&key.comments, child_indent);
             self.emit_head(&value.comments, child_indent);
-            if let Some(comment) = &key.comments.inline {
-                self.emit_comment_line(comment, child_indent);
-            }
             self.write_indent(child_indent);
             self.emit_anchor_tag(key);
             self.emit_inline_content(key, child_indent);
@@ -812,8 +815,6 @@ impl RoundTripEmitter {
             }
             self.emit_inline_comment(&value.comments);
             self.buf.push(b'\n');
-            self.emit_foot(&key.comments, child_indent);
-            self.emit_foot(&value.comments, child_indent);
         }
         self.flow_depth -= 1;
         self.write_indent(indent);

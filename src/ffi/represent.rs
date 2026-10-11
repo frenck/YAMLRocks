@@ -21,7 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pyo3::exceptions::PyRecursionError;
+use pyo3::exceptions::{PyRecursionError, PyValueError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::{
@@ -36,6 +36,7 @@ use crate::ffi::convert::{
 use crate::ffi::YAMLRocksTag;
 use crate::resolver::{ScalarKind, Schema};
 use crate::roundtrip::ast::{HeadComment, NodeStyle, YamlNode, YamlNodeKind};
+use crate::roundtrip::document::{inline_comment_text, renders_foot, split_comment_lines};
 use crate::roundtrip::value::assigned_string_style;
 use crate::scanner::{ScalarStyle, Span};
 
@@ -80,9 +81,9 @@ impl YAMLRocksScalar {
             value,
             tag,
             style: parse_style(style)?,
-            comment,
-            comment_before,
-            comment_after,
+            comment: inline_comment_text(comment)?,
+            comment_before: comment_lines(comment_before)?,
+            comment_after: comment_lines(comment_after)?,
         })
     }
 
@@ -162,9 +163,9 @@ impl YAMLRocksSequence {
             items: snapshot_iterable(py, items)?,
             tag,
             flow,
-            comment,
-            comment_before,
-            comment_after,
+            comment: inline_comment_text(comment)?,
+            comment_before: comment_lines(comment_before)?,
+            comment_after: comment_lines(comment_after)?,
         })
     }
 
@@ -223,9 +224,9 @@ impl YAMLRocksMapping {
             pairs: snapshot_iterable(py, pairs)?,
             tag,
             flow,
-            comment,
-            comment_before,
-            comment_after,
+            comment: inline_comment_text(comment)?,
+            comment_before: comment_lines(comment_before)?,
+            comment_after: comment_lines(comment_after)?,
         })
     }
 
@@ -252,13 +253,34 @@ impl YAMLRocksMapping {
     }
 }
 
+/// Validate a descriptor's multi-line comment with the same rules as the node
+/// cursor, normalizing every line break to `\n` (the form the getter returns).
+fn comment_lines(text: Option<String>) -> PyResult<Option<String>> {
+    if text.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(split_comment_lines(text)?.join("\n")))
+}
+
 /// Attach descriptor comments to the existing emitter's node representation.
+///
+/// `comment_after` follows the node cursor's rule: it only has a place to render
+/// after a block collection or at the document root, so anywhere else it is a
+/// `ValueError` rather than a comment that silently disappears.
 fn with_comments(
     mut node: YamlNode,
     before: Option<&str>,
     inline: Option<&str>,
     after: Option<&str>,
-) -> YamlNode {
+    is_root: bool,
+) -> PyResult<YamlNode> {
+    if after.is_some() && !is_root && !renders_foot(&node) {
+        return Err(PyValueError::new_err(
+            "comment_after is only supported on a block mapping, a block sequence, \
+             or the document root",
+        ));
+    }
+
     if let Some(text) = before {
         node.comments.head = text.lines().map(HeadComment::above).collect();
     }
@@ -266,7 +288,50 @@ fn with_comments(
     if let Some(text) = after {
         node.comments.foot = text.lines().map(str::to_owned).collect();
     }
-    node
+    Ok(node)
+}
+
+/// Why `key` cannot be emitted as a mapping key, if it carries comments that
+/// would break it. A key must stay on one line: an inline comment or a comment
+/// after it has no place there, and a comment anywhere inside a collection key
+/// spreads that key over several lines. A comment *before* the key itself is
+/// fine; it renders above the key's line.
+fn key_comment_error(key: &YamlNode) -> Option<PyErr> {
+    if key.comments.inline.is_some() || !key.comments.foot.is_empty() {
+        return Some(PyValueError::new_err(
+            "a mapping key cannot carry an inline comment or comment_after",
+        ));
+    }
+
+    let mut pending: Vec<&YamlNode> = Vec::new();
+    push_children(key, &mut pending);
+    while let Some(node) = pending.pop() {
+        let commented = !node.comments.head.is_empty()
+            || node.comments.inline.is_some()
+            || !node.comments.foot.is_empty();
+        if commented {
+            return Some(PyValueError::new_err(
+                "a comment inside a mapping key is not supported, since the key \
+                 must stay on one line",
+            ));
+        }
+        push_children(node, &mut pending);
+    }
+    None
+}
+
+/// Queue a node's direct children for an iterative walk.
+fn push_children<'a>(node: &'a YamlNode, pending: &mut Vec<&'a YamlNode>) {
+    match &node.kind {
+        YamlNodeKind::Sequence(items) => pending.extend(items),
+        YamlNodeKind::Mapping(pairs) => {
+            for (key, value) in pairs {
+                pending.push(key);
+                pending.push(value);
+            }
+        }
+        YamlNodeKind::Scalar(..) | YamlNodeKind::Alias(_) | YamlNodeKind::Null => {}
+    }
 }
 
 /// Map a style name to a [`ScalarStyle`], or `None` for `"auto"` (and the
@@ -653,12 +718,13 @@ impl Lower<'_, '_, '_> {
                 self.schema,
                 in_flow || in_key,
             )?;
-            return Ok(with_comments(
+            return with_comments(
                 node,
                 scalar.comment_before.as_deref(),
                 scalar.comment.as_deref(),
                 scalar.comment_after.as_deref(),
-            ));
+                depth == 0,
+            );
         }
         if let Ok(seq) = described.cast::<YAMLRocksSequence>() {
             let seq = seq.borrow();
@@ -669,12 +735,13 @@ impl Lower<'_, '_, '_> {
                 .collect::<PyResult<_>>()?;
             let node =
                 self.sequence_node(items, depth, seq.tag.clone(), seq.flow, in_flow, in_key)?;
-            return Ok(with_comments(
+            return with_comments(
                 node,
                 seq.comment_before.as_deref(),
                 seq.comment.as_deref(),
                 seq.comment_after.as_deref(),
-            ));
+                depth == 0,
+            );
         }
         if let Ok(map) = described.cast::<YAMLRocksMapping>() {
             let map = map.borrow();
@@ -698,12 +765,13 @@ impl Lower<'_, '_, '_> {
             }
             let node =
                 self.mapping_node(entries, depth, map.tag.clone(), map.flow, in_flow, in_key)?;
-            return Ok(with_comments(
+            return with_comments(
                 node,
                 map.comment_before.as_deref(),
                 map.comment.as_deref(),
                 map.comment_after.as_deref(),
-            ));
+                depth == 0,
+            );
         }
         Err(pyo3::exceptions::PyTypeError::new_err(
             "a represent callback must return a yamlrocks.YAMLRocksScalar, \
@@ -743,6 +811,11 @@ impl Lower<'_, '_, '_> {
                     return Err(err);
                 }
             };
+            if let Some(err) = key_comment_error(&key_node) {
+                crate::stack::drop_node_tree(key_node);
+                drop_node_pairs(pairs);
+                return Err(err);
+            }
             match self.lower(val, depth + 1, flow, false) {
                 Ok(mut val_node) => {
                     // A value's leading comment belongs above its mapping key,

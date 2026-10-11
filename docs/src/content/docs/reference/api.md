@@ -475,6 +475,7 @@ to serialize.
 | Member                    | Description                                                                                             |
 | ------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `origin: str \| None`     | The path the document was loaded from, or `None`.                                                       |
+| `explicit_start: bool`    | Whether the document began with an explicit `---` marker. Read-only.                                    |
 | `__len__()`               | Number of top-level entries.                                                                            |
 | `__getitem__(key)`        | Read a value. A nested mapping or sequence returns a [`YAMLRocksDocumentView`](#yamlrocksdocumentview). |
 | `__setitem__(key, value)` | Set a value; the change is reflected by `to_yaml`.                                                      |

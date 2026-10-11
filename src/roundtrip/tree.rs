@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use super::ast::{NodeStyle, YamlNode, YamlNodeKind};
+use super::ast::{YamlNode, YamlNodeKind};
+use super::document::{
+    head_comment_text, head_scope_of_first_key, head_scope_of_item, node_style_name, HeadScope,
+};
 use super::value::{is_ast_merge_key, node_to_python_with};
 use crate::resolver::Schema;
 
@@ -37,71 +40,109 @@ pub struct YAMLRocksTreeNode {
 
 /// Copy a parsed tree to Python in one visit per node. Container values are
 /// tuples of child nodes (sequence) or `(key_node, value_node)` pairs (mapping).
+///
+/// Every node reports the same metadata a [`YAMLRocksNode`] cursor at that
+/// position does. The cursor finds `comment_before` from context (the first
+/// key's comments live on its mapping, a sequence item's are split at its dash),
+/// so this walk passes that context down instead of re-resolving a path per
+/// node, which keeps the export linear.
+///
+/// [`YAMLRocksNode`]: super::document::YAMLRocksNode
 pub fn snapshot(
     py: Python<'_>,
-    node: &YamlNode,
+    root: &YamlNode,
     schema: Schema,
     resolve_timestamps: bool,
 ) -> PyResult<Py<YAMLRocksTreeNode>> {
-    crate::stack::guard(|| {
-        let (kind, value) = match &node.kind {
-            YamlNodeKind::Sequence(items) => {
-                let children = items
-                    .iter()
-                    .map(|child| snapshot(py, child, schema, resolve_timestamps))
-                    .collect::<PyResult<Vec<_>>>()?;
-                ("sequence", PyTuple::new(py, children)?.into_any().unbind())
-            }
-            YamlNodeKind::Mapping(pairs) => {
-                let children = pairs
-                    .iter()
-                    .map(|(key, value)| {
-                        Ok((
-                            snapshot(py, key, schema, resolve_timestamps)?,
-                            snapshot(py, value, schema, resolve_timestamps)?,
-                        ))
-                    })
-                    .collect::<PyResult<Vec<_>>>()?;
-                ("mapping", PyTuple::new(py, children)?.into_any().unbind())
-            }
-            YamlNodeKind::Alias(name) => ("alias", name.into_pyobject(py)?.into_any().unbind()),
-            YamlNodeKind::Scalar(..) | YamlNodeKind::Null => (
-                "scalar",
-                node_to_python_with(py, node, schema, resolve_timestamps, &HashMap::new()),
-            ),
-        };
-        let style = match &node.kind {
-            YamlNodeKind::Scalar(_, style) => style.name(),
-            YamlNodeKind::Sequence(_) | YamlNodeKind::Mapping(_) => {
-                if node.style == NodeStyle::Flow {
-                    "flow"
-                } else {
-                    "block"
-                }
-            }
-            _ => "plain",
-        };
-        Py::new(
-            py,
-            YAMLRocksTreeNode {
-                kind,
-                value,
-                style,
-                tag: node.tag.clone(),
-                anchor: node.anchor.clone(),
-                comment: node.comments.inline.clone(),
-                comment_before: (!node.comments.head.is_empty()).then(|| {
-                    node.comments
-                        .head
+    let walk = Walk {
+        py,
+        schema,
+        resolve_timestamps,
+    };
+    walk.node(root, head_comment_text(root, HeadScope::All), false)
+}
+
+/// The fixed inputs of one snapshot walk.
+struct Walk<'py> {
+    py: Python<'py>,
+    schema: Schema,
+    resolve_timestamps: bool,
+}
+
+impl Walk<'_> {
+    /// Snapshot `node`, whose `comment_before` the caller has already resolved
+    /// from its position. `is_sequence_item` decides where the first key of a
+    /// mapping item finds its comments.
+    fn node(
+        &self,
+        node: &YamlNode,
+        comment_before: Option<String>,
+        is_sequence_item: bool,
+    ) -> PyResult<Py<YAMLRocksTreeNode>> {
+        crate::stack::guard(|| {
+            let py = self.py;
+            let (kind, value) = match &node.kind {
+                YamlNodeKind::Sequence(items) => {
+                    let children = items
                         .iter()
-                        .map(|comment| comment.text.as_ref())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }),
-                comment_after: (!node.comments.foot.is_empty())
-                    .then(|| node.comments.foot.join("\n")),
-                is_merge_key: is_ast_merge_key(node),
-            },
-        )
-    })
+                        .map(|item| {
+                            let before = head_comment_text(item, head_scope_of_item(item));
+                            self.node(item, before, true)
+                        })
+                        .collect::<PyResult<Vec<_>>>()?;
+                    ("sequence", PyTuple::new(py, children)?.into_any().unbind())
+                }
+                YamlNodeKind::Mapping(pairs) => {
+                    let children = pairs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (key, value))| {
+                            // Nothing sits above a mapping's first key: its
+                            // comments are stored on the mapping itself.
+                            let entry_before = if index == 0 {
+                                head_comment_text(
+                                    node,
+                                    head_scope_of_first_key(node, is_sequence_item),
+                                )
+                            } else {
+                                head_comment_text(key, HeadScope::All)
+                            };
+                            let key_before = head_comment_text(key, HeadScope::All);
+                            Ok((
+                                self.node(key, key_before, false)?,
+                                self.node(value, entry_before, false)?,
+                            ))
+                        })
+                        .collect::<PyResult<Vec<_>>>()?;
+                    ("mapping", PyTuple::new(py, children)?.into_any().unbind())
+                }
+                YamlNodeKind::Alias(name) => ("alias", name.into_pyobject(py)?.into_any().unbind()),
+                YamlNodeKind::Scalar(..) | YamlNodeKind::Null => (
+                    "scalar",
+                    node_to_python_with(
+                        py,
+                        node,
+                        self.schema,
+                        self.resolve_timestamps,
+                        &HashMap::new(),
+                    ),
+                ),
+            };
+            Py::new(
+                py,
+                YAMLRocksTreeNode {
+                    kind,
+                    value,
+                    style: node_style_name(node),
+                    tag: node.tag.clone(),
+                    anchor: node.anchor.clone(),
+                    comment: node.comments.inline.clone(),
+                    comment_before,
+                    comment_after: (!node.comments.foot.is_empty())
+                        .then(|| node.comments.foot.join("\n")),
+                    is_merge_key: is_ast_merge_key(node),
+                },
+            )
+        })
+    }
 }

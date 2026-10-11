@@ -16,7 +16,7 @@ def test_snapshot_values_and_metadata():
     assert isinstance(tree, yamlrocks.YAMLRocksTreeNode)
     assert tree.kind == "mapping"
     (key, value), (_, sequence) = tree.value
-    assert "header" in (tree.comment_before or key.comment_before or "")
+    assert value.comment_before == "header"
     assert key.value == "a"
     assert (value.value, value.style, value.tag) == ("yes", "single", "!custom")
     assert "inline" in value.comment
@@ -66,3 +66,32 @@ def test_snapshot_uses_document_schema(option, expected):
     """Scalar resolution stays in YAMLRocks and follows the selected schema."""
     tree = yamlrocks.loads(b"yes", option=RT | option).to_tree()
     assert tree.value == expected
+
+
+_PARITY_SOURCES = [
+    b"# head 1\n# head 2\na: 'x'  # inline a\nb: &anc\n  - 1\n  # foot of list\nc: *anc\n",
+    b"# top\nfirst: 1\n# above second\nsecond:  # on key\n  nested: true\n  # nested foot\n",
+    b"- # dash note\n  # below dash\n  name: one\n  # above two\n  two: 2\n# above item\n- plain\n",
+    b"list:\n  # above item\n  - a\n  - {k: v}  # flow\n  - [1, 2]\n  - ~\n  - |\n    literal\n",
+    b"base: &b {a: 1}\nmerged:\n  <<: *b\n  # after merge\n  c: 3\n# end of file\n",
+]
+_CURSOR_ATTRS = ("comment", "comment_before", "comment_after", "style", "tag", "anchor")
+
+
+def _assert_matches_cursor(tree, cursor, where):
+    """Recursively compare a snapshot node with the cursor at the same position."""
+    for attr in _CURSOR_ATTRS:
+        assert getattr(tree, attr) == getattr(cursor, attr), f"{where}.{attr}"
+    if tree.kind == "mapping":
+        for key, value in tree.value:
+            _assert_matches_cursor(value, cursor[key.value], f"{where}[{key.value!r}]")
+    elif tree.kind == "sequence":
+        for index, item in enumerate(tree.value):
+            _assert_matches_cursor(item, cursor[index], f"{where}[{index}]")
+
+
+@pytest.mark.parametrize("source", _PARITY_SOURCES)
+def test_snapshot_matches_cursor_metadata(source):
+    """Every position reports the same comments, style, tag, and anchor as the live cursor."""
+    doc = yamlrocks.loads(source, option=RT)
+    _assert_matches_cursor(doc.to_tree(), doc.node, "root")

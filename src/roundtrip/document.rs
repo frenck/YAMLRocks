@@ -1009,25 +1009,7 @@ impl YAMLRocksNode {
     fn comment_before(&self, py: Python<'_>) -> PyResult<Option<String>> {
         let doc = self.root.borrow(py);
         let (node, scope) = resolve_head(&doc.nodes, &self.path).ok_or_else(stale_node)?;
-        let lines: Vec<String> = match scope {
-            HeadScope::All => node
-                .comments
-                .head
-                .iter()
-                .map(|comment| comment.text.to_string())
-                .collect(),
-            HeadScope::AboveDash => node
-                .comments
-                .head_above_introducer()
-                .map(str::to_owned)
-                .collect(),
-            HeadScope::BelowDash => node
-                .comments
-                .head_below_introducer()
-                .map(str::to_owned)
-                .collect(),
-        };
-        Ok(join_comment_lines(&lines))
+        Ok(head_comment_text(node, scope))
     }
 
     /// Set or clear the standalone comment above this node. A multi-line string
@@ -1381,7 +1363,7 @@ fn stale_node() -> PyErr {
 }
 
 /// The presentation-style name reported by `YAMLRocksNode.style`.
-fn node_style_name(node: &YamlNode) -> &'static str {
+pub(crate) fn node_style_name(node: &YamlNode) -> &'static str {
     match &node.kind {
         YamlNodeKind::Scalar(_, style) => style.name(),
         YamlNodeKind::Mapping(_) | YamlNodeKind::Sequence(_) => match node.style {
@@ -1391,6 +1373,30 @@ fn node_style_name(node: &YamlNode) -> &'static str {
         YamlNodeKind::Alias(_) => "alias",
         YamlNodeKind::Null => "null",
     }
+}
+
+/// The `comment_before` text stored on `node` for the part `scope` addresses,
+/// or `None`. The single definition shared by the cursor and the tree snapshot.
+pub(crate) fn head_comment_text(node: &YamlNode, scope: HeadScope) -> Option<String> {
+    let lines: Vec<String> = match scope {
+        HeadScope::All => node
+            .comments
+            .head
+            .iter()
+            .map(|comment| comment.text.to_string())
+            .collect(),
+        HeadScope::AboveDash => node
+            .comments
+            .head_above_introducer()
+            .map(str::to_owned)
+            .collect(),
+        HeadScope::BelowDash => node
+            .comments
+            .head_below_introducer()
+            .map(str::to_owned)
+            .collect(),
+    };
+    join_comment_lines(&lines)
 }
 
 /// Join stored comment lines (text without `#`) for return to Python.
@@ -1442,7 +1448,7 @@ fn renders_foot(node: &YamlNode) -> bool {
 /// inside it, directly above its first key. The two are stored together, so the
 /// cursor decides which of them it means.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum HeadScope {
+pub(crate) enum HeadScope {
     /// The whole block: a mapping's leading comments, a key node's own, or the
     /// document root's. Nothing divides these.
     All,
@@ -1493,15 +1499,26 @@ fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<(&'a Yaml
 /// they are the lines below that comment; with no dash comment there is nothing
 /// dividing the block, and the whole of it sits above the key.
 fn head_scope_of_parent(parent: &[PathSeg], parent_node: &YamlNode) -> HeadScope {
-    match parent.last() {
-        Some(PathSeg::Index(_)) if parent_node.comments.inline_before_value => HeadScope::BelowDash,
-        _ => HeadScope::All,
+    head_scope_of_first_key(
+        parent_node,
+        matches!(parent.last(), Some(PathSeg::Index(_))),
+    )
+}
+
+/// The scope for a mapping's first key, given whether that mapping is itself a
+/// sequence item. Shared by the path-based cursor and the tree snapshot, which
+/// knows the parent while it walks.
+pub(crate) fn head_scope_of_first_key(mapping: &YamlNode, is_sequence_item: bool) -> HeadScope {
+    if is_sequence_item && mapping.comments.inline_before_value {
+        HeadScope::BelowDash
+    } else {
+        HeadScope::All
     }
 }
 
 /// The scope for a cursor addressing a sequence item itself. Without a comment
 /// on its dash there is no dividing line, so the item owns its whole block.
-fn head_scope_of_item(item: &YamlNode) -> HeadScope {
+pub(crate) fn head_scope_of_item(item: &YamlNode) -> HeadScope {
     if item.comments.inline_before_value {
         HeadScope::AboveDash
     } else {

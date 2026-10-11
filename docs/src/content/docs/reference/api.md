@@ -490,6 +490,7 @@ to serialize.
 | `walk()`                  | List of `(path_tuple, value)` pairs for every leaf.                                                     |
 | `locate(path)`            | The [`YAMLRocksNode`](#yamlrocksnode) at a data path (scalar leaves included), or `None` if unresolved. |
 | `node`                    | The root [`YAMLRocksNode`](#yamlrocksnode) cursor for metadata access (comments, location, style).      |
+| `to_tree()`               | An immutable [`YAMLRocksTreeNode`](#yamlrockstreenode) snapshot of the whole tree, or `None` if empty.  |
 | `anchors`                 | `dict[str, YAMLRocksNode]` mapping each anchor name to its defining [`YAMLRocksNode`](#yamlrocksnode).  |
 
 ```python
@@ -598,6 +599,45 @@ port.value = 8443
 port.comment = "now uses TLS"
 doc.to_yaml()
 # b'server:\n  port: 8443 # now uses TLS\n'
+```
+
+### `YAMLRocksTreeNode`
+
+An immutable snapshot returned by `YAMLRocksDocument.to_tree()`, holding every
+node's value and presentation metadata at once. Where a
+[`YAMLRocksNode`](#yamlrocksnode) cursor looks its node up from the root on each
+access, a snapshot owns its children, so walking a large document is a single
+pass. Each node reports the same comments, style, tag, and anchor a cursor at
+that position does. The snapshot does not change when the document is edited
+afterwards.
+
+| Member           | Description                                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `kind`           | `scalar`, `sequence`, `mapping`, or `alias`.                                                                               |
+| `value`          | A scalar's resolved Python value, a tuple of child nodes, a tuple of `(key, value)` node pairs, or an alias's anchor name. |
+| `comment`        | Inline comment trailing the value, bare of `#`, or `None`.                                                                 |
+| `comment_before` | Standalone comment line(s) above the node, or `None`. For a mapping value, the comment above its key.                      |
+| `comment_after`  | Trailing comment block after a block collection or the document root, or `None`.                                           |
+| `style`          | `plain`, `single`, `double`, `literal`, `folded`, `block`, `flow`, `alias`, or `null`.                                     |
+| `anchor`         | Anchor name (`&name`), or `None`.                                                                                          |
+| `tag`            | Explicit tag (`!!str`, `!custom`), or `None`.                                                                              |
+| `is_merge_key`   | `True` for a plain `<<` merge key. A quoted `"<<"` is an ordinary key.                                                     |
+
+Aliases and merge keys are kept as written, so the caller decides whether to
+expand them. A document wrapping several documents raises `ValueError`; load
+those with [`loads_all`](#loads_all) and `OPT_ROUND_TRIP` to get one document each.
+
+```python
+import yamlrocks
+
+doc = yamlrocks.loads(
+    b"# the service\nname: app\nports: [80, 443]\n", option=yamlrocks.OPT_ROUND_TRIP
+)
+(name_key, name), (_, ports) = doc.to_tree().value
+(name_key.value, name.value, name.comment_before)
+# ('name', 'app', 'the service')
+(ports.style, [port.value for port in ports.value])
+# ('flow', [80, 443])
 ```
 
 ### `YAMLRocksAnnotatedDict` / `YAMLRocksAnnotatedList` / `YAMLRocksAnnotatedStr`

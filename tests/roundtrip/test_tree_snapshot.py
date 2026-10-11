@@ -69,7 +69,7 @@ def test_snapshot_uses_document_schema(option, expected):
 
 
 _PARITY_SOURCES = [
-    b"# head 1\n# head 2\na: 'x'  # inline a\nb: &anc\n  - 1\n  # foot of list\nc: *anc\n",
+    b"# head 1\n# head 2\na: 'x'  # inline a\nb: &shared\n  - 1\n  # foot of list\nc: *shared\n",
     b"# top\nfirst: 1\n# above second\nsecond:  # on key\n  nested: true\n  # nested foot\n",
     b"- # dash note\n  # below dash\n  name: one\n  # above two\n  two: 2\n# above item\n- plain\n",
     b"list:\n  # above item\n  - a\n  - {k: v}  # flow\n  - [1, 2]\n  - ~\n  - |\n    literal\n",

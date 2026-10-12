@@ -593,6 +593,33 @@ def test_nested_block_scalar_reemits_without_stray_indent(header, blank):
     assert doc.to_yaml() == source.replace(b"z: 0", b"z: 9")
 
 
+def test_nested_block_scalar_with_lone_cr_reemits_without_stray_indent():
+    """A lone CR is a YAML line break too, so a CR-delimited block scalar gains no whitespace-only line either (#422)."""
+    doc = yamlrocks.loads(
+        b"a:\r  desc: |\r    line one\r  type: string\rz: 0\r", option=RT
+    )
+    doc["z"] = 9
+    lines = doc.to_yaml().replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n")
+    assert not [line for line in lines if line and not line.strip()]
+    assert yamlrocks.loads(doc.to_yaml()) == {
+        "a": {"desc": "line one\n", "type": "string"},
+        "z": 9,
+    }
+
+
+def test_block_scalar_at_end_of_input_keeps_whitespace_content():
+    """An over-indented whitespace-only last line at the end of the input is block scalar content, and survives an unrelated edit."""
+    source = b"z: 0\na: |+\n  x\n   "
+    assert yamlrocks.loads(source)["a"] == "x\n "
+    doc = yamlrocks.loads(source, option=RT)
+    doc["z"] = 9
+    # Only the over-indented content is pinned here. A keep-chomped (`|+`)
+    # scalar at the very end of input without a final line break also gains
+    # one on any re-emit (`|+` with `x` reloads as `x\n`); that predates #422
+    # and is tracked separately.
+    assert yamlrocks.loads(doc.to_yaml())["a"].startswith("x\n ")
+
+
 def test_empty_key_reemitted_after_edit():
     """A key with no value re-emits as bare `key:` after a sibling edit."""
     doc = yamlrocks.loads(b"a:\nb: 1\n", option=RT)

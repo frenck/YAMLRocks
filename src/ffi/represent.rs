@@ -21,7 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pyo3::exceptions::PyRecursionError;
+use pyo3::exceptions::{PyRecursionError, PyValueError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::{
@@ -35,7 +35,8 @@ use crate::ffi::convert::{
 };
 use crate::ffi::YAMLRocksTag;
 use crate::resolver::{ScalarKind, Schema};
-use crate::roundtrip::ast::{NodeStyle, YamlNode, YamlNodeKind};
+use crate::roundtrip::ast::{HeadComment, NodeStyle, YamlNode, YamlNodeKind};
+use crate::roundtrip::document::{inline_comment_text, renders_foot, split_comment_lines};
 use crate::roundtrip::value::assigned_string_style;
 use crate::scanner::{ScalarStyle, Span};
 
@@ -56,17 +57,33 @@ pub struct YAMLRocksScalar {
     tag: Option<String>,
     /// The chosen style, or `None` for `"auto"` (let the emitter decide).
     style: Option<ScalarStyle>,
+    #[pyo3(get)]
+    comment: Option<String>,
+    #[pyo3(get)]
+    comment_before: Option<String>,
+    #[pyo3(get)]
+    comment_after: Option<String>,
 }
 
 #[pymethods]
 impl YAMLRocksScalar {
     #[new]
-    #[pyo3(signature = (value, *, tag=None, style="auto"))]
-    fn new(value: String, tag: Option<String>, style: Option<&str>) -> PyResult<Self> {
+    #[pyo3(signature = (value, *, tag=None, style="auto", comment=None, comment_before=None, comment_after=None))]
+    fn new(
+        value: String,
+        tag: Option<String>,
+        style: Option<&str>,
+        comment: Option<String>,
+        comment_before: Option<String>,
+        comment_after: Option<String>,
+    ) -> PyResult<Self> {
         Ok(Self {
             value,
             tag,
             style: parse_style(style)?,
+            comment: inline_comment_text(comment)?,
+            comment_before: comment_lines(comment_before)?,
+            comment_after: comment_lines(comment_after)?,
         })
     }
 
@@ -121,22 +138,34 @@ pub struct YAMLRocksSequence {
     items: Py<PyAny>,
     tag: Option<String>,
     flow: Option<bool>,
+    #[pyo3(get)]
+    comment: Option<String>,
+    #[pyo3(get)]
+    comment_before: Option<String>,
+    #[pyo3(get)]
+    comment_after: Option<String>,
 }
 
 #[pymethods]
 impl YAMLRocksSequence {
     #[new]
-    #[pyo3(signature = (items, *, tag=None, flow=None))]
+    #[pyo3(signature = (items, *, tag=None, flow=None, comment=None, comment_before=None, comment_after=None))]
     fn new(
         py: Python<'_>,
         items: Py<PyAny>,
         tag: Option<String>,
         flow: Option<bool>,
+        comment: Option<String>,
+        comment_before: Option<String>,
+        comment_after: Option<String>,
     ) -> PyResult<Self> {
         Ok(Self {
             items: snapshot_iterable(py, items)?,
             tag,
             flow,
+            comment: inline_comment_text(comment)?,
+            comment_before: comment_lines(comment_before)?,
+            comment_after: comment_lines(comment_after)?,
         })
     }
 
@@ -170,22 +199,34 @@ pub struct YAMLRocksMapping {
     pairs: Py<PyAny>,
     tag: Option<String>,
     flow: Option<bool>,
+    #[pyo3(get)]
+    comment: Option<String>,
+    #[pyo3(get)]
+    comment_before: Option<String>,
+    #[pyo3(get)]
+    comment_after: Option<String>,
 }
 
 #[pymethods]
 impl YAMLRocksMapping {
     #[new]
-    #[pyo3(signature = (pairs, *, tag=None, flow=None))]
+    #[pyo3(signature = (pairs, *, tag=None, flow=None, comment=None, comment_before=None, comment_after=None))]
     fn new(
         py: Python<'_>,
         pairs: Py<PyAny>,
         tag: Option<String>,
         flow: Option<bool>,
+        comment: Option<String>,
+        comment_before: Option<String>,
+        comment_after: Option<String>,
     ) -> PyResult<Self> {
         Ok(Self {
             pairs: snapshot_iterable(py, pairs)?,
             tag,
             flow,
+            comment: inline_comment_text(comment)?,
+            comment_before: comment_lines(comment_before)?,
+            comment_after: comment_lines(comment_after)?,
         })
     }
 
@@ -209,6 +250,122 @@ impl YAMLRocksMapping {
     /// instead of leaking.
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.pairs)
+    }
+}
+
+/// Validate a descriptor's multi-line comment with the same rules as the node
+/// cursor, normalizing every line break to `\n` (the form the getter returns).
+fn comment_lines(text: Option<String>) -> PyResult<Option<String>> {
+    if text.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(split_comment_lines(text)?.join("\n")))
+}
+
+/// Attach descriptor comments to the existing emitter's node representation.
+///
+/// `comment_after` follows the node cursor's rule: it only has a place to render
+/// after a block collection or at the document root, so anywhere else it is a
+/// `ValueError` rather than a comment that silently disappears.
+fn with_comments(
+    mut node: YamlNode,
+    before: Option<&str>,
+    inline: Option<&str>,
+    after: Option<&str>,
+    is_root: bool,
+) -> PyResult<YamlNode> {
+    if after.is_some() && !is_root && !renders_foot(&node) {
+        return Err(PyValueError::new_err(
+            "comment_after is only supported on a block mapping, a block sequence, \
+             or the document root",
+        ));
+    }
+
+    if let Some(text) = before {
+        node.comments.head = text.lines().map(HeadComment::above).collect();
+    }
+    node.comments.inline = inline.map(str::to_owned);
+    if let Some(text) = after {
+        node.comments.foot = text.lines().map(str::to_owned).collect();
+    }
+    Ok(node)
+}
+
+/// Move the last pair's leading value comment onto its key: a comment above an
+/// entry renders above the key, just as it does through the live node comment
+/// API.
+///
+/// It works on the pair after it is pushed, and out of line, on purpose:
+/// `mapping_node` is part of the recursive lowering, and borrowing the freshly
+/// lowered value there kept a whole extra `YamlNode` in every recursion frame
+/// (about 270 bytes on Windows x64), cutting the supported nesting depth there
+/// by about 5%.
+#[inline(never)]
+fn lift_head_to_key(pairs: &mut [(YamlNode, YamlNode)]) {
+    if let Some((key, value)) = pairs.last_mut() {
+        key.comments.head.append(&mut value.comments.head);
+    }
+}
+
+/// Dismantle a partly built mapping iteratively and hand back the error that
+/// stopped it, for the rejected-key path of [`Lower::mapping_node`].
+///
+/// Out of line and cold on purpose, like [`key_comment_error`]: `mapping_node`
+/// is part of the recursive lowering, and inlined there this rarely taken path
+/// grew every recursion frame (by about 270 bytes on Windows x64), which cut the
+/// supported nesting depth there by about 5%.
+#[cold]
+#[inline(never)]
+fn abandon_mapping(key: YamlNode, pairs: Vec<(YamlNode, YamlNode)>, err: PyErr) -> PyErr {
+    crate::stack::drop_node_tree(key);
+    drop_node_pairs(pairs);
+    err
+}
+
+/// Why `key` cannot be emitted as a mapping key, if it carries comments that
+/// would break it. A key must stay on one line: an inline comment or a comment
+/// after it has no place there, and a comment anywhere inside a collection key
+/// spreads that key over several lines. A comment *before* the key itself is
+/// fine; it renders above the key's line.
+///
+/// Kept out of line: it runs at every level of the recursive lowering, and its
+/// work list would otherwise sit in every recursion frame.
+#[inline(never)]
+fn key_comment_error(key: &YamlNode) -> Option<PyErr> {
+    if key.comments.inline.is_some() || !key.comments.foot.is_empty() {
+        return Some(PyValueError::new_err(
+            "a mapping key cannot carry an inline comment or comment_after",
+        ));
+    }
+
+    let mut pending: Vec<&YamlNode> = Vec::new();
+    push_children(key, &mut pending);
+    while let Some(node) = pending.pop() {
+        let commented = !node.comments.head.is_empty()
+            || node.comments.inline.is_some()
+            || !node.comments.foot.is_empty();
+        if commented {
+            return Some(PyValueError::new_err(
+                "a comment inside a mapping key is not supported, since the key \
+                 must stay on one line",
+            ));
+        }
+        push_children(node, &mut pending);
+    }
+    None
+}
+
+/// Queue a node's direct children for an iterative walk.
+fn push_children<'a>(node: &'a YamlNode, pending: &mut Vec<&'a YamlNode>) {
+    match &node.kind {
+        YamlNodeKind::Sequence(items) => pending.extend(items),
+        YamlNodeKind::Mapping(pairs) => {
+            for (key, value) in pairs {
+                pending.push(key);
+                pending.push(value);
+            }
+        }
+        YamlNodeKind::Scalar(..) | YamlNodeKind::Alias(_) | YamlNodeKind::Null => {}
     }
 }
 
@@ -579,6 +736,12 @@ impl Lower<'_, '_, '_> {
 
     /// Turn a `represent` return value (a `Scalar`/`Sequence`/`Mapping`) into a
     /// node.
+    ///
+    /// Kept out of line on purpose: inlined into the recursive `render`, its
+    /// locals would be reserved in every recursion frame, including the deferred
+    /// path that never calls it, and the supported nesting depth on a small
+    /// (1 MB) stack drops by about 6%.
+    #[inline(never)]
     fn descriptor_to_node(
         &mut self,
         described: &Bound<'_, PyAny>,
@@ -588,13 +751,20 @@ impl Lower<'_, '_, '_> {
     ) -> PyResult<YamlNode> {
         if let Ok(scalar) = described.cast::<YAMLRocksScalar>() {
             let scalar = scalar.borrow();
-            return scalar_node(
+            let node = scalar_node(
                 scalar.value.clone(),
                 scalar.style,
                 scalar.tag.clone(),
                 self.double_quotes,
                 self.schema,
                 in_flow || in_key,
+            )?;
+            return with_comments(
+                node,
+                scalar.comment_before.as_deref(),
+                scalar.comment.as_deref(),
+                scalar.comment_after.as_deref(),
+                depth == 0,
             );
         }
         if let Ok(seq) = described.cast::<YAMLRocksSequence>() {
@@ -604,7 +774,15 @@ impl Lower<'_, '_, '_> {
                 .bind(self.py)
                 .try_iter()?
                 .collect::<PyResult<_>>()?;
-            return self.sequence_node(items, depth, seq.tag.clone(), seq.flow, in_flow, in_key);
+            let node =
+                self.sequence_node(items, depth, seq.tag.clone(), seq.flow, in_flow, in_key)?;
+            return with_comments(
+                node,
+                seq.comment_before.as_deref(),
+                seq.comment.as_deref(),
+                seq.comment_after.as_deref(),
+                depth == 0,
+            );
         }
         if let Ok(map) = described.cast::<YAMLRocksMapping>() {
             let map = map.borrow();
@@ -626,7 +804,15 @@ impl Lower<'_, '_, '_> {
                 }
                 entries.push((pair.get_item(0)?, pair.get_item(1)?));
             }
-            return self.mapping_node(entries, depth, map.tag.clone(), map.flow, in_flow, in_key);
+            let node =
+                self.mapping_node(entries, depth, map.tag.clone(), map.flow, in_flow, in_key)?;
+            return with_comments(
+                node,
+                map.comment_before.as_deref(),
+                map.comment.as_deref(),
+                map.comment_after.as_deref(),
+                depth == 0,
+            );
         }
         Err(pyo3::exceptions::PyTypeError::new_err(
             "a represent callback must return a yamlrocks.YAMLRocksScalar, \
@@ -666,8 +852,14 @@ impl Lower<'_, '_, '_> {
                     return Err(err);
                 }
             };
+            if let Some(err) = key_comment_error(&key_node) {
+                return Err(abandon_mapping(key_node, pairs, err));
+            }
             match self.lower(val, depth + 1, flow, false) {
-                Ok(val_node) => pairs.push((key_node, val_node)),
+                Ok(val_node) => {
+                    pairs.push((key_node, val_node));
+                    lift_head_to_key(&mut pairs);
+                }
                 Err(err) => {
                     crate::stack::drop_node_tree(key_node);
                     drop_node_pairs(pairs);

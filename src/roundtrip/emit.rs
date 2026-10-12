@@ -803,6 +803,10 @@ impl RoundTripEmitter {
     }
 
     fn emit_flow_sequence(&mut self, items: &[YamlNode], indent: usize) {
+        if items.iter().any(node_has_comments) {
+            self.emit_commented_flow_sequence(items, indent);
+            return;
+        }
         self.buf.push(b'[');
         self.flow_depth += 1;
         for (i, item) in items.iter().enumerate() {
@@ -817,6 +821,13 @@ impl RoundTripEmitter {
     }
 
     fn emit_flow_mapping(&mut self, pairs: &[(YamlNode, YamlNode)], indent: usize) {
+        if pairs
+            .iter()
+            .any(|(key, value)| node_has_comments(key) || node_has_comments(value))
+        {
+            self.emit_commented_flow_mapping(pairs, indent);
+            return;
+        }
         self.buf.push(b'{');
         self.flow_depth += 1;
         for (i, (key, val)) in pairs.iter().enumerate() {
@@ -831,6 +842,58 @@ impl RoundTripEmitter {
             self.emit_inline_content(val, indent);
         }
         self.flow_depth -= 1;
+        self.buf.push(b'}');
+    }
+
+    /// A flow sequence whose items carry comments, one item per line so each
+    /// comment has a line to sit on (`[` / `  # above` / `  item, # note` / `]`).
+    /// Only head and inline comments reach here: a foot comment has no place
+    /// inside a flow collection and is rejected before emission.
+    fn emit_commented_flow_sequence(&mut self, items: &[YamlNode], indent: usize) {
+        self.buf.extend_from_slice(b"[\n");
+        self.flow_depth += 1;
+        let child_indent = indent + self.step();
+        for (index, item) in items.iter().enumerate() {
+            self.emit_head(&item.comments, child_indent);
+            self.write_indent(child_indent);
+            self.emit_anchor_tag(item);
+            self.emit_inline_content(item, child_indent);
+            if index + 1 < items.len() {
+                self.buf.push(b',');
+            }
+            self.emit_inline_comment(&item.comments);
+            self.buf.push(b'\n');
+        }
+        self.flow_depth -= 1;
+        self.write_indent(indent);
+        self.buf.push(b']');
+    }
+
+    /// A flow mapping whose entries carry comments, one entry per line. A key
+    /// never carries an inline or foot comment (it must stay on one line), so
+    /// only head comments above the entry and the value's inline comment render.
+    fn emit_commented_flow_mapping(&mut self, pairs: &[(YamlNode, YamlNode)], indent: usize) {
+        self.buf.extend_from_slice(b"{\n");
+        self.flow_depth += 1;
+        let child_indent = indent + self.step();
+        for (index, (key, value)) in pairs.iter().enumerate() {
+            self.emit_head(&key.comments, child_indent);
+            self.emit_head(&value.comments, child_indent);
+            self.write_indent(child_indent);
+            self.emit_anchor_tag(key);
+            self.emit_key(key, child_indent);
+            self.end_inline_key(key);
+            self.buf.push(b' ');
+            self.emit_anchor_tag(value);
+            self.emit_inline_content(value, child_indent);
+            if index + 1 < pairs.len() {
+                self.buf.push(b',');
+            }
+            self.emit_inline_comment(&value.comments);
+            self.buf.push(b'\n');
+        }
+        self.flow_depth -= 1;
+        self.write_indent(indent);
         self.buf.push(b'}');
     }
 
@@ -1098,6 +1161,12 @@ fn key_needs_explicit(key: &YamlNode) -> bool {
 /// left untouched for byte-for-byte fidelity.
 fn synthetic_key_needs_explicit(key: &YamlNode, is_first: bool) -> bool {
     !is_first && key.synthetic && (key.tag.is_some() || key.anchor.is_some())
+}
+
+fn node_has_comments(node: &YamlNode) -> bool {
+    !node.comments.head.is_empty()
+        || node.comments.inline.is_some()
+        || !node.comments.foot.is_empty()
 }
 
 #[cfg(test)]

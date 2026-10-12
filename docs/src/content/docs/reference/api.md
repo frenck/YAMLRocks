@@ -726,28 +726,69 @@ See the [custom tags guide](/guides/tags/).
 ### `YAMLRocksScalar`
 
 A node descriptor returned by a [`dumps`](#dumps) `represent` callback to emit a
-value as a scalar. `YAMLRocksScalar(value, *, tag=None, style="auto")`.
+value as a scalar. `YAMLRocksScalar(value, *, tag=None, style="auto",
+comment=None, comment_before=None, comment_after=None)`.
 
-| Member             | Description                                                                                       |
-| ------------------ | ------------------------------------------------------------------------------------------------- |
-| `value: str`       | The scalar text to emit.                                                                          |
-| `tag: str \| None` | An optional explicit tag (including its leading `!`).                                             |
-| `style: str`       | `"auto"` (let the emitter choose), `"plain"`, `"single"`, `"double"`, `"literal"`, or `"folded"`. |
+| Member                                       | Description                                                                                       |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `value: str`                                 | The scalar text to emit.                                                                          |
+| `tag: str \| None`                           | An optional explicit tag (including its leading `!`).                                             |
+| `style: str`                                 | `"auto"` (let the emitter choose), `"plain"`, `"single"`, `"double"`, `"literal"`, or `"folded"`. |
+| `comment`, `comment_before`, `comment_after` | Optional comments; see [comments on descriptors](#comments-on-descriptors).                       |
+
+#### Comments on descriptors
+
+All three descriptors accept the keyword-only `comment`, `comment_before`, and
+`comment_after` arguments, and expose them as read-only properties. They follow
+the same rules as the [`YAMLRocksNode`](#yamlrocksnode) comment properties, so
+comments land where they would after loading and editing a document:
+
+- The text is bare, without the leading `#`.
+- `comment` is the inline comment after the value. It must be a single line;
+  a line break raises `ValueError`.
+- `comment_before` is the comment above the node. For a mapping value it
+  renders above the key. It can span several lines.
+- `comment_after` is the comment block after a block mapping or sequence, or
+  at the end of the document for the root. Anywhere else there is no place to
+  render it, so it raises `ValueError`.
+- A mapping key must stay on one line, so a key accepts only `comment_before`.
+- Inside a flow collection, comments put each entry on its own line.
+
+```python
+import yamlrocks
+
+S = yamlrocks.YAMLRocksScalar
+
+
+def represent(value):
+    return value if isinstance(value, S) else None
+
+
+yamlrocks.dumps(
+    {"name": S("app", comment="the service name", comment_before="Service")},
+    represent=represent,
+)
+# b'# Service\nname: app # the service name\n'
+```
 
 ### `YAMLRocksSequence`
 
 A node descriptor returned by a `represent` callback to emit a value as a
-sequence. `YAMLRocksSequence(items, *, tag=None, flow=None)`. `items` is an
+sequence. `YAMLRocksSequence(items, *, tag=None, flow=None, comment=None,
+comment_before=None, comment_after=None)`. `items` is an
 iterable of host objects, each re-dispatched through `represent`; `flow=True`
-forces flow (`[a, b]`) style. See
+forces flow (`[a, b]`) style. The comment arguments work as for
+[`YAMLRocksScalar`](#comments-on-descriptors). See
 [full control with `represent`](/guides/dumping/#full-control-with-represent).
 
 ### `YAMLRocksMapping`
 
 A node descriptor returned by a `represent` callback to emit a value as a
-mapping. `YAMLRocksMapping(pairs, *, tag=None, flow=None)`. `pairs` is an
-iterable of `(key, value)` tuples, each re-dispatched through `represent`;
-`flow=True` forces flow (`{a: b}`) style.
+mapping. `YAMLRocksMapping(pairs, *, tag=None, flow=None, comment=None,
+comment_before=None, comment_after=None)`. `pairs` is an iterable of
+`(key, value)` tuples, each re-dispatched through `represent`; `flow=True`
+forces flow (`{a: b}`) style. The comment arguments work as for
+[`YAMLRocksScalar`](#comments-on-descriptors).
 
 ### `YAMLRocksTags`
 

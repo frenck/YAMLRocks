@@ -491,7 +491,7 @@ def load_all(
     tag_handler: Callable[[str, Any], Any] | None = None,
     tags: dict[str, Callable[[Any], Any]] | None = None,
 ) -> list[Any]:
-    """Parse every document from a path or file-like object into a list."""
+    """Parse every document into a list; OPT_ROUND_TRIP returns document objects."""
     data, _ = _read_source(source)
     origin = None if hasattr(source, "read") else os.fspath(source)
     with _origin(origin):

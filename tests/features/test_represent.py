@@ -13,6 +13,7 @@ import dataclasses
 import datetime
 import decimal
 import enum
+import sys
 import sysconfig
 
 import pytest
@@ -32,12 +33,25 @@ def _deep_dict(depth: int) -> dict:
     return doc
 
 
-# The represent lowering re-enters Python at every level. CPython on musl budgets
-# a fixed C stack of about 1 MB instead of asking the OS, so the lowering tops out
-# near 275 levels there (a clean depth error past that), versus the 1000-level cap
-# elsewhere. Deep-nesting tests stay under that ceiling on musl.
+# The represent lowering re-enters Python at every level, so how deep it can go
+# depends on the thread's stack (a clean depth error past that), and the deep-
+# nesting tests stay well under each platform's ceiling:
+#
+# - CPython on musl budgets a fixed C stack of about 1 MB instead of asking the
+#   OS, so the lowering tops out near 275 levels there.
+# - On 64-bit Windows, CPython 3.12 tops out just above 500 levels (later
+#   versions near 760). A depth of 500 left almost no margin, so any change that
+#   grew the recursion frame by a few bytes failed there.
+#
+# Everywhere else the 1000-level cap applies.
 _ON_MUSL = "musl" in (sysconfig.get_config_var("HOST_GNU_TYPE") or "")
-_DEEP_REPRESENT = 250 if _ON_MUSL else 500
+_ON_WINDOWS_312 = sys.platform == "win32" and sys.version_info[:2] == (3, 12)
+if _ON_MUSL:
+    _DEEP_REPRESENT = 250
+elif _ON_WINDOWS_312:
+    _DEEP_REPRESENT = 400
+else:
+    _DEEP_REPRESENT = 500
 
 
 def test_scalar_with_custom_tag_forces_single_quotes():

@@ -124,6 +124,12 @@ struct RoundTripEmitter {
     /// that reaches here as a bare plain scalar.
     flow_depth: usize,
     emitting_key: bool,
+    /// The comments of the node whose inline comment was written last. A block
+    /// scalar's inline comment can be written in two places: on the `key:` line
+    /// when the scalar starts below it, or on the scalar's own header line. Both
+    /// paths check this so the comment is written once, by whichever comes
+    /// first. Compared by address; nodes do not move while emitting.
+    inline_comment_written: Option<*const Comments>,
 }
 
 impl RoundTripEmitter {
@@ -134,6 +140,7 @@ impl RoundTripEmitter {
             null_style,
             flow_depth: 0,
             emitting_key: false,
+            inline_comment_written: None,
         }
     }
 
@@ -660,6 +667,25 @@ impl RoundTripEmitter {
                         return;
                     }
                 }
+                // A block scalar's trailing comment belongs on its header line
+                // (`key: | # note`). After the body it would sit on a line of
+                // its own, and for an empty body that line would be read back
+                // as the scalar's content.
+                if let (Some(_), ScalarStyle::Literal | ScalarStyle::Folded) =
+                    (&node.comments.inline, style)
+                {
+                    if self.flow_depth == 0 {
+                        let marker = if *style == ScalarStyle::Literal {
+                            b'|'
+                        } else {
+                            b'>'
+                        };
+                        crate::emit_util::push_block_scalar_header(&mut self.buf, value, marker);
+                        self.emit_inline_comment(&node.comments);
+                        crate::emit_util::push_block_scalar_body(&mut self.buf, value, indent);
+                        return;
+                    }
+                }
                 self.emit_scalar(value, *style, indent);
             }
             YamlNodeKind::Alias(name) => {
@@ -833,17 +859,29 @@ impl RoundTripEmitter {
     }
 
     fn emit_inline_comment(&mut self, comments: &Comments) {
-        if let Some(ref comment) = comments.inline {
-            // Restore the original padding before the `#` (alignment), falling
-            // back to a single space for a synthetic comment (`inline_spaces` 0).
-            for _ in 0..comments.inline_spaces.max(1) {
-                self.buf.push(b' ');
-            }
-            self.buf.push(b'#');
-            if !comment.is_empty() {
-                self.buf.push(b' ');
-                self.buf.extend_from_slice(comment.as_bytes());
-            }
+        let Some(ref comment) = comments.inline else {
+            return;
+        };
+        // Already written for this node, on its `key:` line or its header line.
+        let this = comments as *const Comments;
+        if self.inline_comment_written == Some(this) {
+            return;
+        }
+
+        self.push_inline_comment(comment, comments.inline_spaces);
+        self.inline_comment_written = Some(this);
+    }
+
+    /// Write ` # comment`, restoring the original padding before the `#`
+    /// (alignment) or a single space for a synthetic comment (`spaces` 0).
+    fn push_inline_comment(&mut self, comment: &str, spaces: u32) {
+        for _ in 0..spaces.max(1) {
+            self.buf.push(b' ');
+        }
+        self.buf.push(b'#');
+        if !comment.is_empty() {
+            self.buf.push(b' ');
+            self.buf.extend_from_slice(comment.as_bytes());
         }
     }
 

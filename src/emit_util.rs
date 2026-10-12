@@ -169,6 +169,15 @@ pub(crate) fn double_quoted_body(value: &str) -> String {
 /// Shared by the fast encoder and the round-trip emitter so both write block
 /// scalars, and their chomping edge cases, identically.
 pub(crate) fn push_block_scalar(buf: &mut Vec<u8>, value: &str, marker: u8, body_indent: usize) {
+    push_block_scalar_header(buf, value, marker);
+    push_block_scalar_body(buf, value, body_indent);
+}
+
+/// The header of a block scalar: the `|`/`>` marker and its chomping indicator,
+/// without the line break that ends the header line. Split from
+/// [`push_block_scalar_body`] so a comment can close the header line
+/// (`key: | # note`), the one place a block scalar's trailing comment can go.
+pub(crate) fn push_block_scalar_header(buf: &mut Vec<u8>, value: &str, marker: u8) {
     let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
     let body = value.trim_end_matches('\n');
 
@@ -179,6 +188,14 @@ pub(crate) fn push_block_scalar(buf: &mut Vec<u8>, value: &str, marker: u8, body
         1 => {}
         _ => buf.push(b'+'),
     }
+}
+
+/// The rest of a block scalar after its header: the line break that ends the
+/// header line, then the body lines at the absolute column `body_indent`.
+pub(crate) fn push_block_scalar_body(buf: &mut Vec<u8>, value: &str, body_indent: usize) {
+    let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
+    let body = value.trim_end_matches('\n');
+
     buf.push(b'\n');
 
     for line in body.split('\n') {

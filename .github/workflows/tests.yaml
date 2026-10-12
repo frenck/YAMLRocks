@@ -134,3 +134,26 @@ jobs:
         # The pure engine (scanner, parser, resolver, decode, encode, ...) has
         # direct unit tests; the Python suite covers the PyO3 boundary on top.
         run: cargo test --locked --lib
+
+  msrv:
+    name: Rust minimum supported version
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 🔍 Read rust-version from Cargo.toml
+        # Cargo.toml is the single source of the minimum version, so this job
+        # cannot drift from what the crate declares.
+        id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" >> "${GITHUB_OUTPUT}"
+      - name: 🏗 Set up Rust at the minimum supported version
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # zizmor: ignore[superfluous-actions,stale-action-refs,impostor-commit] stable; canonical pinned Rust toolchain installer
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - name: 🚀 Check the crate builds on it
+        # With the locked dependencies: a dependency update that needs a newer
+        # Rust fails here, and the rust-version bump becomes a deliberate step
+        # instead of the declaration silently going stale.
+        run: cargo check --locked --lib

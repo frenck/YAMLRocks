@@ -109,6 +109,26 @@ yamlrocks.loads_all(source)
 # [{'a': 1}, {'b': 2}]
 ```
 
+With `OPT_ROUND_TRIP`, every entry is an independent
+[`YAMLRocksDocument`](#yamlrocksdocument). Each one keeps its own comments,
+anchors, and `%YAML` version, and editing one leaves the others alone. An
+explicit empty document (a bare `---`) is kept as a null document. Joining the
+`to_yaml()` output of the unedited documents reproduces the original stream. A
+stream with no documents at all (only comments) returns an empty list, as it
+does without `OPT_ROUND_TRIP`, so those comments are not kept; `loads` with
+`OPT_ROUND_TRIP` keeps them.
+
+```python
+import yamlrocks
+
+docs = yamlrocks.loads_all(
+    b"name: app\n---\nport: 8080  # default\n", option=yamlrocks.OPT_ROUND_TRIP
+)
+docs[1]["port"] = 9090
+docs[1].to_yaml()
+# b'---\nport: 9090  # default\n'
+```
+
 ### `load`
 
 ```python
@@ -475,6 +495,7 @@ to serialize.
 | Member                    | Description                                                                                             |
 | ------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `origin: str \| None`     | The path the document was loaded from, or `None`.                                                       |
+| `explicit_start: bool`    | Whether the document began with an explicit `---` marker. Read-only.                                    |
 | `__len__()`               | Number of top-level entries.                                                                            |
 | `__getitem__(key)`        | Read a value. A nested mapping or sequence returns a [`YAMLRocksDocumentView`](#yamlrocksdocumentview). |
 | `__setitem__(key, value)` | Set a value; the change is reflected by `to_yaml`.                                                      |

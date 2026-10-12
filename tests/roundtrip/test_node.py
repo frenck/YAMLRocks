@@ -730,3 +730,35 @@ def test_locate_scalar_in_an_included_file_carries_that_file(tmp_path):
     assert node.file is not None
     assert node.file.endswith("sub.yaml")
     assert (node.line, node.column) == (2, 7)
+
+
+@pytest.mark.parametrize("line_break", ["\n", "\r", "\r\n", "\x85", "\u2028", "\u2029"])
+def test_inline_comment_rejects_line_breaks(line_break):
+    """An inline comment with a line break is rejected, since the rest would be emitted as document content."""
+    doc = yamlrocks.loads(b"k: v\n", option=yamlrocks.OPT_ROUND_TRIP)
+    with pytest.raises(ValueError, match="cannot contain a line break"):
+        doc.node["k"].comment = f"note{line_break}injected: 1"
+    assert doc.to_yaml() == b"k: v\n"
+
+
+@pytest.mark.parametrize("attr", ["comment_before", "comment_after"])
+@pytest.mark.parametrize("line_break", ["\n", "\r", "\r\n"])
+def test_multi_line_comments_split_on_every_line_break(attr, line_break):
+    """Each YAML line break starts a new comment line, so no text escapes the comment."""
+    yaml = pytest.importorskip("yaml")
+    doc = yamlrocks.loads(b"m:\n  k: v\n", option=yamlrocks.OPT_ROUND_TRIP)
+    setattr(doc.node["m"], attr, f"first{line_break}injected: 1")
+    out = doc.to_yaml()
+    assert getattr(doc.node["m"], attr) == "first\ninjected: 1"
+    assert yamlrocks.loads(out) == {"m": {"k": "v"}}
+    assert yaml.safe_load(out) == {"m": {"k": "v"}}
+
+
+@pytest.mark.parametrize("attr", ["comment_before", "comment_after"])
+@pytest.mark.parametrize("line_break", ["\x85", "\u2028", "\u2029"])
+def test_multi_line_comments_reject_yaml_11_line_breaks(attr, line_break):
+    """NEL, LS, and PS are rejected: a YAML 1.1 reader such as PyYAML breaks lines on them."""
+    doc = yamlrocks.loads(b"m:\n  k: v\n", option=yamlrocks.OPT_ROUND_TRIP)
+    with pytest.raises(ValueError, match="NEL, LS, or PS"):
+        setattr(doc.node["m"], attr, f"first{line_break}injected: 1")
+    assert doc.to_yaml() == b"m:\n  k: v\n"

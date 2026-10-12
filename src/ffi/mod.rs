@@ -433,15 +433,12 @@ pub fn loads_all(
 ) -> PyResult<Py<PyAny>> {
     let input = extract_input(data)?;
     let opts = option.unwrap_or(0);
-    // `loads_all` is a multi-document, value-returning API: it takes no
-    // `include_dir` and returns a list, so include/secret/env-var resolution and
-    // the single-document round-trip option cannot be honored. Reject them rather
-    // than silently ignoring them, which would hand back unresolved tags.
-    const UNSUPPORTED: u64 = OPT_INCLUDES | OPT_SECRETS | OPT_ENV_VAR | OPT_ROUND_TRIP;
+    // Includes and external config resolution still require `loads()`.
+    const UNSUPPORTED: u64 = OPT_INCLUDES | OPT_SECRETS | OPT_ENV_VAR;
     if opts & UNSUPPORTED != 0 {
         return Err(PyValueError::new_err(
-            "loads_all() does not support OPT_INCLUDES, OPT_SECRETS, OPT_ENV_VAR, or \
-             OPT_ROUND_TRIP; use loads() for include resolution and round-trip editing",
+            "loads_all() does not support OPT_INCLUDES, OPT_SECRETS, or OPT_ENV_VAR; \
+             use loads() for include resolution",
         ));
     }
     let pyyaml_compat = opts & OPT_PYYAML_COMPAT != 0;
@@ -469,6 +466,47 @@ pub fn loads_all(
         handler,
         passthrough: opts & OPT_PASSTHROUGH_TAG != 0,
     };
+
+    if opts & OPT_ROUND_TRIP != 0 {
+        let documents = composer::compose_all_with_source(&input)
+            .map_err(|e| errors::parse_error(py, &e, None))?;
+        let list = PyList::empty(py);
+        for (node, source) in documents {
+            let document_schema = match crate::version::leading_yaml_version(&source) {
+                Some(version) => {
+                    Schema::new(crate::version::selects_yaml_11(version), pyyaml_compat)
+                }
+                None => Schema::new(
+                    opts & (OPT_YAML_1_1 | OPT_UPGRADE_1_1) != 0 || pyyaml_compat,
+                    pyyaml_compat,
+                ),
+            };
+            let mut nodes = vec![node];
+            let upgrade = opts & OPT_UPGRADE_1_1 != 0;
+            prepare_roundtrip_nodes(
+                py,
+                &mut nodes,
+                document_schema,
+                upgrade,
+                dup_error,
+                dup_warn,
+                opts & OPT_YAML_1_1_WARN != 0 && document_schema.is_yaml_11(),
+            )?;
+            let doc = YAMLRocksDocument::new(nodes)
+                .with_source(source)
+                .with_null_style(null_style_from_opts(opts)?)
+                .with_double_quotes(opts & OPT_SINGLE_QUOTES == 0)
+                .with_upgraded(upgrade)
+                .with_schema(if upgrade {
+                    Schema::Yaml12
+                } else {
+                    document_schema
+                })
+                .with_resolve_timestamps(resolve_timestamps);
+            list.append(Py::new(py, doc)?)?;
+        }
+        return Ok(list.into_any().unbind());
+    }
 
     // Annotated mode needs source spans, so each document routes through the
     // rich AST rather than the fast-path `Value` tree. Empty `---` documents are
@@ -1061,6 +1099,42 @@ fn bind_registry<'py>(
     }
 }
 
+/// The checks and rewrites every round-trip document goes through after
+/// composing, shared by `loads` and `loads_all` so the two cannot drift apart.
+///
+/// The order matters: 1.1-only syntax is flagged against the original nodes,
+/// before an upgrade rewrites them to canonical 1.2, and duplicate keys are
+/// checked on the nodes the document will actually hold.
+fn prepare_roundtrip_nodes(
+    py: Python<'_>,
+    nodes: &mut [YamlNode],
+    yaml_schema: Schema,
+    upgrade: bool,
+    dup_error: bool,
+    dup_warn: bool,
+    yaml_11_warn: bool,
+) -> PyResult<()> {
+    if yaml_11_warn {
+        for warning in composer::collect_yaml_11_divergences(nodes, yaml_schema) {
+            errors::log_warning(py, &warning);
+        }
+    }
+
+    if upgrade {
+        crate::roundtrip::upgrade::upgrade_to_yaml_1_2(nodes, yaml_schema);
+    }
+
+    if dup_error {
+        composer::check_duplicate_keys(nodes, yaml_schema)
+            .map_err(|e| errors::duplicate_key_error(py, &e, None))?;
+    } else if dup_warn {
+        for warning in composer::collect_duplicate_keys(nodes, yaml_schema) {
+            errors::log_warning(py, &warning);
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn loads_roundtrip(
     py: Python<'_>,
@@ -1101,29 +1175,19 @@ fn loads_roundtrip(
         (nodes, Vec::new(), Vec::new())
     };
 
-    // Flag 1.1-only syntax against the original 1.1 nodes, before any upgrade
-    // rewrites them to canonical 1.2.
-    if yaml_11_warn {
-        for warning in composer::collect_yaml_11_divergences(&nodes, yaml_schema) {
-            errors::log_warning(py, &warning);
-        }
-    }
-
     // Round-trip intentionally returns a `YAMLRocksDocument` even for empty or
     // comment-only input: the fast and annotated paths drop to `None` because
     // there is no value, but round-trip must keep the source and comments so it
     // can re-emit them byte-for-byte.
-    if upgrade {
-        crate::roundtrip::upgrade::upgrade_to_yaml_1_2(&mut nodes, yaml_schema);
-    }
-    if dup_error {
-        composer::check_duplicate_keys(&nodes, yaml_schema)
-            .map_err(|e| errors::duplicate_key_error(py, &e, None))?;
-    } else if dup_warn {
-        for warning in composer::collect_duplicate_keys(&nodes, yaml_schema) {
-            errors::log_warning(py, &warning);
-        }
-    }
+    prepare_roundtrip_nodes(
+        py,
+        &mut nodes,
+        yaml_schema,
+        upgrade,
+        dup_error,
+        dup_warn,
+        yaml_11_warn,
+    )?;
     validate_schema_root(py, &nodes, schema, yaml_schema.is_yaml_11())?;
     // The schema governs how an edited-in scalar is quoted, so it must match what
     // the document re-emits as. An upgraded document is rewritten to canonical

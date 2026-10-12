@@ -613,11 +613,29 @@ def test_block_scalar_at_end_of_input_keeps_whitespace_content():
     assert yamlrocks.loads(source)["a"] == "x\n "
     doc = yamlrocks.loads(source, option=RT)
     doc["z"] = 9
-    # Only the over-indented content is pinned here. A keep-chomped (`|+`)
-    # scalar at the very end of input without a final line break also gains
-    # one on any re-emit (`|+` with `x` reloads as `x\n`); that predates #422
-    # and is tracked separately.
-    assert yamlrocks.loads(doc.to_yaml())["a"].startswith("x\n ")
+    assert yamlrocks.loads(doc.to_yaml()) == {"z": 9, "a": "x\n "}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        b"z: 0\na: |+\n  x",
+        b"z: 0\na: >+\n  x",
+        b"z: 0\na: |+\n  x\n   ",
+        b"- 0\n- |+\n  x",
+    ],
+)
+def test_keep_block_scalar_at_end_of_input_keeps_its_value(source):
+    """A keep-chomped block scalar that ends the input without a line break gains none when something else is edited."""
+    doc = yamlrocks.loads(source, option=RT)
+    if source.startswith(b"-"):
+        doc[0] = 9
+        expected = source.replace(b"- 0", b"- 9", 1)
+    else:
+        doc["z"] = 9
+        expected = source.replace(b"z: 0", b"z: 9", 1)
+    assert doc.to_yaml() == expected
+    assert yamlrocks.loads(doc.to_yaml()) == yamlrocks.loads(expected)
 
 
 def test_empty_key_reemitted_after_edit():

@@ -117,6 +117,9 @@ following ship in v0.7 except line width:
    diverging. It is the most negotiable per the reference consumer and lands later
    if needed.
 
+   _Update:_ `width` is now supported on this path, with the same wrapping as a
+   plain `dumps` (the parity tests cover it).
+
 **Rationale**:
 
 - It is the general form of `serializers=`/`default=`, not a competing API: those

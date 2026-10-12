@@ -869,13 +869,47 @@ def test_deferred_root_tagged_collection_indents_under_tag():
     )
 
 
-def test_width_with_represent_raises():
-    """`width` line-wrapping is not implemented on the represent path."""
-    with pytest.raises(ValueError, match="width is not supported"):
-        yamlrocks.dumps({"k": "x" * 200}, width=80, represent=lambda _: None)
+def test_width_with_represent():
+    """The represent path honors width without changing the decoded value."""
+    data = {"k": "some words that should wrap over several lines"}
+    output = yamlrocks.dumps(data, width=16, represent=lambda _: None)
+    assert len(output.splitlines()) > 1
+    assert yamlrocks.loads(output) == data
 
 
-# --- Regressions from the pre-merge audit rounds ---
+@pytest.mark.parametrize("width", [8, 20, 80])
+@pytest.mark.parametrize(
+    "option_name", ["default", "flow", "single_quotes", "indent_4"]
+)
+def test_deferred_output_matches_plain_dumps_with_width(option_name, width):
+    """With ``width``, a fully deferred callback still reproduces plain dumps byte-for-byte."""
+    option = _PARITY_OPTIONS[option_name]
+    long_values = [
+        "some words that should wrap over several lines and then some more",
+        ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"],
+        {"nested": "a long sentence with many words in it to be wrapped"},
+    ]
+    for base in [*_parity_bases(), *long_values]:
+        try:
+            hash(base)
+            hashable = True
+        except TypeError:
+            hashable = False
+        for doc in _parity_positions(base, hashable):
+            plain = yamlrocks.dumps(doc, option=option, width=width)
+            try:
+                deferred = yamlrocks.dumps(
+                    doc, option=option, width=width, represent=lambda _: None
+                )
+            except ValueError as err:
+                # The accepted shared-tagged-value divergence, as above.
+                if "shared value" in str(err):
+                    continue
+                raise
+            # The accepted aliasing divergence, as above.
+            if b"&id" in deferred and b"&id" not in plain:
+                continue
+            assert deferred == plain, f"{base!r} in {doc!r} [{option_name}, {width}]"
 
 
 def test_alias_as_mapping_key_reloads():

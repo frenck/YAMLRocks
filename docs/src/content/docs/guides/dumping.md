@@ -624,8 +624,9 @@ as it would from a plain `dumps`. `represent` is offered every value, including
 those nested inside a deferred set, dataclass, or `default` result. `OPT_SORT_KEYS`
 (by type and value, numbers numerically), `OPT_FLOW_STYLE`, `OPT_EXPLICIT_START`,
 `OPT_EXPLICIT_END`, `OPT_INDENT_4`, `OPT_INDENTLESS_SEQUENCES`, the null-style
-flags, and the quote-style flag all apply, to what `represent` returns and to
-deferred values alike.
+flags, the quote-style flag, and `width` all apply, to what `represent` returns
+and to deferred values alike. With `width`, mapping keys always stay on one line,
+and a `literal` or `folded` block scalar keeps its own layout.
 
 Deferred output is byte-for-byte identical to a plain `dumps` in all but a few
 documented corners: a shared object gets a PyYAML-style anchor/alias where a
@@ -634,8 +635,7 @@ raises, since a YAML alias cannot carry the tag); a mapping key that needs a
 conversion (a `datetime`, `UUID`, `Path`, `Decimal`, `Enum`, or custom object)
 keeps insertion order under `OPT_SORT_KEYS` rather than being sorted by its
 converted form (`bytes` keys sort with the strings, as a plain `dumps` does);
-`width` line-wrapping is not implemented (passing `width` with `represent`
-raises rather than silently ignoring it); and because the lowering re-enters
+and because the lowering re-enters
 Python for every value, the supported nesting depth is bounded by the thread's
 stack (hundreds of levels; deeper raises a clean error where a plain `dumps`
 goes further).

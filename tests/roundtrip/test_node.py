@@ -762,3 +762,22 @@ def test_multi_line_comments_reject_yaml_11_line_breaks(attr, line_break):
     with pytest.raises(ValueError, match="NEL, LS, or PS"):
         setattr(doc.node["m"], attr, f"first{line_break}injected: 1")
     assert doc.to_yaml() == b"m:\n  k: v\n"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (b"k: |\n  text\nz: 1\n", b"k: | # added\n  text\nz: 1\n"),
+        (b"k: |-\n\nz: 1\n", b"k: |- # added\n\nz: 1\n"),
+        (b"k: >\n  folded text\nz: 1\n", b"k: > # added\n  folded text\nz: 1\n"),
+    ],
+)
+def test_block_scalar_comment_goes_on_its_header_line(source, expected):
+    """A comment set on a block scalar renders on the header line, never as a line the scalar would read back as content."""
+    yaml = pytest.importorskip("yaml")
+    doc = yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP)
+    doc.node["k"].comment = "added"
+    out = doc.to_yaml()
+    assert out == expected
+    assert yamlrocks.loads(out) == yamlrocks.loads(source)
+    assert yaml.safe_load(out) == yaml.safe_load(source)

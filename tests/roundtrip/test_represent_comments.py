@@ -142,3 +142,14 @@ def test_key_comments_must_keep_the_key_on_one_line():
         yamlrocks.dumps(
             yamlrocks.YAMLRocksMapping([(flow_key, 1)]), represent=represent
         )
+
+
+def test_width_never_folds_a_key_in_a_commented_flow_mapping():
+    """A flow mapping laid out one entry per line for its comments still keeps every key on one line under width."""
+    yaml = pytest.importorskip("yaml")
+    value = yamlrocks.YAMLRocksScalar("v", comment_before="above")
+    mapping = yamlrocks.YAMLRocksMapping([("key with several words", value)], flow=True)
+    output = yamlrocks.dumps(mapping, represent=represent, width=8)
+    assert b"key with several words" in output
+    assert yamlrocks.loads(output) == {"key with several words": "v"}
+    assert yaml.safe_load(output) == {"key with several words": "v"}

@@ -881,7 +881,7 @@ impl RoundTripEmitter {
             self.emit_head(&value.comments, child_indent);
             self.write_indent(child_indent);
             self.emit_anchor_tag(key);
-            self.emit_inline_content(key, child_indent);
+            self.emit_key(key, child_indent);
             self.end_inline_key(key);
             self.buf.push(b' ');
             self.emit_anchor_tag(value);

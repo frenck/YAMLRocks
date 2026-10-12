@@ -169,6 +169,15 @@ pub(crate) fn double_quoted_body(value: &str) -> String {
 /// Shared by the fast encoder and the round-trip emitter so both write block
 /// scalars, and their chomping edge cases, identically.
 pub(crate) fn push_block_scalar(buf: &mut Vec<u8>, value: &str, marker: u8, body_indent: usize) {
+    push_block_scalar_header(buf, value, marker);
+    push_block_scalar_body(buf, value, body_indent);
+}
+
+/// The header of a block scalar: the `|`/`>` marker and its chomping indicator,
+/// without the line break that ends the header line. Split from
+/// [`push_block_scalar_body`] so a comment can close the header line
+/// (`key: | # note`), the one place a block scalar's trailing comment can go.
+pub(crate) fn push_block_scalar_header(buf: &mut Vec<u8>, value: &str, marker: u8) {
     let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
     let body = value.trim_end_matches('\n');
 
@@ -179,6 +188,14 @@ pub(crate) fn push_block_scalar(buf: &mut Vec<u8>, value: &str, marker: u8, body
         1 => {}
         _ => buf.push(b'+'),
     }
+}
+
+/// The rest of a block scalar after its header: the line break that ends the
+/// header line, then the body lines at the absolute column `body_indent`.
+pub(crate) fn push_block_scalar_body(buf: &mut Vec<u8>, value: &str, body_indent: usize) {
+    let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
+    let body = value.trim_end_matches('\n');
+
     buf.push(b'\n');
 
     for line in body.split('\n') {
@@ -209,6 +226,45 @@ pub(crate) fn push_double_quoted(buf: &mut Vec<u8>, value: &str) {
     buf.push(b'"');
     buf.extend_from_slice(double_quoted_body(value).as_bytes());
     buf.push(b'"');
+}
+
+/// Byte column at the current output position.
+pub(crate) fn current_column(buf: &[u8]) -> usize {
+    buf.iter()
+        .rposition(|&byte| byte == b'\n')
+        .map_or(buf.len(), |newline| buf.len() - newline - 1)
+}
+
+/// Fold an escaped quoted-scalar body at isolated spaces, preserving its value.
+pub(crate) fn push_folded(buf: &mut Vec<u8>, content: &str, cont_indent: usize, width: usize) {
+    let bytes = content.as_bytes();
+    let breakable = |i: usize| -> bool {
+        bytes[i] == b' '
+            && i > 0
+            && bytes[i - 1] != b' '
+            && bytes.get(i + 1).is_some_and(|&b| b != b' ')
+    };
+    let next_break = |from: usize| (from..bytes.len()).find(|&i| breakable(i));
+
+    let mut col = current_column(buf);
+    let mut pos = 0;
+    while let Some(brk) = next_break(pos) {
+        buf.extend_from_slice(&bytes[pos..brk]);
+        col += brk - pos;
+        // Look ahead to the next unbreakable piece to decide fold vs. space.
+        let after = brk + 1;
+        let piece_end = next_break(after).unwrap_or(bytes.len());
+        if col + 1 + (piece_end - after) > width {
+            buf.push(b'\n');
+            buf.resize(buf.len() + cont_indent, b' ');
+            col = cont_indent;
+        } else {
+            buf.push(b' ');
+            col += 1;
+        }
+        pos = after;
+    }
+    buf.extend_from_slice(&bytes[pos..]);
 }
 
 #[cfg(test)]

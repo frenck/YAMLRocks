@@ -88,6 +88,8 @@ pub struct DumpConfig {
     /// fast encoder's quote preference. The default (off) keeps the loaded-
     /// document behavior: double quotes, which can escape anything.
     pub single_quotes: bool,
+    /// Soft output width; zero leaves lines unwrapped.
+    pub width: usize,
 }
 
 /// Emit a single synthetic document tree with dump-shaping options applied. Used
@@ -121,6 +123,13 @@ struct RoundTripEmitter {
     /// inside flow. An edited-in value assigned into a flow collection is the case
     /// that reaches here as a bare plain scalar.
     flow_depth: usize,
+    emitting_key: bool,
+    /// The comments of the node whose inline comment was written last. A block
+    /// scalar's inline comment can be written in two places: on the `key:` line
+    /// when the scalar starts below it, or on the scalar's own header line. Both
+    /// paths check this so the comment is written once, by whichever comes
+    /// first. Compared by address; nodes do not move while emitting.
+    inline_comment_written: Option<*const Comments>,
 }
 
 impl RoundTripEmitter {
@@ -130,6 +139,8 @@ impl RoundTripEmitter {
             dump: DumpConfig::default(),
             null_style,
             flow_depth: 0,
+            emitting_key: false,
+            inline_comment_written: None,
         }
     }
 
@@ -248,7 +259,7 @@ impl RoundTripEmitter {
                 continue;
             }
             self.emit_anchor_tag(key);
-            self.emit_inline_content(key, indent);
+            self.emit_key(key, indent);
             self.end_inline_key(key);
             self.emit_value_after_colon(val, indent);
         }
@@ -271,7 +282,7 @@ impl RoundTripEmitter {
                 continue;
             }
             self.emit_anchor_tag(key);
-            self.emit_inline_content(key, indent);
+            self.emit_key(key, indent);
             self.end_inline_key(key);
             self.emit_value_after_colon(val, indent);
         }
@@ -314,7 +325,7 @@ impl RoundTripEmitter {
             _ => {
                 self.buf.push(b' ');
                 self.emit_anchor_tag(key);
-                self.emit_inline_content(key, indent + self.step());
+                self.emit_key(key, indent + self.step());
                 self.end_line();
             }
         }
@@ -656,6 +667,25 @@ impl RoundTripEmitter {
                         return;
                     }
                 }
+                // A block scalar's trailing comment belongs on its header line
+                // (`key: | # note`). After the body it would sit on a line of
+                // its own, and for an empty body that line would be read back
+                // as the scalar's content.
+                if let (Some(_), ScalarStyle::Literal | ScalarStyle::Folded) =
+                    (&node.comments.inline, style)
+                {
+                    if self.flow_depth == 0 {
+                        let marker = if *style == ScalarStyle::Literal {
+                            b'|'
+                        } else {
+                            b'>'
+                        };
+                        crate::emit_util::push_block_scalar_header(&mut self.buf, value, marker);
+                        self.emit_inline_comment(&node.comments);
+                        crate::emit_util::push_block_scalar_body(&mut self.buf, value, indent);
+                        return;
+                    }
+                }
                 self.emit_scalar(value, *style, indent);
             }
             YamlNodeKind::Alias(name) => {
@@ -665,6 +695,13 @@ impl RoundTripEmitter {
             YamlNodeKind::Sequence(items) => self.emit_flow_sequence(items, indent),
             YamlNodeKind::Mapping(pairs) => self.emit_flow_mapping(pairs, indent),
         }
+    }
+
+    fn emit_key(&mut self, key: &YamlNode, indent: usize) {
+        let was_key = self.emitting_key;
+        self.emitting_key = true;
+        self.emit_inline_content(key, indent);
+        self.emitting_key = was_key;
     }
 
     fn emit_scalar(&mut self, value: &str, style: ScalarStyle, body_indent: usize) {
@@ -689,9 +726,18 @@ impl RoundTripEmitter {
             ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => {
                 self.push_quoted(value);
             }
+            ScalarStyle::Plain
+                if self.dump.width > 0
+                    && !self.emitting_key
+                    && crate::emit_util::current_column(&self.buf) + value.len()
+                        > self.dump.width
+                    && crate::encode::has_breakable_space(value) =>
+            {
+                self.push_quoted(value);
+            }
             ScalarStyle::Plain => self.buf.extend_from_slice(value.as_bytes()),
-            ScalarStyle::SingleQuoted => crate::emit_util::push_single_quoted(&mut self.buf, value),
-            ScalarStyle::DoubleQuoted => crate::emit_util::push_double_quoted(&mut self.buf, value),
+            ScalarStyle::SingleQuoted => self.push_styled_quotes(value, true),
+            ScalarStyle::DoubleQuoted => self.push_styled_quotes(value, false),
             // Defensive: a block scalar is invalid inside a flow collection. The
             // producers downgrade these before they get here (the represent
             // lowering, the assignment style rules); if a future producer misses
@@ -709,10 +755,40 @@ impl RoundTripEmitter {
     /// prefers them and the value allows it, mirroring the fast encoder's
     /// `emit_quoted_string`.
     fn push_quoted(&mut self, value: &str) {
-        if self.dump.single_quotes && crate::emit_util::single_quotable(value, false) {
+        self.push_styled_quotes(
+            value,
+            self.dump.single_quotes && crate::emit_util::single_quotable(value, false),
+        );
+    }
+
+    fn push_styled_quotes(&mut self, value: &str, single: bool) {
+        if self.dump.width > 0 && !self.emitting_key {
+            let indent = crate::emit_util::current_column(&self.buf).max(1);
+            let (quote, body) = if single {
+                (b'\'', crate::emit_util::single_quoted_body(value))
+            } else {
+                (b'"', crate::emit_util::double_quoted_body(value))
+            };
+            self.buf.push(quote);
+            crate::emit_util::push_folded(&mut self.buf, &body, indent, self.dump.width);
+            self.buf.push(quote);
+        } else if single {
             crate::emit_util::push_single_quoted(&mut self.buf, value);
         } else {
             crate::emit_util::push_double_quoted(&mut self.buf, value);
+        }
+    }
+
+    fn emit_flow_separator(&mut self, indent: usize) {
+        self.buf.push(b',');
+        if self.dump.width > 0
+            && !self.emitting_key
+            && crate::emit_util::current_column(&self.buf) >= self.dump.width
+        {
+            self.buf.push(b'\n');
+            self.write_indent(indent.max(1));
+        } else {
+            self.buf.push(b' ');
         }
     }
 
@@ -735,7 +811,7 @@ impl RoundTripEmitter {
         self.flow_depth += 1;
         for (i, item) in items.iter().enumerate() {
             if i > 0 {
-                self.buf.extend_from_slice(b", ");
+                self.emit_flow_separator(indent);
             }
             self.emit_anchor_tag(item);
             self.emit_inline_content(item, indent);
@@ -756,10 +832,10 @@ impl RoundTripEmitter {
         self.flow_depth += 1;
         for (i, (key, val)) in pairs.iter().enumerate() {
             if i > 0 {
-                self.buf.extend_from_slice(b", ");
+                self.emit_flow_separator(indent);
             }
             self.emit_anchor_tag(key);
-            self.emit_inline_content(key, indent);
+            self.emit_key(key, indent);
             self.end_inline_key(key);
             self.buf.push(b' ');
             self.emit_anchor_tag(val);
@@ -846,17 +922,29 @@ impl RoundTripEmitter {
     }
 
     fn emit_inline_comment(&mut self, comments: &Comments) {
-        if let Some(ref comment) = comments.inline {
-            // Restore the original padding before the `#` (alignment), falling
-            // back to a single space for a synthetic comment (`inline_spaces` 0).
-            for _ in 0..comments.inline_spaces.max(1) {
-                self.buf.push(b' ');
-            }
-            self.buf.push(b'#');
-            if !comment.is_empty() {
-                self.buf.push(b' ');
-                self.buf.extend_from_slice(comment.as_bytes());
-            }
+        let Some(ref comment) = comments.inline else {
+            return;
+        };
+        // Already written for this node, on its `key:` line or its header line.
+        let this = comments as *const Comments;
+        if self.inline_comment_written == Some(this) {
+            return;
+        }
+
+        self.push_inline_comment(comment, comments.inline_spaces);
+        self.inline_comment_written = Some(this);
+    }
+
+    /// Write ` # comment`, restoring the original padding before the `#`
+    /// (alignment) or a single space for a synthetic comment (`spaces` 0).
+    fn push_inline_comment(&mut self, comment: &str, spaces: u32) {
+        for _ in 0..spaces.max(1) {
+            self.buf.push(b' ');
+        }
+        self.buf.push(b'#');
+        if !comment.is_empty() {
+            self.buf.push(b' ');
+            self.buf.extend_from_slice(comment.as_bytes());
         }
     }
 

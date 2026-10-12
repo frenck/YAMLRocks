@@ -10,7 +10,7 @@ use super::ScanError;
 fn at_document_marker(reader: &Reader) -> bool {
     reader.column() == 0
         && (reader.check_ahead("---") || reader.check_ahead("..."))
-        && reader.peek_at(3).map_or(true, is_whitespace_or_break)
+        && reader.peek_at(3).is_none_or(is_whitespace_or_break)
 }
 
 /// Scan a single-quoted scalar: 'value'
@@ -660,9 +660,7 @@ pub fn scan_plain<'input>(
         // End conditions
         if ch == ':' {
             let next = reader.peek_next();
-            if next.map_or(true, |c| {
-                is_whitespace_or_break(c) || (in_flow && is_flow_indicator(c))
-            }) {
+            if next.is_none_or(|c| is_whitespace_or_break(c) || (in_flow && is_flow_indicator(c))) {
                 break;
             }
         }
@@ -715,7 +713,7 @@ pub fn scan_plain<'input>(
             if !in_flow
                 && reader.column() == 0
                 && (reader.check_ahead("---") || reader.check_ahead("..."))
-                && reader.peek_at(3).map_or(true, is_whitespace_or_break)
+                && reader.peek_at(3).is_none_or(is_whitespace_or_break)
             {
                 break;
             }
@@ -750,7 +748,7 @@ pub fn scan_plain<'input>(
                 if next_ch == '#' {
                     break;
                 } else if matches!(next_ch, '?' | ':')
-                    && reader.peek_next().map_or(true, is_whitespace_or_break)
+                    && reader.peek_next().is_none_or(is_whitespace_or_break)
                 {
                     break;
                 } else if in_flow && matches!(next_ch, '{' | '[') {

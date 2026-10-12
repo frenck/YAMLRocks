@@ -61,6 +61,36 @@ pub fn compose_all_with_source(input: &str) -> Result<Vec<(YamlNode, String)>, S
         .collect())
 }
 
+/// A block scalar's source slice without the indentation of the line after it.
+///
+/// The scanner reads past a block scalar's last line break into the next
+/// line's indentation to see that the scalar ended, so the event span (like
+/// PyYAML's `end_mark`) includes those spaces. Replaying them verbatim would put
+/// a whitespace-only line before the next key, since the emitter writes its own
+/// indentation.
+///
+/// Only trimmed when more input follows (`followed`): then the spaces after the
+/// last line break (`\n` or a lone `\r`, both YAML line breaks) are the next
+/// token's indentation. At the end of the input there is no next token, and an
+/// over-indented whitespace-only last line can be the scalar's own content
+/// (`|+` keeps it), so the slice stays verbatim.
+fn without_next_line_indent(raw: &str, followed: bool) -> &str {
+    if !followed {
+        return raw;
+    }
+
+    match raw.rfind(['\n', '\r']) {
+        Some(line_break)
+            if raw[line_break + 1..]
+                .bytes()
+                .all(|byte| byte == b' ' || byte == b'\t') =>
+        {
+            &raw[..=line_break]
+        }
+        _ => raw,
+    }
+}
+
 /// Compose with an explicit `file_id` stamped on every span, for include
 /// resolution and source-file tracking.
 pub fn compose_with_file_id(input: &str, file_id: u32) -> Result<Vec<YamlNode>, ScanError> {
@@ -1068,7 +1098,9 @@ impl<'input> Composer<'input> {
         // replay.
         if let YamlNodeKind::Scalar(_, ScalarStyle::Literal | ScalarStyle::Folded) = &node.kind {
             if event_end > span.offset {
-                node.comments.raw = self.input.get(span.offset..event_end).map(str::to_owned);
+                node.comments.raw = self.input.get(span.offset..event_end).map(|raw| {
+                    without_next_line_indent(raw, event_end < self.input.len()).to_owned()
+                });
             }
         }
 

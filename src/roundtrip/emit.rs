@@ -25,7 +25,7 @@ pub fn emit_roundtrip_with(node: &YamlNode, null_style: NullStyle) -> Vec<u8> {
         emitter.buf.extend_from_slice(BOM);
     }
     emitter.emit_document(node);
-    emitter.buf
+    emitter.finish()
 }
 
 /// Emit multiple document ASTs, separated by `---` markers, rendering synthetic
@@ -50,7 +50,7 @@ pub fn emit_roundtrip_all_with(nodes: &[YamlNode], null_style: NullStyle) -> Vec
         }
         emitter.emit_document(node);
     }
-    emitter.buf
+    emitter.finish()
 }
 
 /// Emit a single document with the default null style (`null` keyword). Used by
@@ -105,7 +105,7 @@ pub fn emit_roundtrip_dump(node: &YamlNode, null_style: NullStyle, dump: DumpCon
     if dump.explicit_end {
         emitter.buf.extend_from_slice(b"...\n");
     }
-    emitter.buf
+    emitter.finish()
 }
 
 struct RoundTripEmitter {
@@ -130,6 +130,12 @@ struct RoundTripEmitter {
     /// paths check this so the comment is written once, by whichever comes
     /// first. Compared by address; nodes do not move while emitting.
     inline_comment_written: Option<*const Comments>,
+    /// Where a replayed block scalar ended without a line break of its own. That
+    /// only happens at the very end of the input, and the emitter still closes
+    /// the line after it. If nothing else follows in the output either, that
+    /// line break is dropped again in [`finish`](Self::finish): under keep
+    /// chomping (`|+`) it would otherwise become part of the scalar's value.
+    unterminated_raw_end: Option<usize>,
 }
 
 impl RoundTripEmitter {
@@ -141,6 +147,7 @@ impl RoundTripEmitter {
             flow_depth: 0,
             emitting_key: false,
             inline_comment_written: None,
+            unterminated_raw_end: None,
         }
     }
 
@@ -167,6 +174,19 @@ impl RoundTripEmitter {
     }
 
     // -- Document entry --
+
+    /// The finished output. A block scalar replayed from source without a final
+    /// line break (it ended the input) stays that way when nothing follows it in
+    /// the output: the line break [`end_line`](Self::end_line) added after it is
+    /// not part of the source, and under keep chomping it would change the value.
+    fn finish(mut self) -> Vec<u8> {
+        if let Some(end) = self.unterminated_raw_end {
+            if self.buf.len() == end + 1 && self.buf[end] == b'\n' {
+                self.buf.truncate(end);
+            }
+        }
+        self.buf
+    }
 
     fn emit_document(&mut self, node: &YamlNode) {
         // Directives precede the `---` that opens their document. A `%TAG` handle
@@ -664,6 +684,9 @@ impl RoundTripEmitter {
                 if let Some(raw) = node.comments.raw.as_deref() {
                     if !node.comments.modified {
                         self.buf.extend_from_slice(raw.as_bytes());
+                        if !raw.ends_with(['\n', '\r']) {
+                            self.unterminated_raw_end = Some(self.buf.len());
+                        }
                         return;
                     }
                 }

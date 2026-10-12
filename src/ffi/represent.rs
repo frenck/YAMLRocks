@@ -291,11 +291,46 @@ fn with_comments(
     Ok(node)
 }
 
+/// Move the last pair's leading value comment onto its key: a comment above an
+/// entry renders above the key, just as it does through the live node comment
+/// API.
+///
+/// It works on the pair after it is pushed, and out of line, on purpose:
+/// `mapping_node` is part of the recursive lowering, and borrowing the freshly
+/// lowered value there kept a whole extra `YamlNode` in every recursion frame
+/// (about 270 bytes on Windows x64), cutting the supported nesting depth there
+/// by about 5%.
+#[inline(never)]
+fn lift_head_to_key(pairs: &mut [(YamlNode, YamlNode)]) {
+    if let Some((key, value)) = pairs.last_mut() {
+        key.comments.head.append(&mut value.comments.head);
+    }
+}
+
+/// Dismantle a partly built mapping iteratively and hand back the error that
+/// stopped it, for the rejected-key path of [`Lower::mapping_node`].
+///
+/// Out of line and cold on purpose, like [`key_comment_error`]: `mapping_node`
+/// is part of the recursive lowering, and inlined there this rarely taken path
+/// grew every recursion frame (by about 270 bytes on Windows x64), which cut the
+/// supported nesting depth there by about 5%.
+#[cold]
+#[inline(never)]
+fn abandon_mapping(key: YamlNode, pairs: Vec<(YamlNode, YamlNode)>, err: PyErr) -> PyErr {
+    crate::stack::drop_node_tree(key);
+    drop_node_pairs(pairs);
+    err
+}
+
 /// Why `key` cannot be emitted as a mapping key, if it carries comments that
 /// would break it. A key must stay on one line: an inline comment or a comment
 /// after it has no place there, and a comment anywhere inside a collection key
 /// spreads that key over several lines. A comment *before* the key itself is
 /// fine; it renders above the key's line.
+///
+/// Kept out of line: it runs at every level of the recursive lowering, and its
+/// work list would otherwise sit in every recursion frame.
+#[inline(never)]
 fn key_comment_error(key: &YamlNode) -> Option<PyErr> {
     if key.comments.inline.is_some() || !key.comments.foot.is_empty() {
         return Some(PyValueError::new_err(
@@ -810,7 +845,7 @@ impl Lower<'_, '_, '_> {
             // iteratively before returning: their derived recursive `Drop` would
             // otherwise overflow the native stack when an earlier value was deeply
             // nested. Mirrors the success-path teardown in `dumps`.
-            let mut key_node = match self.lower(key, depth + 1, flow, true) {
+            let key_node = match self.lower(key, depth + 1, flow, true) {
                 Ok(node) => node,
                 Err(err) => {
                     drop_node_pairs(pairs);
@@ -818,16 +853,12 @@ impl Lower<'_, '_, '_> {
                 }
             };
             if let Some(err) = key_comment_error(&key_node) {
-                crate::stack::drop_node_tree(key_node);
-                drop_node_pairs(pairs);
-                return Err(err);
+                return Err(abandon_mapping(key_node, pairs, err));
             }
             match self.lower(val, depth + 1, flow, false) {
-                Ok(mut val_node) => {
-                    // A value's leading comment belongs above its mapping key,
-                    // just as it does through the live node comment API.
-                    key_node.comments.head.append(&mut val_node.comments.head);
+                Ok(val_node) => {
                     pairs.push((key_node, val_node));
+                    lift_head_to_key(&mut pairs);
                 }
                 Err(err) => {
                     crate::stack::drop_node_tree(key_node);

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import yamlrocks
 
 _ALIAS_DOC = "base: &b\n  name: app\n  port: 8080\nref: *b\n"
@@ -161,3 +163,27 @@ def test_recursive_self_referential_alias_is_rejected():
     # A mapping that references its own anchor as a value is rejected too.
     with pytest.raises(yamlrocks.YAMLRocksError, match="alias"):
         yamlrocks.loads(b"a: &x\n  b: *x\n")
+
+
+_EMPTY_NODE_CASES = [
+    # An anchor or tag on an empty node still makes a node, null (or "" for
+    # `!!str`), and a `,` ends an empty node in flow instead of being skipped.
+    (b"- &a\n- a\n", [None, "a"]),
+    (b"- a\n- &a\n- b\n", ["a", None, "b"]),
+    (b"[&a , b]\n", [None, "b"]),
+    (b"[&a , *a]\n", [None, None]),
+    (b"[a: , b]\n", [{"a": None}, "b"]),
+    (b"[a: !!str , b]\n", [{"a": ""}, "b"]),
+    (b"{a: !!str , b: 1}\n", {"a": "", "b": 1}),
+    (b"{a: &x , b: *x}\n", {"a": None, "b": None}),
+]
+
+
+@pytest.mark.parametrize(("source", "expected"), _EMPTY_NODE_CASES)
+def test_empty_node_with_a_property_is_kept_on_every_path(source, expected):
+    """An anchored or tagged empty node is a real null entry on the fast, round-trip, and annotated paths alike."""
+    assert yamlrocks.loads(source) == expected
+    assert (
+        yamlrocks.loads(source, option=yamlrocks.OPT_ROUND_TRIP).to_dict() == expected
+    )
+    assert yamlrocks.loads(source, option=yamlrocks.OPT_ANNOTATED) == expected

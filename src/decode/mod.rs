@@ -904,8 +904,11 @@ impl<'input> Decoder<'input> {
             // A bare `SequenceEntry` reaches here only when it is *not* a
             // mapping-value indentless sequence (the guarded arm above): it is a
             // sibling of an enclosing sequence, so this node is empty. Leave the
-            // marker unconsumed for that sequence's loop.
+            // marker unconsumed for that sequence's loop. A `FlowEntry` (the `,`
+            // in `[a: , b]` or `[&a , b]`) likewise ends an empty node; skipping
+            // it would make the next entry this node's value.
             EventKind::SequenceEntry
+            | EventKind::FlowEntry
             | EventKind::Key { .. }
             | EventKind::Value
             | EventKind::StreamEnd
@@ -914,10 +917,14 @@ impl<'input> Decoder<'input> {
             | EventKind::SequenceEnd
             | EventKind::MappingEnd
             | EventKind::BlockEnd => {
-                // An anchor on an empty node (`a: &x` then `b: *x`) still binds:
-                // the empty node is null, so register it before returning.
+                // An anchor on an empty node (`a: &x` then `b: *x`) still binds,
+                // and the node exists: it is null. Return it as such, so an
+                // enclosing sequence keeps the item (`- &a` and `[&a , b]` are
+                // null entries, not missing ones), as with a tag on an empty
+                // node above.
                 if let Some(anchor) = current_anchor {
                     self.anchors.insert(anchor, (Value::Null, 1));
+                    return Ok(Some(Value::Null));
                 }
                 return Ok(None);
             }

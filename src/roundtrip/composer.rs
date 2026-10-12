@@ -1031,7 +1031,10 @@ impl<'input> Composer<'input> {
             // `SequenceEntry` reaches here only outside a mapping-value position
             // (the guarded arm above), where it is a sibling of an enclosing
             // sequence: this node is empty, so leave the marker for that loop.
+            // A `FlowEntry` (the `,` in `[a: , b]` or `[&a , b]`) likewise ends
+            // an empty node; skipping it would make the next entry its value.
             EventKind::SequenceEntry
+            | EventKind::FlowEntry
             | EventKind::Key { .. }
             | EventKind::StreamEnd
             | EventKind::DocumentEnd

@@ -51,7 +51,7 @@ pub(crate) fn guard<R>(f: impl FnOnce() -> R) -> R {
 /// status quo, and every tier-one platform reports bounds.
 #[inline]
 pub(crate) fn python_call_headroom() -> bool {
-    remaining_stack().map_or(true, |remaining| remaining > RED_ZONE)
+    remaining_stack().is_none_or(|remaining| remaining > RED_ZONE)
 }
 
 #[cfg(not(all(target_os = "linux", target_env = "musl")))]

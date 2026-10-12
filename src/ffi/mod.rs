@@ -914,15 +914,16 @@ fn bytes_to_string(bytes: &[u8]) -> PyResult<String> {
 }
 
 fn decode_utf16(bytes: &[u8], big_endian: bool) -> PyResult<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(errors::decode_message(
             "invalid UTF-16: byte count is not a multiple of 2",
         ));
     }
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| {
-            let pair = [c[0], c[1]];
+    // The length check above means `as_chunks` leaves no remainder.
+    let (pairs, _) = bytes.as_chunks::<2>();
+    let units: Vec<u16> = pairs
+        .iter()
+        .map(|&pair| {
             if big_endian {
                 u16::from_be_bytes(pair)
             } else {
@@ -935,15 +936,16 @@ fn decode_utf16(bytes: &[u8], big_endian: bool) -> PyResult<String> {
 }
 
 fn decode_utf32(bytes: &[u8], big_endian: bool) -> PyResult<String> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(errors::decode_message(
             "invalid UTF-32: byte count is not a multiple of 4",
         ));
     }
-    bytes
-        .chunks_exact(4)
-        .map(|c| {
-            let quad = [c[0], c[1], c[2], c[3]];
+    // The length check above means `as_chunks` leaves no remainder.
+    let (quads, _) = bytes.as_chunks::<4>();
+    quads
+        .iter()
+        .map(|&quad| {
             let code = if big_endian {
                 u32::from_be_bytes(quad)
             } else {

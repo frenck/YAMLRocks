@@ -303,7 +303,7 @@ impl<'input> Scanner<'input> {
         // collection; the collection spans documents, which is invalid.
         if self.reader.column() == 0
             && (self.reader.check_ahead("---") || self.reader.check_ahead("..."))
-            && self.reader.peek_at(3).map_or(true, is_whitespace_or_break)
+            && self.reader.peek_at(3).is_none_or(is_whitespace_or_break)
         {
             return Err(ScanError::new(
                 "a document marker is not allowed inside a flow collection",
@@ -324,7 +324,7 @@ impl<'input> Scanner<'input> {
         // or `-` followed by a blank/flow indicator is likewise a separator.
         let is_separator = matches!(ch, ']' | '}' | ',' | '#' | ':')
             || (matches!(ch, '?' | '-')
-                && self.reader.peek_next().map_or(true, is_whitespace_or_flow));
+                && self.reader.peek_next().is_none_or(is_whitespace_or_flow));
         if !is_separator && self.flow_need_sep {
             return Err(ScanError::new(
                 "missing ',' between flow collection entries",
@@ -354,13 +354,13 @@ impl<'input> Scanner<'input> {
             ']' => self.fetch_flow_collection_end(TokenKind::FlowSequenceEnd),
             '}' => self.fetch_flow_collection_end(TokenKind::FlowMappingEnd),
             ',' => self.fetch_flow_entry(),
-            ':' if prev_json || self.reader.peek_next().map_or(true, is_whitespace_or_flow) => {
+            ':' if prev_json || self.reader.peek_next().is_none_or(is_whitespace_or_flow) => {
                 self.fetch_value()
             }
-            '?' if self.reader.peek_next().map_or(true, is_whitespace_or_flow) => self.fetch_key(),
+            '?' if self.reader.peek_next().is_none_or(is_whitespace_or_flow) => self.fetch_key(),
             // A bare `-` (followed by a flow indicator or blank) cannot start a
             // plain scalar in flow context (`[-]`, `[-, -]`).
-            '-' if self.reader.peek_next().map_or(true, is_whitespace_or_flow) => {
+            '-' if self.reader.peek_next().is_none_or(is_whitespace_or_flow) => {
                 Err(ScanError::new(
                     "a plain scalar cannot be a bare '-' here",
                     self.reader.span(),
@@ -417,7 +417,7 @@ impl<'input> Scanner<'input> {
         let is_doc_end = ch == '.'
             && self.reader.column() == 0
             && self.reader.check_ahead("...")
-            && self.reader.peek_at(3).map_or(true, is_whitespace_or_break);
+            && self.reader.peek_at(3).is_none_or(is_whitespace_or_break);
         if !is_directive && !is_doc_end {
             self.directives_allowed = false;
         }
@@ -433,13 +433,13 @@ impl<'input> Scanner<'input> {
             // and PyYAML both read as the literal string, not a marker.
             '-' if self.reader.column() == 0
                 && self.reader.check_ahead("---")
-                && self.reader.peek_at(3).map_or(true, is_whitespace_or_break) =>
+                && self.reader.peek_at(3).is_none_or(is_whitespace_or_break) =>
             {
                 self.fetch_document_start()
             }
             '.' if self.reader.column() == 0
                 && self.reader.check_ahead("...")
-                && self.reader.peek_at(3).map_or(true, is_whitespace_or_break) =>
+                && self.reader.peek_at(3).is_none_or(is_whitespace_or_break) =>
             {
                 self.fetch_document_end()
             }
@@ -448,10 +448,8 @@ impl<'input> Scanner<'input> {
             '{' => self.fetch_flow_collection_start(TokenKind::FlowMappingStart),
             ']' => self.fetch_flow_collection_end(TokenKind::FlowSequenceEnd),
             '}' => self.fetch_flow_collection_end(TokenKind::FlowMappingEnd),
-            '?' if self.reader.peek_next().map_or(true, is_whitespace_or_break) => self.fetch_key(),
-            ':' if self.reader.peek_next().map_or(true, is_whitespace_or_break) => {
-                self.fetch_value()
-            }
+            '?' if self.reader.peek_next().is_none_or(is_whitespace_or_break) => self.fetch_key(),
+            ':' if self.reader.peek_next().is_none_or(is_whitespace_or_break) => self.fetch_value(),
             // A plain scalar can contain a comma but cannot begin with one: the
             // comma is a flow indicator excluded from the plain first character
             // (e.g. a tag immediately followed by `,`, as in `!!str, xxx`).
@@ -508,7 +506,7 @@ impl<'input> Scanner<'input> {
                         // blank line; a tab after leading spaces is separation,
                         // not indentation, so this only fires at column 0.
                         let next = self.reader.peek_after_blanks();
-                        let separating = next.map_or(true, |c| is_break(c) || is_flow_indicator(c));
+                        let separating = next.is_none_or(|c| is_break(c) || is_flow_indicator(c));
                         if !separating {
                             return Err(tab_indent_error(self.reader.span()));
                         }
@@ -573,7 +571,7 @@ impl<'input> Scanner<'input> {
         self.reader.skip_spaces();
         if !self.reader.is_eof() && self.reader.peek() == ':' {
             let next = self.reader.peek_next();
-            if next.map_or(true, is_whitespace_or_break)
+            if next.is_none_or(is_whitespace_or_break)
                 || (self.flow_level > 0 && next.is_some_and(is_flow_indicator))
             {
                 return true;
@@ -1328,7 +1326,7 @@ impl<'input> Scanner<'input> {
                 && self.reader.line() > start_line
                 && (self.reader.column() as i32) < span.column as i32;
             if !shallow_colon
-                && (next.map_or(true, is_whitespace_or_break)
+                && (next.is_none_or(is_whitespace_or_break)
                     || (self.flow_level > 0 && next.is_some_and(is_flow_indicator)))
             {
                 if self.flow_level == 0 && self.reader.line() > start_line {
@@ -1394,7 +1392,7 @@ impl<'input> Scanner<'input> {
             && self
                 .reader
                 .peek_next()
-                .map_or(true, |c| is_whitespace_or_break(c) || is_flow_indicator(c))
+                .is_none_or(|c| is_whitespace_or_break(c) || is_flow_indicator(c))
         {
             return Err(ScanError::new(
                 "missing ',' between flow collection entries",

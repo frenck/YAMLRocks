@@ -2,7 +2,9 @@
 name = "yamlrocks"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+# The oldest Rust that builds this crate with its locked dependencies; the
+# "Rust minimum supported version" CI job builds with exactly this toolchain.
+rust-version = "1.88"
 license = "MIT"
 description = "A fast, correct YAML library for Python"
 # Distributed as a Python wheel via maturin, never published to crates.io.

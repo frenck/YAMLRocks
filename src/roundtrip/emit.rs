@@ -409,7 +409,7 @@ impl RoundTripEmitter {
                 && val.comments.inline.is_none()
                 && self
                     .synthetic_null(val)
-                    .map_or(true, |s| s == NullStyle::Empty) =>
+                    .is_none_or(|s| s == NullStyle::Empty) =>
             {
                 self.emit_anchor_tag_compact(val);
                 self.buf.push(b'\n');
@@ -549,7 +549,7 @@ impl RoundTripEmitter {
             && item.comments.inline.is_none()
             && self
                 .synthetic_null(item)
-                .map_or(true, |style| style == NullStyle::Empty)
+                .is_none_or(|style| style == NullStyle::Empty)
         {
             self.emit_anchor_tag_compact(item);
             self.buf.push(b'\n');

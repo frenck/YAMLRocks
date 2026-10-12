@@ -643,7 +643,7 @@ fn stamp_yaml_1_2(buf: &mut Vec<u8>) {
     let has_marker = body.starts_with(b"---")
         && body
             .get(3)
-            .map_or(true, |&b| matches!(b, b'\n' | b'\r' | b' '));
+            .is_none_or(|&b| matches!(b, b'\n' | b'\r' | b' '));
     let mut stamp: Vec<u8> = b"%YAML 1.2\n".to_vec();
     if !has_marker {
         // No directives precede us here (a directive always carries its own

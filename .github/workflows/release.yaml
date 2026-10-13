@@ -66,10 +66,19 @@ jobs:
           # a version (e.g. an interpreter not found on a non-containerized runner)
           # rather than letting an incomplete set publish. "linux" matches both
           # many- and musllinux; "win" matches win_amd64/win32; "macosx" macOS.
-          for tag in cp312 cp313 cp314; do
-            for os in linux win macosx; do
-              find dist -maxdepth 1 -name "*${tag}*${os}*.whl" | grep -q . \
-                || { echo "::error::no ${os} wheel for ${tag}"; exit 1; }
+          # The pattern names the full `python-abi` pair, so a free-threaded
+          # wheel (`cp315-cp315t`) cannot stand in for a missing regular one
+          # (`cp315-cp315`), and the free-threaded builds are checked on their own.
+          check() {
+            find dist -maxdepth 1 -name "*-${1}-${2}-*${3}*.whl" | grep -q . \
+              || { echo "::error::no ${3} wheel for ${1}-${2}"; exit 1; }
+          }
+          for os in linux win macosx; do
+            for version in cp312 cp313 cp314 cp315; do
+              check "${version}" "${version}" "${os}"
+            done
+            for version in cp314 cp315; do
+              check "${version}" "${version}t" "${os}"
             done
           done
       - name: 🚬 Smoke-test a built wheel in a clean environment

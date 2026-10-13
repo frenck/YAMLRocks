@@ -66,9 +66,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
-          # 3.15 is still a prerelease (beta); without this, setup-python
-          # cannot resolve it. Stable versions are unaffected.
-          allow-prereleases: true
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: 🏗 Set package version from release tag
         if: inputs.release-tag != ''
@@ -120,9 +117,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
-          # 3.15 is still a prerelease (beta); without this, setup-python
-          # cannot resolve it. Stable versions are unaffected.
-          allow-prereleases: true
           architecture: ${{ matrix.platform.arch }}
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: 🏗 Set package version from release tag
@@ -173,9 +167,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
-          # 3.15 is still a prerelease (beta); without this, setup-python
-          # cannot resolve it. Stable versions are unaffected.
-          allow-prereleases: true
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: 🏗 Set package version from release tag
         if: inputs.release-tag != ''
@@ -238,13 +229,13 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
-          # aarch64 also builds the free-threaded wheel (cp314t): it is the only
-          # 64-bit arch here, and free-threaded CPython exists only on 64-bit.
-          # armv7 and ppc64le have no free-threaded build. These cp314t wheels are
-          # build-only (shipped, not run): a free-threaded interpreter is not
-          # readily available in the emulated container, and free-threaded runtime
-          # behaviour is already exercised natively on x86_64.
-          args: "--release --locked --out dist --interpreter '3.12 3.13 3.14${{ matrix.target == 'aarch64' && ' 3.14t' || '' }}'"
+          # aarch64 also builds the free-threaded wheels (cp314t, cp315t): it is
+          # the only 64-bit arch here, and free-threaded CPython exists only on
+          # 64-bit. armv7 and ppc64le have no free-threaded build. The
+          # free-threaded wheels are build-only (shipped, not run): a free-threaded
+          # interpreter is not readily available in the emulated container, and
+          # free-threaded runtime behaviour is already exercised natively on x86_64.
+          args: "--release --locked --out dist --interpreter '3.12 3.13 3.14 3.15${{ matrix.target == 'aarch64' && ' 3.14t 3.15t' || '' }}'"
           manylinux: auto
       - name: 🧪 Test the built wheel under emulation
         # aarch64/armv7/ppc64le install the manylinux wheel and run the full
@@ -284,7 +275,7 @@ jobs:
       - name: 🧪 Test the built wheel (i686, native 32-bit)
         # i686 is 32-bit x86, which runs natively on the x86_64 host (no QEMU).
         # Tests the image's CPython (one version) for the same reason as the
-        # emulated legs. python:3.14-slim, pinned by digest (Renovate keeps it
+        # emulated legs. python:3.15-slim, pinned by digest (Renovate keeps it
         # current). Both pip installs are pinned for OpenSSF Scorecard: the test
         # deps via a hash-pinned requirements file (the same versions the native
         # legs use), and the wheel by its built .whl path (Scorecard exempts a
@@ -293,12 +284,12 @@ jobs:
         shell: bash
         run: |
           docker run --rm --platform linux/386 -v "${PWD}:/io" -w /io \
-            python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 \
+            python:3.15-slim@sha256:ea4f1f290e071bf7d28199cfb3e09f5dbad31b50e9c32fd58f2f2d7be915f3ae \
             sh -ec '
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
               pip install --quiet --require-hashes -r .github/scripts/test-requirements.txt
-              pip install --quiet --no-deps dist/*cp314-cp314-*.whl
+              pip install --quiet --no-deps dist/*cp315-cp315-*.whl
               pytest -q
             '
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -342,19 +333,19 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
-          # x86_64 and aarch64 also build the free-threaded wheel (cp314t): they
-          # are the 64-bit arches, and free-threaded CPython exists only on
-          # 64-bit (x86 and armv7 are 32-bit, no free-threaded build). The cp314t
-          # musl wheels are build-only (shipped, not run): there is no
-          # free-threaded musl interpreter image to test them in, and
+          # x86_64 and aarch64 also build the free-threaded wheels (cp314t,
+          # cp315t): they are the 64-bit arches, and free-threaded CPython exists
+          # only on 64-bit (x86 and armv7 are 32-bit, no free-threaded build). The
+          # free-threaded musl wheels are build-only (shipped, not run): there is
+          # no free-threaded musl interpreter image to test them in, and
           # free-threaded runtime behaviour is exercised natively on x86_64.
-          args: "--release --locked --out dist --interpreter '3.12 3.13 3.14${{ (matrix.target == 'x86_64' || matrix.target == 'aarch64') && ' 3.14t' || '' }}'"
+          args: "--release --locked --out dist --interpreter '3.12 3.13 3.14 3.15${{ (matrix.target == 'x86_64' || matrix.target == 'aarch64') && ' 3.14t 3.15t' || '' }}'"
           manylinux: musllinux_1_2
       - name: 🧪 Test the built wheel on Alpine (musl, native x86_64)
         # Native musl runtime, no emulation. Tests the image's CPython (one
         # version) for the same reason as the emulated legs: arch/libc behaviour
         # is version-independent and every version is covered by the native legs.
-        # python:3.14-alpine, pinned by digest (Renovate keeps it current). Both
+        # python:3.15-alpine, pinned by digest (Renovate keeps it current). Both
         # pip installs are pinned for OpenSSF Scorecard: the test deps via a
         # hash-pinned requirements file (the same versions the native legs use),
         # and the wheel by its built .whl path (Scorecard exempts a .whl file; a
@@ -363,12 +354,12 @@ jobs:
         shell: bash
         run: |
           docker run --rm -v "${PWD}:/io" -w /io \
-            python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 \
+            python:3.15-alpine@sha256:1afb480ba8d3b3b7a8439a84f2365ce5c75ac45a79cf07daa091b49235cbe27b \
             sh -ec '
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate
               pip install --quiet --require-hashes -r .github/scripts/test-requirements.txt
-              pip install --quiet --no-deps dist/*cp314-cp314-*.whl
+              pip install --quiet --no-deps dist/*cp315-cp315-*.whl
               pytest -q
             '
       - name: 🧪 Test the built wheel on Alpine (musl, emulated)
@@ -381,7 +372,7 @@ jobs:
         # `alpine_latest` is intentionally not pinned to a specific Alpine
         # release: run-on-arch only ships that one Alpine preset (and it is what
         # reliably wires up QEMU; a pinned base_image does not). Its system
-        # CPython always sits within the 3.12-3.14 range we build wheels for, so
+        # CPython always sits within the 3.12-3.15 range we build wheels for, so
         # pip finds a matching wheel in dist. If Alpine ever ships a CPython we do
         # not yet build, this fails loudly and we add that version to the build
         # list (which we would do to support it anyway). Using base Alpine plus

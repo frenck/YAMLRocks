@@ -27,7 +27,7 @@ type AnnotationState = (
 /// accepted by `dumps` to emit a `!tag value` back out.
 ///
 /// Holds the original tag (e.g. `!mytag`) and the resolved inner `value`.
-#[pyclass(name = "YAMLRocksTag", skip_from_py_object)]
+#[pyclass(name = "YAMLRocksTag")]
 #[derive(Debug, Clone)]
 pub struct YAMLRocksTag {
     #[pyo3(get)]
@@ -57,7 +57,7 @@ impl YAMLRocksTag {
 /// so consumers (voluptuous's `data.__class__()`, `copy`, serializers) can use it
 /// directly without converting to a built-in `dict` first. `module` is set so
 /// pickle can locate the class by reference.
-#[pyclass(name = "YAMLRocksAnnotatedDict", extends = PyDict, module = "yamlrocks", skip_from_py_object)]
+#[pyclass(name = "YAMLRocksAnnotatedDict", extends = PyDict, module = "yamlrocks")]
 #[derive(Debug, Clone)]
 pub struct YAMLRocksAnnotatedDict {
     #[pyo3(get)]
@@ -183,7 +183,7 @@ impl YAMLRocksAnnotatedDict {
 /// A `list` subclass carrying source-location metadata, mirroring Home
 /// Assistant's `NodeListClass`. Like [`YAMLRocksAnnotatedDict`], it is a genuine
 /// `list` subclass: constructible and `copy`/`deepcopy`/`pickle`-able.
-#[pyclass(name = "YAMLRocksAnnotatedList", extends = PyList, module = "yamlrocks", skip_from_py_object)]
+#[pyclass(name = "YAMLRocksAnnotatedList", extends = PyList, module = "yamlrocks")]
 #[derive(Debug, Clone)]
 pub struct YAMLRocksAnnotatedList {
     #[pyo3(get)]

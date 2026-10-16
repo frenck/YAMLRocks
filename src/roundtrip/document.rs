@@ -55,7 +55,7 @@ fn seg_from_key(key: &Bound<'_, PyAny>) -> PyResult<PathSeg> {
 ///
 /// Holds the rich AST (comments, styles, anchors, include boundaries) and, when
 /// loaded with includes, the `file_id` → source-path map used for write-back.
-#[pyclass(name = "YAMLRocksDocument", skip_from_py_object)]
+#[pyclass(name = "YAMLRocksDocument")]
 #[derive(Debug, Clone)]
 pub struct YAMLRocksDocument {
     pub nodes: Vec<YamlNode>,

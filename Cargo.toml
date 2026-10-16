@@ -32,7 +32,7 @@ itoa = "1"
 # to the closing quote beats a per-byte comparison loop. Already in the tree
 # transitively (via regex), so promoting it to a direct dep adds no build cost.
 memchr = "2"
-pyo3 = { version = "0.29", features = ["extension-module", "py-clone"] }
+pyo3 = { version = "0.30", features = ["extension-module", "py-clone"] }
 # JSON Schema `pattern`/`patternProperties` validation. The `regex` crate runs in
 # guaranteed linear time (no catastrophic backtracking), so an attacker-supplied
 # schema pattern cannot be turned into a ReDoS against the validator.

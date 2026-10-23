@@ -1377,11 +1377,11 @@ wheels = [
 
 [[package]]
 name = "yamlium"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b4/f2/f2a19eba02f055302f7c5bd13c9665d03820508557ee3257546c56326f62/yamlium-0.3.0.tar.gz", hash = "sha256:8874e04d9b2273e200c7170dcab6e4a958dcfd6549f5a86259c8ef32788403cf", size = 100626, upload-time = "2026-07-10T13:57:53.633Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/11/21316e75ebd33ec7bdef4ab2aa131af0bda66073e235298da0999f13d679/yamlium-0.3.1.tar.gz", hash = "sha256:34965d831b2f82f1b3ab5ecbc06ede4509c953e91805f892b801f9e4ec32ae9b", size = 103067, upload-time = "2026-10-22T07:47:11.782Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/6e/6e657e4b61d15aaeca83dc7dcc11edf5cbea7b849130ef84573d5b179d7c/yamlium-0.3.0-py3-none-any.whl", hash = "sha256:bdf968a08fb88ab22d787afa0200c989953eec6d7c8bc218df61b618a62f74d4", size = 22649, upload-time = "2026-07-10T13:57:52.324Z" },
+    { url = "https://files.pythonhosted.org/packages/05/72/21d951c86ba623c03337f0e4c6e57556ffcc59ebda612165a58bce8754dd/yamlium-0.3.1-py3-none-any.whl", hash = "sha256:bf9d57318618b4eabd7db85a6c099f83510117064af2ccaaf224153d6c435439", size = 24151, upload-time = "2026-10-22T07:47:10.332Z" },
 ]
 
 [[package]]
@@ -1473,7 +1473,7 @@ typing = [
 bench = [
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "ruamel-yaml", specifier = "==0.19.1" },
-    { name = "yamlium", specifier = "==0.3.0" },
+    { name = "yamlium", specifier = "==0.3.1" },
 ]
 build = [{ name = "maturin", specifier = "==1.15.0" }]
 charts = [
@@ -1486,7 +1486,7 @@ charts = [
     { name = "ryaml", specifier = "==0.5.1" },
     { name = "strictyaml", specifier = "==1.7.3" },
     { name = "yaml-rs", specifier = "==0.1.6" },
-    { name = "yamlium", specifier = "==0.3.0" },
+    { name = "yamlium", specifier = "==0.3.1" },
 ]
 codspeed = [
     { name = "pytest", specifier = "==9.1.1" },

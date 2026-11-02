@@ -284,7 +284,7 @@ jobs:
         shell: bash
         run: |
           docker run --rm --platform linux/386 -v "${PWD}:/io" -w /io \
-            python:3.15-slim@sha256:f786b2e19cf9bb54e96bfcd4c1b40c4c56336c22e60607ffd4b080ae5b5dee83 \
+            python:3.15-slim@sha256:8c13a3f37a6a5b71498228e902c4b9f51c1f7900d49fabf71f9a650c6120e0d0 \
             sh -ec '
               python3 -m venv /tmp/venv
               . /tmp/venv/bin/activate

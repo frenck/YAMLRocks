@@ -95,7 +95,7 @@ proptest = ["hypothesis==6.170.12"]
 typing = ["mypy==2.4.1", "ty==0.0.95"]
 lint = ["ruff==0.17.3", "codespell==2.4.3", "zizmor==1.31.1"]
 # Continuous performance testing (bench/test_benchmarks.py, run by CodSpeed).
-codspeed = [{ include-group = "test" }, "pytest-codspeed==5.0.3"]
+codspeed = [{ include-group = "test" }, "pytest-codspeed==5.0.4"]
 # Comparison libraries used only by the one-off bench/bench.py report.
 bench = ["pyyaml==6.0.3", "ruamel.yaml==0.19.1", "yamlium==0.3.1"]
 # Renders the cross-library comparison charts (just charts) into the docs assets.

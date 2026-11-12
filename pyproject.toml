@@ -92,7 +92,7 @@ numpy = ["numpy==2.5.4"]
 # absent. The full suite (coverage.yaml) runs on a target that has a wheel.
 proptest = ["hypothesis==6.170.15"]
 # Type checkers and linters (no build needed; they check the source and stub).
-typing = ["mypy==2.4.1", "ty==0.0.97"]
+typing = ["mypy==2.4.1", "ty==0.0.100"]
 lint = ["ruff==0.17.4", "codespell==2.4.3", "zizmor==1.32.0"]
 # Continuous performance testing (bench/test_benchmarks.py, run by CodSpeed).
 codspeed = [{ include-group = "test" }, "pytest-codspeed==5.0.4"]
@@ -180,7 +180,7 @@ include = ["pysrc/yamlrocks"]
 # its import is unresolvable to a type checker (mypy silences the same thing).
 [[tool.ty.overrides]]
 include = ["pysrc/yamlrocks/__init__.py"]
-rules = { unresolved-import = "ignore" }
+rules = { import-not-found = "ignore" }
 
 [tool.codespell]
 skip = "*.lock,*package-lock.json,./target,./docs/node_modules,./docs/dist,./tests/data/yaml_test_suite/cases,./tests/data/realworld,./fuzz/corpus,./fuzz/target,./fuzz/artifacts,./.git"

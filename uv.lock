@@ -179,17 +179,17 @@ wheels = [
 
 [[package]]
 name = "fastyaml-rs"
-version = "0.7.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c5/56/d4211afc4066fb1867e3ea405079019071c55e7bfc8acea8e8a15155288c/fastyaml_rs-0.7.0.tar.gz", hash = "sha256:10400205d6903fe65d68d55bb64f11a651d05c34262b5915bbc8846ff9703ccd", size = 678052, upload-time = "2026-10-02T15:31:42.534Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c3/77/551f879cd44220a83fe890b662fc3b5f82e7c79378632d0380e51518a159/fastyaml_rs-0.8.0.tar.gz", hash = "sha256:c71572cee40c1a3de9008b0568a04b23bcc29b1be36f53d971945b6382cadbb6", size = 731526, upload-time = "2026-11-15T12:32:37.312Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/dd/4f/2ce93d2583ddfb06d9e9c2e7448e2e6aa36ad4dcc5b1257c1eb0b9a07c05/fastyaml_rs-0.7.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:12df8bbd6761a737bc6c7d5338e71c606d111e40f2d065a93eb13c9db1ef1813", size = 1563392, upload-time = "2026-10-02T15:31:29.147Z" },
-    { url = "https://files.pythonhosted.org/packages/28/8d/7320f07a0ebf787130802be03a60513d392a12af740e0d052b5f44d935bd/fastyaml_rs-0.7.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:fac750397dd75f7742ce2db25277f03ecb2b7cb7a7438e84260719894832df57", size = 1464010, upload-time = "2026-10-02T15:31:31.417Z" },
-    { url = "https://files.pythonhosted.org/packages/30/80/6429cb824bbd27b823c1eae24f16fdd8f3e7845d92d2da1e485df1e0b7c3/fastyaml_rs-0.7.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:d5d4054b29bac30eb1bf1737b22477cf70279f33440206ff2703b6687881f604", size = 1517953, upload-time = "2026-10-02T15:31:33.046Z" },
-    { url = "https://files.pythonhosted.org/packages/52/ce/a45cba4064ea5bbf30f6bcf2ec30d6d9b00332225a73439985e1188d57b4/fastyaml_rs-0.7.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c4f890db4d9f24f13a6687aff2367ed6a07da51a24759cb0e5afde1b42b8cfa0", size = 1635356, upload-time = "2026-10-02T15:31:34.734Z" },
-    { url = "https://files.pythonhosted.org/packages/ba/05/fb4b2341572115e6fffb73d52688da4864ecedbd9f3d54f601bb0f4bd25c/fastyaml_rs-0.7.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:fb2f7882ce91eef964495f76c07d21e54bc37754173353da0287673ae5914586", size = 1696795, upload-time = "2026-10-02T15:31:36.91Z" },
-    { url = "https://files.pythonhosted.org/packages/1c/3e/a6927ca227d67f39aecd95da11ffec6d3ab6672f89619a6353e44d0e8ee6/fastyaml_rs-0.7.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:f0faaef2a8b7d32f4c97946d047de16649c039d0eac47dc5928bbc88f589b4ce", size = 1857377, upload-time = "2026-10-02T15:31:38.686Z" },
-    { url = "https://files.pythonhosted.org/packages/ba/ac/c9d241e5b76a4eb7bfe3e6a2168a1bf729dd400848493c592602b268ab24/fastyaml_rs-0.7.0-cp310-abi3-win_amd64.whl", hash = "sha256:a385614a94310ec71707a8e738c9fef180fa9ef96c81af33a0456e1275db7d1d", size = 1619065, upload-time = "2026-10-02T15:31:40.592Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/e7/2101a75ce30152a060c1aabb76fe5de75b0d939b4bd9d7092f1347f50f54/fastyaml_rs-0.8.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:5ae678b47f4d55d88cb190cbbcad7591ae864b2a138c62f3fe8d64007e16b283", size = 1608450, upload-time = "2026-11-15T12:32:25.467Z" },
+    { url = "https://files.pythonhosted.org/packages/91/4f/cb24c0745f9df5c4a49e7345a9f0976a75e4ed3f46045b22e095aa0d98a4/fastyaml_rs-0.8.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:c84661d874f1d796b8fad232d28d31bd3703ecac9e111456ccef17b1661547af", size = 1508279, upload-time = "2026-11-15T12:32:27.353Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/5a/bc43353c8982a708b56cb84e395f4630ea9635aae89a5dba83f8a9aefb16/fastyaml_rs-0.8.0-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:4e0815f51745dec94781760b59010dd4053f18a7c0c545599b678c6899647ad7", size = 1556873, upload-time = "2026-11-15T12:32:29.201Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/c7/b37d912f749fc52c696b06ca1dd469a1494cee2efda7081e3c2f5eee539e/fastyaml_rs-0.8.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:63869ecc60e35d9ec0a8628ec987788668c255f60065a7c99851927702ba91d7", size = 1672951, upload-time = "2026-11-15T12:32:30.804Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/d5/aedcd9fd7714f6282b4ed5c5c4edc153bcf09338a712ca829c06afdf7c3b/fastyaml_rs-0.8.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:3515ff40103293e1fb29a2be7cfe183811ce576c74a8749880b50426d6356cb4", size = 1735037, upload-time = "2026-11-15T12:32:32.208Z" },
+    { url = "https://files.pythonhosted.org/packages/08/74/bdc3b4807a0ca5f2f216305c4c33a054062868aaa4156e9a4046b12dd0be/fastyaml_rs-0.8.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:7bf34834916979262944ff79860ed0d269d13b3042812471598f38c0f8bcbaf7", size = 1894213, upload-time = "2026-11-15T12:32:34.032Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/78/517aba9a886dc83c6bad3c082b8400ee62a4d27237678543beab417d1080/fastyaml_rs-0.8.0-cp310-abi3-win_amd64.whl", hash = "sha256:7036ef9c46a57f5d5a541ea53bd31dd38a93efd940ec5e514be8baec84c403b9", size = 1673937, upload-time = "2026-11-15T12:32:35.891Z" },
 ]
 
 [[package]]
@@ -1487,7 +1487,7 @@ bench = [
 ]
 build = [{ name = "maturin", specifier = "==1.16.0" }]
 charts = [
-    { name = "fastyaml-rs", specifier = "==0.7.0" },
+    { name = "fastyaml-rs", specifier = "==0.8.0" },
     { name = "matplotlib", specifier = "==3.11.2" },
     { name = "oyaml", specifier = "==1.0" },
     { name = "py-yaml12", specifier = "==0.2.0" },

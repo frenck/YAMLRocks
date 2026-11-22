@@ -49,7 +49,7 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"
         run: uv run --no-sync maturin develop --release --locked
       - name: 🚀 Run benchmarks under CodSpeed
-        uses: CodSpeedHQ/action@af75f77f17a054769abefaa42fe8dc2975469b5f # v5.6.3
+        uses: CodSpeedHQ/action@b1f28b5eccf7cb5bfe6a2a89cb3053eb67f1150c # v5.8.0
         with:
           mode: simulation
           run: uv run --no-sync pytest bench --codspeed

@@ -355,6 +355,16 @@ pub fn scan_double_quoted<'input>(
                                 start_span,
                             ));
                         }
+                        // An escaped break continues the scalar on the next line
+                        // just like a folded one, so that line must be indented
+                        // past the block context too. Only spaces were skipped,
+                        // so the column is the line's true indentation; a line
+                        // padded with nothing but a tab is still blank.
+                        let tab_padded_blank = reader.peek() == '\t'
+                            && matches!(reader.peek_after_blanks(), None | Some('\n' | '\r'));
+                        if !tab_padded_blank {
+                            check_quoted_continuation_indent(reader, parent_indent)?;
+                        }
                     }
                     other => {
                         return Err(ScanError::new(
@@ -617,6 +627,19 @@ enum Chomping {
     Keep,  // +
 }
 
+/// What a plain scalar inside a flow collection needs to check on each line it
+/// crosses onto.
+#[derive(Clone, Copy)]
+pub struct FlowLines {
+    /// The indentation of the block the collection opened in; every line must
+    /// be indented past it (test-suite case `9C9N`). `-1` at the top level,
+    /// where no indentation is required.
+    pub block_indent: i32,
+    /// Whether to enforce that rule. Off for the lenient PyYAML-compatible
+    /// reading.
+    pub strict_indent: bool,
+}
+
 /// Scan a plain (unquoted) scalar.
 // The break-out conditions below are intentionally separate `else if` arms for
 // readability even though several share a `break` body.
@@ -625,10 +648,14 @@ enum Chomping {
 /// character (the source end). The reader may advance past that point while
 /// folding trailing line breaks, so the returned `content_end` (not the reader's
 /// final position) is the scalar's true source extent.
+///
+/// `flow` describes the enclosing flow collection, or is `None` in block
+/// context; see [`FlowLines`].
 pub fn scan_plain<'input>(
     reader: &mut Reader<'input>,
     in_flow: bool,
     current_indent: i32,
+    flow: Option<FlowLines>,
 ) -> Result<(Cow<'input, str>, usize), ScanError> {
     // A single-line plain scalar is exactly the input slice `[start..content_end]`;
     // its internal spaces are contiguous in the input, and the only thing that
@@ -683,10 +710,18 @@ pub fn scan_plain<'input>(
         if ch == '\n' || ch == '\r' {
             reader.advance_line();
             let mut blank_lines = 0;
+            // The landing line's indentation, counted in leading spaces only: a
+            // tab is never indentation, so it must not satisfy the flow indent
+            // check below. Also whether a tab opens that line.
+            let mut line_indent;
+            let mut tab_opens_line;
 
             // Skip leading blanks (spaces and tabs) and count blank lines; a
             // tab-only line folds like any other empty line.
             loop {
+                reader.skip_spaces();
+                line_indent = reader.column();
+                tab_opens_line = line_indent == 0 && reader.peek() == '\t';
                 skip_blanks(reader);
                 if reader.is_eof() {
                     break;
@@ -714,6 +749,29 @@ pub fn scan_plain<'input>(
             // marker, instead of folding it into the scalar as `x ---`.
             if at_document_marker(reader) {
                 break;
+            }
+
+            // This scalar has already consumed the line break, bypassing the
+            // scanner's own checks on the line it lands on, so repeat them here.
+            // A comment line may sit at any indentation, tabs included.
+            if let Some(flow) = flow {
+                let next = reader.peek();
+                let comment = next == '#';
+
+                // Where the line has to be indented (anywhere but the top
+                // level), a tab opening it is invalid indentation, unless it
+                // only pads flow punctuation (`\t]`).
+                let only_pads = next == '\n' || next == '\r' || is_flow_indicator(next);
+                if tab_opens_line && flow.block_indent >= 0 && !only_pads && !comment {
+                    return Err(super::tab_indent_error(reader.span()));
+                }
+
+                // The line must be indented past the block the collection opened
+                // in (test-suite case `9C9N`), whether it continues the scalar or
+                // holds the next token (a closing `]`).
+                if flow.strict_indent && (line_indent as i32) <= flow.block_indent && !comment {
+                    return Err(ScanError::new(super::FLOW_INDENT_MESSAGE, reader.span()));
+                }
             }
 
             // Check if next content starts a new structure

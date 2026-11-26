@@ -501,6 +501,63 @@ KNOWN_INVALID.update(
     )
 )
 
+#: Flow collections that close at the block indent right after a plain item
+#: (`needs: [` ... `]`, `foo: {` ... `}`). Same 9C9N class as above; strict mode
+#: used to miss it here because the plain scalar consumed the line break before
+#: the indent check ran.
+_FLOW_CLOSE_AFTER_PLAIN = (
+    "argo-workflows/argo-rollouts/pkg/kubectl-argo-rollouts/info/testdata/canary/canary-rollout4.yaml",
+    "opentelemetry/collector/cmd/schemagen/internal/testdata/test00/simple_config.schema.yaml",
+    "opentelemetry/demo/.github/workflows/checks.yml",
+    "serverless/serverless-patterns/lambda-esm-sqs-filters-sam/template.yaml",
+    "tekton/pipeline/examples/v1/pipelineruns/beta/pipeline-emitting-results.yaml",
+)
+KNOWN_INVALID.update(
+    dict.fromkeys(
+        _FLOW_CLOSE_AFTER_PLAIN,
+        "multi-line flow collection closing at the block indent after a plain "
+        "item: the spec requires flow content indented past the block "
+        "(test-suite case 9C9N is an error), PyYAML is lenient and accepts it",
+    )
+)
+
+#: Argo Workflows' `args: ["` idiom: a double-quoted multi-line shell command
+#: inside a flow sequence, continued (and closed) at the block indent. Inside a
+#: flow collection a quoted scalar's lines must be indented past the block too
+#: (9C9N), the flow counterpart of the block-context rule in QB6E.
+_QUOTED_IN_FLOW_AT_BLOCK_INDENT = (
+    "argo-workflows/argo-workflows/examples/ci-output-artifact.yaml",
+    "argo-workflows/argo-workflows/examples/ci.yaml",
+    "argo-workflows/argo-workflows/examples/influxdb-ci.yaml",
+    "argo-workflows/argo-workflows/examples/k8s-orchestration.yaml",
+    "argo-workflows/argo-workflows/examples/nested-workflow.yaml",
+    "argo-workflows/argo-workflows/examples/secrets.yaml",
+    "argo-workflows/argo-workflows/examples/sidecar.yaml",
+    "argo-workflows/argo-workflows/examples/volumes-emptydir.yaml",
+    "argo-workflows/argo-workflows/test/e2e/expectedfailures/pns/pns-output-artifacts.yaml",
+    "argo-workflows/argo-workflows/test/e2e/expectedfailures/pns/pns-quick-exit-output-art.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/artifact-input-output-samedir.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/ci-output-artifact.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/ci.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/k8s-orchestration.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/nested-dag-outputs.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/nested-workflow.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/output-jqfilter-parameters.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/pns-output-params.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/secrets.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/sidecar.yaml",
+    "argo-workflows/argo-workflows/test/e2e/functional/volumes-emptydir.yaml",
+)
+KNOWN_INVALID.update(
+    dict.fromkeys(
+        _QUOTED_IN_FLOW_AT_BLOCK_INDENT,
+        'multi-line quoted scalar inside a flow collection (`args: ["`) '
+        "continued at the block indent: the spec requires flow content indented "
+        "past the block (test-suite case 9C9N is an error), PyYAML is lenient "
+        "and accepts it",
+    )
+)
+
 
 def _is_chart_template(path: pathlib.Path) -> bool:
     """Whether ``path`` is a Helm chart *template*, not a YAML document.
@@ -593,6 +650,24 @@ else:
 
     # -- PyYAML compatibility: flow collections closed at the block indent -----
 
+    def _pyyaml_loader_ignoring_tags(yaml):
+        """PyYAML's SafeLoader, but reading an application tag (CloudFormation's
+        `!GetAtt`, say) as its untagged value, the way yamlrocks does by default.
+        Plain `safe_load` refuses such tags, which would hide the comparison."""
+
+        class Loader(yaml.SafeLoader):
+            pass
+
+        def untagged(loader, _suffix, node):
+            if isinstance(node, yaml.MappingNode):
+                return loader.construct_mapping(node, deep=True)
+            if isinstance(node, yaml.SequenceNode):
+                return loader.construct_sequence(node, deep=True)
+            return loader.construct_scalar(node)
+
+        Loader.add_multi_constructor("!", untagged)
+        return Loader
+
     #: The known-invalid files that break only the flow-indentation rule (test
     #: suite case 9C9N). PyYAML accepts them, so OPT_PYYAML_COMPAT has to as well.
     _LENIENT_FLOW_FILES = [
@@ -610,7 +685,8 @@ else:
         raw = path.read_bytes()
 
         compat = yamlrocks.OPT_PYYAML_COMPAT
-        assert yamlrocks.loads_all(raw, option=compat) == list(yaml.safe_load_all(raw))
+        expected = list(yaml.load_all(raw, Loader=_pyyaml_loader_ignoring_tags(yaml)))
+        assert yamlrocks.loads_all(raw, option=compat) == expected
 
         doc = yamlrocks.loads(raw, option=compat | yamlrocks.OPT_ROUND_TRIP)
         assert isinstance(doc, yamlrocks.YAMLRocksDocument)

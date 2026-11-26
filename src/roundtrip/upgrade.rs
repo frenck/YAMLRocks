@@ -6,7 +6,10 @@
 //! produces valid 1.2 while preserving comments, layout, and everything that did
 //! not need changing.
 
+use std::collections::HashSet;
+
 use crate::emit_util::canonical_float;
+use crate::parser::Parser;
 use crate::resolver::{ResolvedValue, Schema};
 use crate::scanner::ScalarStyle;
 
@@ -19,6 +22,79 @@ pub fn upgrade_to_yaml_1_2(nodes: &mut [YamlNode], schema: Schema) {
     for node in nodes {
         upgrade_node(node, schema);
     }
+}
+
+/// Mark every file whose layout only the lenient PyYAML-compat reader accepts as
+/// modified, so the upgrade rewrites it.
+///
+/// Under PyYAML compatibility a file can lay out a flow collection at its
+/// block's indent, which strict YAML rejects. An upgrade stamps `%YAML 1.2` and
+/// promises output the strict reader loads, so such a file needs rewriting just
+/// like a 1.1-only scalar: marked modified, it re-emits canonically from the AST
+/// and `save()` writes it. A file that is valid YAML anyway keeps its bytes.
+///
+/// `root_source` is the document's own text. `file_sources` holds each included
+/// file's original text by `file_id`; index 0 is the root, which `root_source`
+/// already covers.
+pub fn mark_lenient_only_files_modified(
+    nodes: &mut [YamlNode],
+    root_source: &str,
+    file_sources: &[Option<String>],
+) {
+    if !parses_strictly(root_source) {
+        for node in nodes.iter_mut() {
+            node.mark_modified();
+        }
+    }
+
+    let lenient_files: HashSet<u32> = file_sources
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, source)| source.as_deref().is_some_and(|text| !parses_strictly(text)))
+        .filter_map(|(file_id, _)| u32::try_from(file_id).ok())
+        .collect();
+    if lenient_files.is_empty() {
+        return;
+    }
+
+    for node in nodes {
+        mark_include_boundaries(node, &lenient_files);
+    }
+}
+
+fn parses_strictly(source: &str) -> bool {
+    Parser::new(source).parse_all().is_ok()
+}
+
+/// Mark each include boundary whose target file is in `files` as modified. The
+/// boundary owns its file, so this re-emits that file and leaves the rest alone.
+fn mark_include_boundaries(node: &mut YamlNode, files: &HashSet<u32>) {
+    // Recurses once per nesting level over attacker-controlled depth.
+    crate::stack::guard(|| {
+        let target = node
+            .source
+            .as_ref()
+            .and_then(|source| source.target_file_id);
+        if target.is_some_and(|file_id| files.contains(&file_id)) {
+            node.mark_modified();
+        }
+
+        match &mut node.kind {
+            YamlNodeKind::Mapping(pairs) => {
+                for (key, value) in pairs {
+                    mark_include_boundaries(key, files);
+                    mark_include_boundaries(value, files);
+                }
+            }
+            YamlNodeKind::Sequence(items) => {
+                for item in items {
+                    mark_include_boundaries(item, files);
+                }
+            }
+            _ => {}
+        }
+    });
 }
 
 fn upgrade_node(node: &mut YamlNode, schema: Schema) {
@@ -70,7 +146,7 @@ fn canonical_1_2(value: &ResolvedValue) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::upgrade_to_yaml_1_2;
+    use super::{mark_lenient_only_files_modified, upgrade_to_yaml_1_2};
     use crate::emit_util::canonical_float;
     use crate::roundtrip::ast::{YamlNode, YamlNodeKind};
     use crate::scanner::{ScalarStyle, Span};
@@ -149,5 +225,18 @@ mod tests {
         assert_eq!(canonical_float(f64::NAN), ".nan");
         assert_eq!(canonical_float(1.5), "1.5");
         assert_eq!(canonical_float(3.0), "3.0");
+    }
+
+    #[test]
+    fn only_a_lenient_only_root_is_marked_for_rewrite() {
+        let lenient = "command: [\n  'a'\n]\n";
+        let mut nodes = vec![plain("x")];
+        mark_lenient_only_files_modified(&mut nodes, lenient, &[]);
+        assert!(nodes[0].comments.modified);
+
+        let valid = "command: [\n  'a'\n  ]\n";
+        let mut nodes = vec![plain("x")];
+        mark_lenient_only_files_modified(&mut nodes, valid, &[]);
+        assert!(!nodes[0].comments.modified);
     }
 }

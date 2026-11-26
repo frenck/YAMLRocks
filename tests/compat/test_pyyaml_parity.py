@@ -286,6 +286,47 @@ def test_pyyaml_compat_upgrade_normalizes_a_lenient_flow_layout(all_documents):
     assert yamlrocks.loads(upgraded) == {"command": ["a", "b"]}
 
 
+def test_pyyaml_compat_upgrade_saves_the_normalized_layout(tmp_path):
+    """Normalizing a lenient-only layout is a rewrite, like a 1.1 scalar the
+    upgrade rewrites, so save() without a destination writes it back."""
+    path = tmp_path / "config.yaml"
+    path.write_text("command: [\n  'a',\n  'b'\n]\n")
+
+    doc = yamlrocks.load(
+        str(path),
+        option=yamlrocks.OPT_PYYAML_COMPAT
+        | yamlrocks.OPT_ROUND_TRIP
+        | yamlrocks.OPT_UPGRADE_1_1,
+    )
+
+    assert doc.save() == [str(path)]
+    assert yamlrocks.load(str(path)) == {"command": ["a", "b"]}
+
+
+def test_pyyaml_compat_upgrade_normalizes_a_lenient_included_file(tmp_path):
+    """An included file with a lenient-only layout is rewritten by the upgrade
+    too, so the whole include graph reloads strictly. A valid file is left as is."""
+    root = tmp_path / "configuration.yaml"
+    root.write_text("lenient: !include lenient.yaml\nvalid: !include valid.yaml\n")
+    (tmp_path / "lenient.yaml").write_text("values: [\n  'a',\n  'b'\n]\n")
+    (tmp_path / "valid.yaml").write_text("values: [\n  'c'\n  ]\n")
+
+    doc = yamlrocks.load(
+        str(root),
+        option=yamlrocks.OPT_PYYAML_COMPAT
+        | yamlrocks.OPT_ROUND_TRIP
+        | yamlrocks.OPT_UPGRADE_1_1
+        | yamlrocks.OPT_INCLUDES,
+    )
+
+    assert doc.save() == [str(tmp_path / "lenient.yaml")]
+    assert (tmp_path / "valid.yaml").read_text() == "values: [\n  'c'\n  ]\n"
+    assert yamlrocks.load(str(root), option=yamlrocks.OPT_INCLUDES) == {
+        "lenient": {"values": ["a", "b"]},
+        "valid": {"values": ["c"]},
+    }
+
+
 def test_pyyaml_compat_upgrade_keeps_a_valid_layout_verbatim():
     """A compat source that is valid YAML anyway still upgrades byte-for-byte
     (plus the `%YAML 1.2` stamp); only lenient-only layouts are re-emitted."""

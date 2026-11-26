@@ -1234,24 +1234,32 @@ fn loads_via_ast(
     //
     // The gate also runs for a tag-only load when `OPT_REJECT_COMPLEX_KEYS` is
     // set, so a rejected complex key surfaces the same located error there too.
-    if annotated || convert.reject_complex_keys {
+    //
+    // The gate applies the single-document rule as well (see `loads`), so a
+    // second document is reported as such, the way the fast path reports it,
+    // before any error inside that document gets a chance to win.
+    let strict_gate = annotated || convert.reject_complex_keys;
+    if strict_gate {
         py.detach(|| {
-            decode::decode_with(
+            decode::decode_collecting(
                 input,
                 convert.yaml_schema,
                 false,
                 convert.reject_complex_keys,
+                false,
+                single_document,
+                decode::WarnOptions::default(),
             )
         })
         .map_err(|e| errors::decode_error(py, &e, None))?;
     }
 
-    // Same single-document rule as the fast path (see `loads`). The composer
-    // keeps no marker positions and drops an empty trailing document, so it
-    // cannot tell; the decoder can. Only its extra-document verdict counts here:
-    // any other error it hits belongs to the strict gate above, which this path
+    // Without the gate, the single-document rule still has to be checked. The
+    // composer keeps no marker positions and drops an empty trailing document,
+    // so it cannot tell; the decoder can. Only its extra-document verdict counts
+    // here: any other error it hits belongs to the strict gate, which this path
     // deliberately does not run unless asked to.
-    if single_document && decode::has_document_marker(input) {
+    if !strict_gate && single_document && decode::has_document_marker(input) {
         let checked = py.detach(|| {
             decode::decode_collecting(
                 input,

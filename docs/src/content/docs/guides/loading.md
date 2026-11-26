@@ -126,7 +126,8 @@ yamlrocks.loads_all(source)
 
 `loads` on the same stream returns only the first document. Under
 `OPT_PYYAML_COMPAT` it raises a `YAMLRocksParseError` instead, pointing at the
-second document, the way PyYAML's `safe_load` does:
+second document, the way PyYAML's `safe_load` does. (With `OPT_ROUND_TRIP`, the
+returned document keeps every document of the stream, so nothing is dropped.)
 
 ```python
 import yamlrocks

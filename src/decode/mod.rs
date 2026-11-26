@@ -192,10 +192,11 @@ const EXTRA_DOCUMENT_MESSAGE: &str =
 /// Whether `input` has a line starting with a document marker (`---` or
 /// `...`). Every document after the first is introduced by one, so without such
 /// a line the stream holds at most one document. A cheap pre-check that lets a
-/// caller skip a full decode for the common markerless config.
+/// caller skip a full decode for the common markerless config. A lone `\r` is a
+/// line break too (the scanner treats it as one), so lines split on both.
 pub fn has_document_marker(input: &str) -> bool {
     input
-        .split('\n')
+        .split(['\n', '\r'])
         .any(|line| line.starts_with("---") || line.starts_with("..."))
 }
 
@@ -1453,6 +1454,7 @@ mod tests {
     fn document_marker_precheck() {
         assert!(has_document_marker("a: 1\n---\nb: 2\n"));
         assert!(has_document_marker("a: 1\n...\n"));
+        assert!(has_document_marker("a: 1\r---\rb: 2\r"));
         // A marker must start its line; indented or embedded dashes are content.
         assert!(!has_document_marker("a: 1\nb: ---\n  --- c\n"));
     }

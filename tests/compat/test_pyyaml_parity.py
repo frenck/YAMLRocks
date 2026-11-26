@@ -122,8 +122,10 @@ def test_alias_identity_matches_pyyaml():
 # -- OPT_PYYAML_COMPAT: single-document loads ----------------------------------
 
 # Streams on both sides of PyYAML's "expected a single document" rule: a second
-# `---` (even an empty trailing one), a directive opening another document, and
-# a bare document after `...` all count; a closing `...` or comments do not.
+# `---` (even an empty trailing one, or after a lone `\r` line break), a
+# directive opening another document, and a bare document after `...` all
+# count; a closing `...` or comments do not. A second document that is itself
+# broken still reports as the extra document, as in PyYAML.
 _STREAMS = [
     "a: 1\n---\nb: 2\n",
     "a: 1\n---\n",
@@ -134,6 +136,9 @@ _STREAMS = [
     "a\n...\nb\n",
     "%YAML 1.1\n---\na\n...\n%YAML 1.1\n---\nb\n",
     "a: 1\r\n---\r\nb\r\n",
+    "a: 1\r---\rb: 2\r",
+    "a\n---\n*missing\n",
+    "a: 1\n---\n- a\nb: c\n",
     "a: |\n  text\n---\n",
     "a: 1\n...\n",
     "a: 1\n...\n...\n",
@@ -143,12 +148,16 @@ _STREAMS = [
     "",
 ]
 
-# The fast path, the annotated AST path, and the tag-resolving AST path each
-# decide this on their own, so check all three.
+# The fast path, the AST path behind its strict gate (annotated, or tags with
+# OPT_REJECT_COMPLEX_KEYS), and the ungated tag-resolving AST path each decide
+# this on their own, so check every one.
 _COMPAT_LOAD_MODES = {
     "default": yamlrocks.OPT_PYYAML_COMPAT,
     "annotated": yamlrocks.OPT_PYYAML_COMPAT | yamlrocks.OPT_ANNOTATED,
     "tags": yamlrocks.OPT_PYYAML_COMPAT | yamlrocks.OPT_SECRETS,
+    "tags_strict": yamlrocks.OPT_PYYAML_COMPAT
+    | yamlrocks.OPT_SECRETS
+    | yamlrocks.OPT_REJECT_COMPLEX_KEYS,
 }
 
 

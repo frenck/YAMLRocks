@@ -149,6 +149,10 @@ pub struct Scanner<'input> {
     /// Accept a flow-collection line at or below the enclosing block's indent,
     /// the way PyYAML does. Off by default; see [`Self::set_lenient_flow_indent`].
     lenient_flow_indent: bool,
+    /// Leading spaces on the line [`Self::scan_to_next_token`] last moved onto:
+    /// the line's indentation. A tab is never indentation, so the flow indent
+    /// check compares this rather than the column after the blanks.
+    line_indent: u32,
 }
 
 impl<'input> Scanner<'input> {
@@ -187,6 +191,7 @@ impl<'input> Scanner<'input> {
             comments: Vec::new(),
             record_comments: false,
             lenient_flow_indent: false,
+            line_indent: 0,
         }
     }
 
@@ -277,7 +282,7 @@ impl<'input> Scanner<'input> {
             && !self.lenient_flow_indent
             && !self.reader.is_eof()
             && self.reader.line() > line_before
-            && (self.reader.column() as i32) <= self.flow_block_indent
+            && (self.line_indent as i32) <= self.flow_block_indent
         {
             return Err(ScanError::new(FLOW_INDENT_MESSAGE, self.reader.span()));
         }
@@ -518,7 +523,11 @@ impl<'input> Scanner<'input> {
                 ' ' => {
                     // Indentation and separation are runs of spaces; skip the
                     // whole run in one pass rather than one byte per loop turn.
+                    let starts_line = self.reader.column() == 0;
                     self.reader.skip_spaces();
+                    if starts_line {
+                        self.line_indent = self.reader.column();
+                    }
                 }
                 '\t' => {
                     if self.flow_level == 0 {
@@ -540,6 +549,7 @@ impl<'input> Scanner<'input> {
                 }
                 '\n' | '\r' => {
                     self.reader.advance_line();
+                    self.line_indent = 0;
                     self.on_doc_start_line = false;
                     // Only a tab on the token's own line is indentation for it; a
                     // tab on an intervening blank line is just blank content.

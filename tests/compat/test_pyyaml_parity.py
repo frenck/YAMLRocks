@@ -273,6 +273,59 @@ def test_flow_layouts_the_spec_allows_stay_valid(source):
     assert yamlrocks.loads(source) == yaml.safe_load(source)
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        # A tab after the indenting spaces is separation, not indentation.
+        ("key: [a\n \tb]\n", {"key": ["a b"]}),
+        # A tab padding flow punctuation where no block indent applies.
+        ("[a\n\t]\n", ["a"]),
+    ],
+)
+def test_tab_separation_in_flow_stays_valid(source, expected):
+    """Tabs that separate rather than indent stay valid in strict mode. PyYAML
+    rejects these, so the expected values are spelled out."""
+    assert yamlrocks.loads(source) == expected
+
+
+def test_a_tab_opening_a_flow_line_before_content_is_never_indentation():
+    """A tab cannot indent flow content, even under compat (PyYAML rejects it
+    too), whether the content follows a comma or continues a plain scalar."""
+    for source in ("key: [a,\n\tb]\n", "key: [a\n\tb]\n"):
+        for option in (0, yamlrocks.OPT_PYYAML_COMPAT):
+            with pytest.raises(yamlrocks.YAMLRocksParseError, match="a tab cannot"):
+                yamlrocks.loads(source, option=option)
+
+
+@pytest.mark.parametrize("source", ["key: [\n  a\n\t]\n", "key: [\n  a,\n\t]\n"])
+def test_a_tab_before_the_closing_bracket_does_not_indent_it(source):
+    """A tab padding a closing `]` leaves it at the block indent: strict mode
+    rejects it (9C9N), while compat keeps reading it."""
+    with pytest.raises(yamlrocks.YAMLRocksParseError, match="flow content must be"):
+        yamlrocks.loads(source)
+
+    assert yamlrocks.loads(source, option=yamlrocks.OPT_PYYAML_COMPAT) == {"key": ["a"]}
+
+
+def test_an_escaped_line_break_follows_the_indent_rule():
+    """A backslash-escaped line break continues a double-quoted scalar on the
+    next line, which must be indented past the block like any continuation."""
+    in_flow = 'key: ["a\\\nb"]\n'
+    with pytest.raises(yamlrocks.YAMLRocksParseError, match="quoted scalar must"):
+        yamlrocks.loads(in_flow)
+    assert yamlrocks.loads(in_flow, option=yamlrocks.OPT_PYYAML_COMPAT) == {
+        "key": ["ab"]
+    }
+
+    # The block-context counterpart (QB6E) holds under compat too.
+    with pytest.raises(yamlrocks.YAMLRocksParseError, match="quoted scalar must"):
+        yamlrocks.loads('key: "a\\\nb"\n')
+
+    assert yamlrocks.loads('key: ["a\\\n  b"]\n') == {"key": ["ab"]}
+    # A line padded with only a tab is blank, not an unindented continuation.
+    yamlrocks.loads('key: ["a\\\n\t\n  b"]\n')
+
+
 def test_pyyaml_compat_still_rejects_an_unclosed_flow_collection():
     """Dropping the indent check does not let a flow collection swallow the rest
     of the document: one that never closes is still an error, as in PyYAML."""

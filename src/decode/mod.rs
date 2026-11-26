@@ -62,11 +62,21 @@ pub fn decode_collecting(
     warn: WarnOptions,
 ) -> Result<(Vec<Value<'_>>, Vec<String>), DecodeError> {
     let mut parser = Parser::new(input).with_options(ParseOptions::for_schema(schema));
-    let mut events = parser.parse_all().map_err(|e| DecodeError {
-        kind: DecodeErrorKind::Parse,
-        message: e.message,
-        span: e.span,
-    })?;
+    let mut events = match parser.parse_all() {
+        Ok(events) => events,
+        Err(e) => {
+            let scan_error = DecodeError {
+                kind: DecodeErrorKind::Parse,
+                message: e.message,
+                span: e.span,
+            };
+            return Err(if single_document {
+                extra_document_before(input, schema, scan_error)
+            } else {
+                scan_error
+            });
+        }
+    };
 
     let mut decoder = Decoder::new(schema);
     decoder.duplicate_keys_error = duplicate_keys_error;
@@ -86,6 +96,45 @@ pub fn decode_collecting(
         }
     }
     Ok((documents, decoder.warnings))
+}
+
+/// The error a single-document load reports when the scan failed: the extra
+/// document, if one started before the scan error, otherwise the scan error.
+///
+/// The stream is scanned in full before it is decoded, so a syntax error inside
+/// a second document would otherwise win over the extra-document error. PyYAML
+/// reads lazily and stops at the second document. To match it, decode just the
+/// events that scanned cleanly (closed with a stream end where the error hit)
+/// and let the decoder's own boundary logic decide. Only runs on this error
+/// path, so a successful load pays nothing for it.
+fn extra_document_before(input: &str, schema: Schema, scan_error: DecodeError) -> DecodeError {
+    let mut parser = Parser::new(input).with_options(ParseOptions::for_schema(schema));
+    let mut events = Vec::new();
+    while let Ok(event) = parser.next_event() {
+        events.push(event);
+    }
+    events.push(Event::new(EventKind::StreamEnd, scan_error.span));
+
+    let mut decoder = Decoder::new(schema);
+    decoder.single_document = true;
+    match decoder.decode_stream(&mut events) {
+        Err(error) if error.kind == DecodeErrorKind::ExtraDocument => error,
+        _ => scan_error,
+    }
+}
+
+/// Whether an event opens a node (a scalar, alias, collection, or the tag or
+/// anchor in front of one), as opposed to a structural marker.
+fn starts_node(kind: &EventKind<'_>) -> bool {
+    matches!(
+        kind,
+        EventKind::Scalar(..)
+            | EventKind::Alias(_)
+            | EventKind::Anchor(_)
+            | EventKind::Tag(_)
+            | EventKind::MappingStart { .. }
+            | EventKind::SequenceStart { .. }
+    )
 }
 
 /// Whether a tag is an application-defined (custom) tag rather than one of the
@@ -613,9 +662,13 @@ impl<'input> Decoder<'input> {
                 _ => {
                     // Implicit document.
                     let start_pos = self.pos;
-                    if let Some(value) = self.decode_node(events, false)? {
-                        // A bare document after a `...` marker.
+                    // A bare document after a `...` marker. Checked before its
+                    // content is decoded, so an error inside it (an unknown
+                    // alias, say) cannot win over the extra-document error.
+                    if starts_node(&events[start_pos].kind) {
                         self.reject_another_document(&documents, events[start_pos].span)?;
+                    }
+                    if let Some(value) = self.decode_node(events, false)? {
                         documents.push(value);
                         self.expect_document_boundary(events)?;
                     }
@@ -1435,6 +1488,26 @@ mod tests {
                 "{input:?}"
             );
         }
+    }
+
+    #[test]
+    fn single_document_reports_the_extra_document_before_errors_inside_it() {
+        // A scan error (unclosed flow, unterminated quote) or a decode error
+        // (unknown alias) inside the second document must not hide it.
+        for (input, line) in [
+            ("a: 1\n---\n[unterminated\n", 1),
+            ("a: 1\n---\nb: 'x\n", 1),
+            ("a: 1\n--- 'x\n", 1),
+            ("a\n...\n*missing\n", 2),
+        ] {
+            let err = decode_single(input).unwrap_err();
+            assert_eq!(err.kind, DecodeErrorKind::ExtraDocument, "{input:?}");
+            assert_eq!(err.span.line, line, "{input:?}");
+        }
+
+        // A scan error inside the first document is still reported as itself.
+        let err = decode_single("a: 'x\n---\nb\n").unwrap_err();
+        assert_eq!(err.kind, DecodeErrorKind::Parse);
     }
 
     #[test]

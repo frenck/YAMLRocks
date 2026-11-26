@@ -180,7 +180,7 @@ include = ["pysrc/yamlrocks"]
 # its import is unresolvable to a type checker (mypy silences the same thing).
 [[tool.ty.overrides]]
 include = ["pysrc/yamlrocks/__init__.py"]
-rules = { unresolved-import = "ignore" }
+rules = { import-not-found = "ignore" }
 
 [tool.codespell]
 skip = "*.lock,*package-lock.json,./target,./docs/node_modules,./docs/dist,./tests/data/yaml_test_suite/cases,./tests/data/realworld,./fuzz/corpus,./fuzz/target,./fuzz/artifacts,./.git"

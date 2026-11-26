@@ -1333,12 +1333,15 @@ impl<'input> Scanner<'input> {
         // matters if the scalar turns out to be a mapping key (a tab cannot
         // indent the mapping); a plain scalar value after a tab is fine.
         let had_leading_tab = self.tab_before_token;
-        let flow_indent = self.strict_flow_indent();
+        let flow = (self.flow_level > 0).then_some(scalar::FlowLines {
+            block_indent: self.flow_block_indent,
+            strict_indent: !self.lenient_flow_indent,
+        });
         let (value, content_end) = scalar::scan_plain(
             &mut self.reader,
             self.flow_level > 0,
             self.current_indent,
-            flow_indent,
+            flow,
         )?;
 
         // scan_plain may consume line breaks. If we crossed a line boundary

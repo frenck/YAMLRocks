@@ -280,6 +280,11 @@ def test_flow_layouts_the_spec_allows_stay_valid(source):
         ("key: [a\n \tb]\n", {"key": ["a b"]}),
         # A tab padding flow punctuation where no block indent applies.
         ("[a\n\t]\n", ["a"]),
+        # At the top level no indentation is required, so a tab opening a
+        # continuation line is separation.
+        ("[a\n\tb]\n", ["a b"]),
+        # A comment line may be indented with a tab.
+        ("key: [a\n\t# note\n ]\n", {"key": ["a"]}),
     ],
 )
 def test_tab_separation_in_flow_stays_valid(source, expected):

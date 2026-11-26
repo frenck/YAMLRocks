@@ -193,3 +193,74 @@ def test_loads_without_compat_keeps_the_first_document():
     """Without OPT_PYYAML_COMPAT, loads still returns the first document of a
     multi-document stream, as documented."""
     assert yamlrocks.loads("a: 1\n---\nb: 2\n") == {"a": 1}
+
+
+# -- OPT_PYYAML_COMPAT: flow collections at or below the block indent ----------
+
+# Inside a flow collection the spec requires every line to be indented past the
+# enclosing block (test-suite case 9C9N); PyYAML does not check. A closing
+# bracket at the key's column is the common case, but PyYAML accepts the items
+# there too, so compat accepts all of it.
+_LENIENT_FLOW = [
+    "command: [\n  '/bin/bash',\n  '-c',\n  'echo hello'\n]\n",
+    "a: [\nx,\ny\n]\n",
+    "a:\n  b: [\n  1\n  ]\n",
+    "a: {\nk: v\n}\n",
+    "- [\n1,\n2\n]\n",
+    "a: {x: [\n1\n]}\n",
+]
+
+# The fast path, the AST paths, and round-trip each build their own parser.
+_COMPAT_FLOW_MODES = {
+    "default": yamlrocks.OPT_PYYAML_COMPAT,
+    "annotated": yamlrocks.OPT_PYYAML_COMPAT | yamlrocks.OPT_ANNOTATED,
+    "tags": yamlrocks.OPT_PYYAML_COMPAT | yamlrocks.OPT_SECRETS,
+    "round_trip": yamlrocks.OPT_PYYAML_COMPAT | yamlrocks.OPT_ROUND_TRIP,
+}
+
+
+@pytest.mark.parametrize("mode", _COMPAT_FLOW_MODES)
+@pytest.mark.parametrize("source", _LENIENT_FLOW)
+def test_pyyaml_compat_accepts_flow_at_the_block_indent(source, mode):
+    """Under OPT_PYYAML_COMPAT, a flow collection whose lines sit at or below
+    the enclosing block's indent loads like PyYAML, on every load path."""
+    loaded = yamlrocks.loads(source, option=_COMPAT_FLOW_MODES[mode])
+
+    if isinstance(loaded, yamlrocks.YAMLRocksDocument):
+        assert loaded.to_yaml() == source.encode()
+        loaded = loaded.to_dict()
+    assert loaded == yaml.safe_load(source)
+
+
+@pytest.mark.parametrize("source", _LENIENT_FLOW)
+def test_flow_at_the_block_indent_stays_an_error_without_compat(source):
+    """Without OPT_PYYAML_COMPAT the spec rule holds (test-suite case 9C9N)."""
+    with pytest.raises(yamlrocks.YAMLRocksParseError, match="flow content must be"):
+        yamlrocks.loads(source)
+
+
+def test_pyyaml_compat_still_rejects_an_unclosed_flow_collection():
+    """Dropping the indent check does not let a flow collection swallow the rest
+    of the document: one that never closes is still an error, as in PyYAML."""
+    source = "a: [1,\nb: 2\n"
+    with pytest.raises(yaml.YAMLError):
+        yaml.safe_load(source)
+    with pytest.raises(yamlrocks.YAMLRocksParseError):
+        yamlrocks.loads(source, option=yamlrocks.OPT_PYYAML_COMPAT)
+
+
+def test_pyyaml_compat_flow_leniency_reaches_included_files(tmp_path):
+    """Included files and secrets.yaml are read in the same dialect as the root,
+    so a lenient flow layout in either loads under OPT_PYYAML_COMPAT."""
+    (tmp_path / "part.yaml").write_text("cmd: [\n  a,\n  b\n]\n")
+    (tmp_path / "secrets.yaml").write_text("token: [\n  s1\n]\n")
+
+    loaded = yamlrocks.loads(
+        "x: !include part.yaml\ny: !secret token\n",
+        option=yamlrocks.OPT_PYYAML_COMPAT
+        | yamlrocks.OPT_INCLUDES
+        | yamlrocks.OPT_SECRETS,
+        include_dir=tmp_path,
+    )
+
+    assert loaded == {"x": {"cmd": ["a", "b"]}, "y": ["s1"]}

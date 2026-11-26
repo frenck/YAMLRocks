@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 pub(crate) mod merge;
 
-use crate::parser::{Event, EventKind, Parser};
+use crate::parser::{Event, EventKind, ParseOptions, Parser};
 use crate::resolver::{ScalarKind, Schema};
 use crate::scanner::{ScalarStyle, Span};
 use merge::{apply_merge_keys, is_merge_key};
@@ -61,7 +61,7 @@ pub fn decode_collecting(
     single_document: bool,
     warn: WarnOptions,
 ) -> Result<(Vec<Value<'_>>, Vec<String>), DecodeError> {
-    let mut parser = Parser::new(input);
+    let mut parser = Parser::new(input).with_options(ParseOptions::for_schema(schema));
     let mut events = parser.parse_all().map_err(|e| DecodeError {
         kind: DecodeErrorKind::Parse,
         message: e.message,

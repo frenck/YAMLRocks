@@ -140,6 +140,9 @@ pub struct Scanner<'input> {
     /// Whether to retain comments. The fast path leaves this `false` so
     /// comment scanning has near-zero cost; the round-trip path enables it.
     record_comments: bool,
+    /// Accept a flow-collection line at or below the enclosing block's indent,
+    /// the way PyYAML does. Off by default; see [`Self::set_lenient_flow_indent`].
+    lenient_flow_indent: bool,
 }
 
 impl<'input> Scanner<'input> {
@@ -177,6 +180,7 @@ impl<'input> Scanner<'input> {
             simple_key_allowed: true,
             comments: Vec::new(),
             record_comments: false,
+            lenient_flow_indent: false,
         }
     }
 
@@ -195,6 +199,22 @@ impl<'input> Scanner<'input> {
     /// Enable retention of comments for the round-trip path.
     pub fn set_record_comments(&mut self, record: bool) {
         self.record_comments = record;
+    }
+
+    /// Accept flow-collection content (including the closing bracket) at or
+    /// below the indentation of the block it opened in, as PyYAML does:
+    ///
+    /// ```yaml
+    /// command: [
+    ///   "echo",
+    /// ]
+    /// ```
+    ///
+    /// The spec rejects that (test-suite case `9C9N`), so this stays off unless
+    /// the caller asks for PyYAML compatibility. Indentation carries no structure
+    /// inside a flow collection, so skipping the check changes nothing else.
+    pub fn set_lenient_flow_indent(&mut self, lenient: bool) {
+        self.lenient_flow_indent = lenient;
     }
 
     /// Take all comments collected so far, leaving the scanner's list empty.
@@ -244,9 +264,11 @@ impl<'input> Scanner<'input> {
         // the block context that the collection opened in. The YAML spec (and
         // the test suite, e.g. `9C9N`) treats a line at or below that column as
         // having escaped the collection, so it is malformed, even though PyYAML
-        // leniently accepts it. We stay spec-strict; real configs that rely on
-        // the lenient reading are recorded in the real-world suite's xfails.
+        // leniently accepts it. We stay spec-strict by default; real configs that
+        // rely on the lenient reading are recorded in the real-world suite's
+        // xfails, and PyYAML compatibility opts back into accepting them.
         if self.flow_level > 0
+            && !self.lenient_flow_indent
             && !self.reader.is_eof()
             && self.reader.line() > line_before
             && (self.reader.column() as i32) <= self.flow_block_indent

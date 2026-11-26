@@ -10,7 +10,7 @@ change. Do not edit it by hand.
 
 ## Summary
 
-- MIT License: 36 crate(s)
+- MIT License: 32 crate(s)
 - Apache License 2.0: 3 crate(s)
 - Unicode License v3: 1 crate(s)
 
@@ -947,7 +947,6 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 Used by:
 
-- [r-efi](https://crates.io/crates/r-efi)
 - [windows-link](https://crates.io/crates/windows-link)
 - [windows-sys](https://crates.io/crates/windows-sys)
 
@@ -979,13 +978,10 @@ Used by:
 
 - [itoa](https://crates.io/crates/itoa)
 - [once_cell](https://crates.io/crates/once_cell)
-- [portable-atomic](https://crates.io/crates/portable-atomic)
 - [proc-macro2](https://crates.io/crates/proc-macro2)
 - [quote](https://crates.io/crates/quote)
 - [syn](https://crates.io/crates/syn)
 - [unicode-ident](https://crates.io/crates/unicode-ident)
-- [wasip2](https://crates.io/crates/wasip2)
-- [wit-bindgen](https://crates.io/crates/wit-bindgen)
 
 ```
 Permission is hereby granted, free of charge, to any

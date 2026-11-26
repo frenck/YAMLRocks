@@ -212,6 +212,14 @@ _LENIENT_FLOW = [
     "a: {\nk: v\n}\n",
     "- [\n1,\n2\n]\n",
     "a: {x: [\n1\n]}\n",
+    # The same rule right after a plain item, which consumes the line break
+    # itself, and inside quoted and plain scalars continued at the block indent.
+    "key: [\n  a,\n  b\n]\n",
+    "key: {\n  k: v\n}\n",
+    "a:\n  b: [\n    x\n  ]\n",
+    "key: [a\nb]\n",
+    "key: ['a\nb']\n",
+    'key: ["a\nb"]\n',
 ]
 
 # The fast path, the AST paths, and round-trip each build their own parser.
@@ -239,8 +247,30 @@ def test_pyyaml_compat_accepts_flow_at_the_block_indent(source, mode):
 @pytest.mark.parametrize("source", _LENIENT_FLOW)
 def test_flow_at_the_block_indent_stays_an_error_without_compat(source):
     """Without OPT_PYYAML_COMPAT the spec rule holds (test-suite case 9C9N)."""
-    with pytest.raises(yamlrocks.YAMLRocksParseError, match="flow content must be"):
+    with pytest.raises(
+        yamlrocks.YAMLRocksParseError,
+        match=r"flow content must be|quoted scalar must be indented",
+    ):
         yamlrocks.loads(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # A comment line may sit at any indentation.
+        "key: [a,\n# note\n  b]\n",
+        "key: [a\n# note\n  ]\n",
+        # A top-level flow collection has no block to be indented past.
+        "[\na,\nb\n]\n",
+        # Indented past the block, as the spec asks.
+        "key: [\n  a,\n  b\n  ]\n",
+        "key: [a\n  b]\n",
+        "key: ['a\n  b']\n",
+    ],
+)
+def test_flow_layouts_the_spec_allows_stay_valid(source):
+    """The strict flow-indentation check only rejects what the spec rejects."""
+    assert yamlrocks.loads(source) == yaml.safe_load(source)
 
 
 def test_pyyaml_compat_still_rejects_an_unclosed_flow_collection():

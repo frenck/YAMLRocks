@@ -34,6 +34,12 @@ use reader::Reader;
 /// scan time. Kept in step with `decode::MAX_DEPTH`.
 const MAX_FLOW_DEPTH: usize = 1000;
 
+/// Diagnostic for flow-collection content at or below the indentation of the
+/// block the collection opened in (test-suite case `9C9N`). Shared so the
+/// token-level check and the plain scalar scanner, which can cross a line break
+/// on its own, report it identically.
+const FLOW_INDENT_MESSAGE: &str = "flow content must be indented more than its block context";
+
 /// YAML scanner: converts a byte stream into a sequence of tokens.
 ///
 /// The scanner handles indentation tracking, block/flow context management,
@@ -273,10 +279,7 @@ impl<'input> Scanner<'input> {
             && self.reader.line() > line_before
             && (self.reader.column() as i32) <= self.flow_block_indent
         {
-            return Err(ScanError::new(
-                "flow content must be indented more than its block context",
-                self.reader.span(),
-            ));
+            return Err(ScanError::new(FLOW_INDENT_MESSAGE, self.reader.span()));
         }
 
         if self.flow_level == 0 && !self.reader.is_eof() {
@@ -1202,14 +1205,23 @@ impl<'input> Scanner<'input> {
         )
     }
 
-    /// The block indentation a quoted scalar's continuation lines must beat, or
-    /// `i32::MIN` inside a flow collection (where the check does not apply).
+    /// The block indentation a quoted scalar's continuation lines must beat. In
+    /// a flow collection that is the block the collection opened in, the same
+    /// rule as for any other flow content, unless the lenient flow indentation
+    /// (PyYAML compatibility) is on: then `i32::MIN`, which disables the check.
     fn quoted_parent_indent(&self) -> i32 {
         if self.flow_level == 0 {
             self.current_indent
         } else {
-            i32::MIN
+            self.strict_flow_indent().unwrap_or(i32::MIN)
         }
+    }
+
+    /// Inside a flow collection, the block indentation every line must be
+    /// indented past (test-suite case `9C9N`); `None` outside a flow collection
+    /// or when the lenient flow indentation (PyYAML compatibility) is on.
+    fn strict_flow_indent(&self) -> Option<i32> {
+        (self.flow_level > 0 && !self.lenient_flow_indent).then_some(self.flow_block_indent)
     }
 
     /// Shared tail of the single- and double-quoted scalar fetchers, which differ
@@ -1311,8 +1323,13 @@ impl<'input> Scanner<'input> {
         // matters if the scalar turns out to be a mapping key (a tab cannot
         // indent the mapping); a plain scalar value after a tab is fine.
         let had_leading_tab = self.tab_before_token;
-        let (value, content_end) =
-            scalar::scan_plain(&mut self.reader, self.flow_level > 0, self.current_indent)?;
+        let flow_indent = self.strict_flow_indent();
+        let (value, content_end) = scalar::scan_plain(
+            &mut self.reader,
+            self.flow_level > 0,
+            self.current_indent,
+            flow_indent,
+        )?;
 
         // scan_plain may consume line breaks. If we crossed a line boundary
         // in block context, a new simple key is allowed on the next line.

@@ -625,10 +625,15 @@ enum Chomping {
 /// character (the source end). The reader may advance past that point while
 /// folding trailing line breaks, so the returned `content_end` (not the reader's
 /// final position) is the scalar's true source extent.
+///
+/// `flow_indent` is the block indentation every line inside the enclosing flow
+/// collection must be indented past, or `None` when that rule does not apply
+/// (block context, or the lenient PyYAML-compatible reading).
 pub fn scan_plain<'input>(
     reader: &mut Reader<'input>,
     in_flow: bool,
     current_indent: i32,
+    flow_indent: Option<i32>,
 ) -> Result<(Cow<'input, str>, usize), ScanError> {
     // A single-line plain scalar is exactly the input slice `[start..content_end]`;
     // its internal spaces are contiguous in the input, and the only thing that
@@ -714,6 +719,18 @@ pub fn scan_plain<'input>(
             // marker, instead of folding it into the scalar as `x ---`.
             if at_document_marker(reader) {
                 break;
+            }
+
+            // Inside a flow collection, a line this scalar crosses onto must be
+            // indented past the block the collection opened in (test-suite case
+            // `9C9N`), whether it continues the scalar or holds the next token
+            // (a closing `]`). The scanner checks that before each token, but
+            // this scalar has already consumed the line break, so the check has
+            // to happen here. A comment line may sit at any indentation.
+            if let Some(block_indent) = flow_indent {
+                if (reader.column() as i32) <= block_indent && reader.peek() != '#' {
+                    return Err(ScanError::new(super::FLOW_INDENT_MESSAGE, reader.span()));
+                }
             }
 
             // Check if next content starts a new structure

@@ -36,7 +36,7 @@ Every function in the table is importable from `yamlrocks.compat`:
 
 | PyYAML               | yamlrocks.compat | Notes                                           |
 | -------------------- | ---------------- | ----------------------------------------------- |
-| `yaml.safe_load`     | `safe_load`      | parse the first document                        |
+| `yaml.safe_load`     | `safe_load`      | parse one document; raises if there are more    |
 | `yaml.safe_load_all` | `safe_load_all`  | iterate documents in a stream                   |
 | `yaml.safe_dump`     | `safe_dump`      | emit to a `str` (or a stream)                   |
 | `yaml.safe_dump_all` | `safe_dump_all`  | emit several documents                          |

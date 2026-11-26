@@ -29,6 +29,19 @@ def test_safe_load_all():
     assert yaml.safe_load_all("---\na: 1\n---\nb: 2") == [{"a": 1}, {"b": 2}]
 
 
+def test_safe_load_rejects_a_multi_document_stream():
+    """safe_load raises on a stream with a second document, like PyYAML, instead
+    of silently returning the first one and dropping the rest."""
+    with pytest.raises(yaml.YAMLError, match="expected a single document") as info:
+        yaml.safe_load("name: app\nport: 8080\n---\nname: other\nport: 9090\n")
+    assert (info.value.line, info.value.column) == (3, 1)
+
+
+def test_safe_load_accepts_a_closed_single_document():
+    """A lone document closed by a `...` marker is still a single document."""
+    assert yaml.safe_load("a: 1\n...\n") == {"a": 1}
+
+
 def test_load_is_safe_load():
     """load ignores the Loader argument and behaves like safe_load."""
     assert yaml.load("a: 1", Loader=object()) == {"a": 1}

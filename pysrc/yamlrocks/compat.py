@@ -55,7 +55,11 @@ def _read(stream: Any) -> Any:
 
 
 def safe_load(stream: Any) -> Any:
-    """Parse the first YAML document from ``stream`` (str, bytes, or file)."""
+    """Parse the single YAML document in ``stream`` (str, bytes, or file).
+
+    Like PyYAML, a stream holding more than one document raises ``YAMLError``;
+    use ``safe_load_all`` for those.
+    """
     return yamlrocks.loads(_read(stream), option=_COMPAT)
 
 
@@ -72,7 +76,7 @@ def safe_load_all(stream: Any) -> list[Any]:
 # ``load``/``load_all`` map onto the safe variants. The ``Loader`` argument is
 # accepted and ignored for signature compatibility.
 def load(stream: Any, Loader: Any = None) -> Any:
-    """Parse the first document from ``stream``; an alias for :func:`safe_load`."""
+    """Parse the single document in ``stream``; an alias for :func:`safe_load`."""
     return safe_load(stream)
 
 

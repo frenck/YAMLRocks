@@ -154,7 +154,9 @@ PyYAML-based ecosystem (Home Assistant, ESPHome, Ansible) relies on that.
 strings. If you are reading configs written for the PyYAML ecosystem, this is the
 flag you want. It implies the 1.1 schema, so it works on its own, and it carries
 through the migration paths above, `OPT_UPGRADE_1_1` and `OPT_YAML_1_1_WARN` both
-treat `y`/`n` as strings under it.
+treat `y`/`n` as strings under it. Beyond scalar typing it also makes `loads`
+reject a stream holding more than one document, as `safe_load` does, instead of
+returning the first.
 
 ```python
 import yamlrocks

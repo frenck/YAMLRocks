@@ -372,6 +372,7 @@ pub fn loads(
             dup_warn,
             yaml_11_warn,
             dir_recursive,
+            pyyaml_compat,
             &missing,
         );
     }
@@ -391,6 +392,10 @@ pub fn loads(
                 dup_error,
                 reject_complex_keys,
                 resolve_timestamps,
+                // `loads` returns one document. PyYAML's `safe_load` raises on a
+                // stream with more, so compat mode does too rather than silently
+                // dropping the rest.
+                pyyaml_compat,
                 warn,
             )
         })
@@ -572,6 +577,7 @@ pub fn loads_all(
                 dup_error,
                 reject_complex_keys,
                 resolve_timestamps,
+                false,
                 warn,
             )
         })
@@ -1214,6 +1220,7 @@ fn loads_via_ast(
     dup_warn: bool,
     yaml_11_warn: bool,
     dir_recursive: bool,
+    single_document: bool,
     missing: &MissingPolicies<'_>,
 ) -> PyResult<Py<PyAny>> {
     // Annotated mode must reject exactly what the default (fast) path rejects:
@@ -1237,6 +1244,30 @@ fn loads_via_ast(
             )
         })
         .map_err(|e| errors::decode_error(py, &e, None))?;
+    }
+
+    // Same single-document rule as the fast path (see `loads`). The composer
+    // keeps no marker positions and drops an empty trailing document, so it
+    // cannot tell; the decoder can. Only its extra-document verdict counts here:
+    // any other error it hits belongs to the strict gate above, which this path
+    // deliberately does not run unless asked to.
+    if single_document && decode::has_document_marker(input) {
+        let checked = py.detach(|| {
+            decode::decode_collecting(
+                input,
+                convert.yaml_schema,
+                false,
+                false,
+                false,
+                true,
+                decode::WarnOptions::default(),
+            )
+        });
+        if let Err(error) = checked {
+            if error.kind == decode::DecodeErrorKind::ExtraDocument {
+                return Err(errors::decode_error(py, &error, None));
+            }
+        }
     }
 
     let (nodes, file_map, file_sources) = if tags.any() {

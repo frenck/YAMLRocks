@@ -27,6 +27,7 @@ pub fn decode_with(
         duplicate_keys_error,
         reject_complex_keys,
         false,
+        false,
         WarnOptions::default(),
     )
     .map(|(documents, _)| documents)
@@ -47,12 +48,17 @@ pub struct WarnOptions {
 /// Like [`decode_with`], but also returns the non-fatal diagnostics selected by
 /// `warn` (duplicate keys, 1.1-only syntax), for the caller to emit through
 /// Python logging. The warning list is empty unless a `warn` field is set.
+///
+/// With `single_document` set, a stream holding more than one document is
+/// rejected at the start of the second one, the way PyYAML's `safe_load` does,
+/// instead of the extra documents being decoded and then silently ignored.
 pub fn decode_collecting(
     input: &str,
     schema: Schema,
     duplicate_keys_error: bool,
     reject_complex_keys: bool,
     resolve_timestamps: bool,
+    single_document: bool,
     warn: WarnOptions,
 ) -> Result<(Vec<Value<'_>>, Vec<String>), DecodeError> {
     let mut parser = Parser::new(input);
@@ -66,6 +72,7 @@ pub fn decode_collecting(
     decoder.duplicate_keys_error = duplicate_keys_error;
     decoder.reject_complex_keys = reject_complex_keys;
     decoder.resolve_timestamps = resolve_timestamps;
+    decoder.single_document = single_document;
     decoder.duplicate_keys_warn = warn.duplicate_keys;
     decoder.yaml_11_warn = warn.yaml_1_1;
     // The decoder moves each scalar's text straight out of its event into the
@@ -171,6 +178,25 @@ pub enum DecodeErrorKind {
     /// converted to a hashable Python value by default; this kind is produced
     /// only when the caller opts into rejecting it instead.
     ComplexKey,
+    /// A second document in a single-document load (`OPT_PYYAML_COMPAT`). It
+    /// surfaces as a plain parse error; the separate kind only lets a caller
+    /// that runs the decoder purely as this check tell it apart from the rest.
+    ExtraDocument,
+}
+
+/// The error for a second document in a single-document load. It mirrors
+/// PyYAML's wording, so code ported from `safe_load` keeps recognizing it.
+const EXTRA_DOCUMENT_MESSAGE: &str =
+    "expected a single document in the stream, but found another document";
+
+/// Whether `input` has a line starting with a document marker (`---` or
+/// `...`). Every document after the first is introduced by one, so without such
+/// a line the stream holds at most one document. A cheap pre-check that lets a
+/// caller skip a full decode for the common markerless config.
+pub fn has_document_marker(input: &str) -> bool {
+    input
+        .split('\n')
+        .any(|line| line.starts_with("---") || line.starts_with("..."))
 }
 
 /// Error during decoding.
@@ -285,6 +311,9 @@ struct Decoder<'input> {
     /// date/datetime (`OPT_TIMESTAMPS` or `OPT_PYYAML_COMPAT`), rather than a
     /// string. Off by default (YAML 1.2 has no implicit timestamp type).
     resolve_timestamps: bool,
+    /// Reject a second document in the stream (`OPT_PYYAML_COMPAT`), rather than
+    /// decoding it for a caller that only keeps the first.
+    single_document: bool,
     /// Collect a non-fatal diagnostic for each repeated key (last value still
     /// wins), for the caller to log. Mutually meaningful only when
     /// `duplicate_keys_error` is off.
@@ -319,6 +348,7 @@ impl<'input> Decoder<'input> {
             duplicate_keys_error: false,
             reject_complex_keys: false,
             resolve_timestamps: false,
+            single_document: false,
             duplicate_keys_warn: false,
             yaml_11_warn: false,
             warnings: Vec::new(),
@@ -490,6 +520,7 @@ impl<'input> Decoder<'input> {
                     directives_allowed = true;
                 }
                 EventKind::DocumentStart => {
+                    self.reject_another_document(&documents, event.span)?;
                     self.pos += 1;
                     // An explicit `---` always introduces a document, even an
                     // empty one: a lone or trailing `---` yields a null document
@@ -517,6 +548,9 @@ impl<'input> Decoder<'input> {
                 }
                 EventKind::Directive(_) if directives_allowed => {
                     let run_span = event.span;
+                    // A directive run opens the next document, so that is where
+                    // a single-document load reports the extra one.
+                    self.reject_another_document(&documents, run_span)?;
                     let mut seen_yaml = false;
                     while self.pos < events.len() {
                         let EventKind::Directive(text) = &events[self.pos].kind else {
@@ -579,6 +613,8 @@ impl<'input> Decoder<'input> {
                     // Implicit document.
                     let start_pos = self.pos;
                     if let Some(value) = self.decode_node(events, false)? {
+                        // A bare document after a `...` marker.
+                        self.reject_another_document(&documents, events[start_pos].span)?;
                         documents.push(value);
                         self.expect_document_boundary(events)?;
                     }
@@ -600,6 +636,24 @@ impl<'input> Decoder<'input> {
         }
 
         Ok(documents)
+    }
+
+    /// In single-document mode, reject a document that would follow one already
+    /// decoded.
+    fn reject_another_document(
+        &self,
+        documents: &[Value<'input>],
+        span: Span,
+    ) -> Result<(), DecodeError> {
+        if !self.single_document || documents.is_empty() {
+            return Ok(());
+        }
+
+        Err(DecodeError {
+            kind: DecodeErrorKind::ExtraDocument,
+            message: EXTRA_DOCUMENT_MESSAGE.to_owned(),
+            span,
+        })
     }
 
     /// After a document's root node, only the end of the stream or a document
@@ -1255,7 +1309,7 @@ impl<'input> Decoder<'input> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_with, DecodeErrorKind, Value};
+    use super::{decode_with, has_document_marker, DecodeError, DecodeErrorKind, Value};
     use crate::resolver::Schema;
 
     fn decode(input: &str) -> Vec<Value<'_>> {
@@ -1328,6 +1382,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             warn,
         )
         .unwrap();
@@ -1346,11 +1401,68 @@ mod tests {
         );
     }
 
+    /// Decode `input` as a single-document load, the way `OPT_PYYAML_COMPAT`
+    /// does.
+    fn decode_single(input: &str) -> Result<Vec<Value<'_>>, DecodeError> {
+        super::decode_collecting(
+            input,
+            Schema::Yaml12,
+            false,
+            false,
+            false,
+            true,
+            super::WarnOptions::default(),
+        )
+        .map(|(documents, _)| documents)
+    }
+
+    #[test]
+    fn single_document_rejects_a_second_document_at_its_marker() {
+        // The error points at what opens the second document: its `---`, the
+        // directive in front of it, or a bare document's content after `...`.
+        for (input, line, column) in [
+            ("a: 1\n---\nb: 2\n", 1, 0),
+            ("a: 1\n---\n", 1, 0),
+            ("a\n...\n%YAML 1.2\n---\nb\n", 2, 0),
+            ("a\n...\nb\n", 2, 0),
+        ] {
+            let err = decode_single(input).unwrap_err();
+            assert_eq!(err.kind, DecodeErrorKind::ExtraDocument, "{input:?}");
+            assert_eq!(
+                (err.span.line, err.span.column),
+                (line, column),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn single_document_accepts_one_document() {
+        for input in [
+            "",
+            "a: 1\n",
+            "---\na: 1\n",
+            "a: 1\n...\n",
+            "a\n...\n# done\n",
+        ] {
+            assert!(decode_single(input).is_ok(), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn document_marker_precheck() {
+        assert!(has_document_marker("a: 1\n---\nb: 2\n"));
+        assert!(has_document_marker("a: 1\n...\n"));
+        // A marker must start its line; indented or embedded dashes are content.
+        assert!(!has_document_marker("a: 1\nb: ---\n  --- c\n"));
+    }
+
     #[test]
     fn no_duplicate_warnings_without_the_flag() {
         let (_, warnings) = super::decode_collecting(
             "a: 1\na: 2\n",
             Schema::Yaml12,
+            false,
             false,
             false,
             false,
@@ -1370,6 +1482,7 @@ mod tests {
         let (documents, warnings) = super::decode_collecting(
             "a: yes\nb: 0777\nc: 42\nd: hello\n",
             Schema::Yaml11,
+            false,
             false,
             false,
             false,

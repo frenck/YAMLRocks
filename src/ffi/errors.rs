@@ -76,7 +76,9 @@ pub fn decode_error(py: Python<'_>, e: &DecodeError, file: Option<&str>) -> PyEr
     let err = match e.kind {
         DecodeErrorKind::DuplicateKey => YAMLRocksDuplicateKeyError::new_err(message),
         DecodeErrorKind::ComplexKey => YAMLRocksComplexKeyError::new_err(message),
-        DecodeErrorKind::Parse => YAMLRocksParseError::new_err(message),
+        DecodeErrorKind::Parse | DecodeErrorKind::ExtraDocument => {
+            YAMLRocksParseError::new_err(message)
+        }
     };
     set_location(py, &err, file, Some(e.span.line), Some(e.span.column));
     err

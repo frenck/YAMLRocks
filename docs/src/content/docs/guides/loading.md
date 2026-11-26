@@ -124,6 +124,21 @@ yamlrocks.loads_all(source)
 # [{'a': 1}, {'b': 2}]
 ```
 
+`loads` on the same stream returns only the first document. Under
+`OPT_PYYAML_COMPAT` it raises a `YAMLRocksParseError` instead, pointing at the
+second document, the way PyYAML's `safe_load` does. (With `OPT_ROUND_TRIP`, the
+returned document keeps every document of the stream, so nothing is dropped.)
+
+```python
+import yamlrocks
+
+try:
+    yamlrocks.loads("a: 1\n---\nb: 2\n", option=yamlrocks.OPT_PYYAML_COMPAT)
+except yamlrocks.YAMLRocksParseError as err:
+    print(err)
+# expected a single document in the stream, but found another document at line 2, column 1
+```
+
 `loads_all` and `load_all` accept `option`, `tag_handler`, and `tags`, the same
 as their single-document twins. They do **not** take `schema=` or `include_dir`:
 schema validation and `!include` resolution are single-document operations, so

@@ -117,3 +117,79 @@ def test_alias_identity_matches_pyyaml():
 
     data = yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED)
     assert data["base"] is data["ref"]  # YAMLRocks matches that
+
+
+# -- OPT_PYYAML_COMPAT: single-document loads ----------------------------------
+
+# Streams on both sides of PyYAML's "expected a single document" rule: a second
+# `---` (even an empty trailing one, or after a lone `\r` line break), a
+# directive opening another document, and a bare document after `...` all
+# count; a closing `...` or comments do not. A second document that is itself
+# broken still reports as the extra document, as in PyYAML.
+_STREAMS = [
+    "a: 1\n---\nb: 2\n",
+    "a: 1\n---\n",
+    "a: 1\n--- # comment\n",
+    "--- a\n--- b\n",
+    "---\n---\n",
+    "a: 1\n...\n---\n",
+    "a\n...\nb\n",
+    "%YAML 1.1\n---\na\n...\n%YAML 1.1\n---\nb\n",
+    "a: 1\r\n---\r\nb\r\n",
+    "a: 1\r---\rb: 2\r",
+    "a\n---\n*missing\n",
+    "a: 1\n---\n- a\nb: c\n",
+    "a: |\n  text\n---\n",
+    "a: 1\n...\n",
+    "a: 1\n...\n...\n",
+    "a\n...\n# trailing comment\n",
+    "# comment\n---\na\n",
+    "---\n",
+    "",
+]
+
+# The fast path, the AST path behind its strict gate (annotated, or tags with
+# OPT_REJECT_COMPLEX_KEYS), and the ungated tag-resolving AST path each decide
+# this on their own, so check every one.
+_COMPAT_LOAD_MODES = {
+    "default": yamlrocks.OPT_PYYAML_COMPAT,
+    "annotated": yamlrocks.OPT_PYYAML_COMPAT | yamlrocks.OPT_ANNOTATED,
+    "tags": yamlrocks.OPT_PYYAML_COMPAT | yamlrocks.OPT_SECRETS,
+    "tags_strict": yamlrocks.OPT_PYYAML_COMPAT
+    | yamlrocks.OPT_SECRETS
+    | yamlrocks.OPT_REJECT_COMPLEX_KEYS,
+}
+
+
+def _location_of_second_document(load, stream: str) -> tuple[int, int] | None:
+    """Where `load` reports a second document in `stream` (1-based line and
+    column), or None when it accepts the stream as a single document."""
+    try:
+        load(stream)
+    except yaml.YAMLError as err:
+        return (err.problem_mark.line + 1, err.problem_mark.column + 1)
+    except yamlrocks.YAMLRocksParseError as err:
+        assert "expected a single document" in str(err)
+        return (err.line, err.column)
+    return None
+
+
+@pytest.mark.parametrize("mode", _COMPAT_LOAD_MODES)
+@pytest.mark.parametrize("stream", _STREAMS)
+def test_pyyaml_compat_single_document_matches_pyyaml(stream, mode):
+    """Under OPT_PYYAML_COMPAT, loads raises on exactly the streams PyYAML's
+    safe_load rejects for holding more than one document, at the same spot."""
+    option = _COMPAT_LOAD_MODES[mode]
+
+    ours = _location_of_second_document(
+        lambda text: yamlrocks.loads(text, option=option), stream
+    )
+    theirs = _location_of_second_document(yaml.safe_load, stream)
+
+    assert ours == theirs
+
+
+def test_loads_without_compat_keeps_the_first_document():
+    """Without OPT_PYYAML_COMPAT, loads still returns the first document of a
+    multi-document stream, as documented."""
+    assert yamlrocks.loads("a: 1\n---\nb: 2\n") == {"a": 1}

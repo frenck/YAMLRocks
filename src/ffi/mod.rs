@@ -14,7 +14,7 @@ use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PyString};
 use crate::decode;
 use crate::encode::{self, EmitOptions, NullStyle};
 use crate::include::{IncludeResolver, ResolveTags};
-use crate::parser::ParseOptions;
+use crate::parser::{ParseOptions, Parser};
 use crate::resolver::Schema;
 use crate::roundtrip::document::{YAMLRocksDocument, YAMLRocksDocumentView};
 use crate::roundtrip::{composer, YamlNode};
@@ -480,9 +480,9 @@ pub fn loads_all(
     };
 
     if opts & OPT_ROUND_TRIP != 0 {
-        let documents =
-            composer::compose_all_with_source(&input, ParseOptions::for_schema(yaml_schema))
-                .map_err(|e| errors::parse_error(py, &e, None))?;
+        let parse_options = ParseOptions::for_schema(yaml_schema);
+        let documents = composer::compose_all_with_source(&input, parse_options)
+            .map_err(|e| errors::parse_error(py, &e, None))?;
         let list = PyList::empty(py);
         for (node, source) in documents {
             let document_schema = match crate::version::leading_yaml_version(&source) {
@@ -505,8 +505,8 @@ pub fn loads_all(
                 dup_warn,
                 opts & OPT_YAML_1_1_WARN != 0 && document_schema.is_yaml_11(),
             )?;
-            let doc = YAMLRocksDocument::new(nodes)
-                .with_source(source)
+            let keep_source = upgraded_source_reloads(&source, upgrade, parse_options);
+            let mut doc = YAMLRocksDocument::new(nodes)
                 .with_null_style(null_style_from_opts(opts)?)
                 .with_double_quotes(opts & OPT_SINGLE_QUOTES == 0)
                 .with_upgraded(upgrade)
@@ -516,6 +516,9 @@ pub fn loads_all(
                     document_schema
                 })
                 .with_resolve_timestamps(resolve_timestamps);
+            if keep_source {
+                doc = doc.with_source(source);
+            }
             list.append(Py::new(py, doc)?)?;
         }
         return Ok(list.into_any().unbind());
@@ -1208,14 +1211,27 @@ fn loads_roundtrip(
     // YAML 1.2 (and stamped `%YAML 1.2`), so its edits quote by 1.2 rules even
     // though it was read as 1.1; otherwise edits follow the loaded schema.
     let emit_schema = if upgrade { Schema::Yaml12 } else { yaml_schema };
-    let doc = YAMLRocksDocument::with_file_map(nodes, file_map, file_sources)
-        .with_source(input.to_owned())
+    let mut doc = YAMLRocksDocument::with_file_map(nodes, file_map, file_sources)
         .with_null_style(null_style)
         .with_double_quotes(double_quotes)
         .with_upgraded(upgrade)
         .with_schema(emit_schema)
         .with_resolve_timestamps(resolve_timestamps);
+    if upgraded_source_reloads(input, upgrade, parse_options) {
+        doc = doc.with_source(input.to_owned());
+    }
     Ok(Py::new(py, doc)?.into_any())
+}
+
+/// Whether a round-trip document may re-emit `source` verbatim. Upgrading stamps
+/// `%YAML 1.2`, so the output has to reload under the strict reader. Under
+/// PyYAML compatibility the source can rely on a layout only the lenient reader
+/// accepts (a flow collection at its block's indent); stamping that verbatim
+/// would produce invalid YAML 1.2. Such a document re-emits from the AST
+/// instead, which always writes a canonical flow layout. Anything else keeps
+/// its byte-for-byte source.
+fn upgraded_source_reloads(source: &str, upgrade: bool, parse_options: ParseOptions) -> bool {
+    !upgrade || !parse_options.lenient_flow_indent || Parser::new(source).parse_all().is_ok()
 }
 
 /// Load via the rich AST, used for annotated mode and application-tag

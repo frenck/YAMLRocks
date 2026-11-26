@@ -709,12 +709,10 @@ pub fn scan_plain<'input>(
             }
 
             // A document marker line (`---` or `...`) ends the plain scalar; it
-            // is a structural boundary, not foldable content.
-            if !in_flow
-                && reader.column() == 0
-                && (reader.check_ahead("---") || reader.check_ahead("..."))
-                && reader.peek_at(3).is_none_or(is_whitespace_or_break)
-            {
+            // is a structural boundary, not foldable content. That holds inside a
+            // flow collection too: stopping here lets the flow scanner reject the
+            // marker, instead of folding it into the scalar as `x ---`.
+            if at_document_marker(reader) {
                 break;
             }
 

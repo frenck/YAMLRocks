@@ -249,6 +249,57 @@ def test_pyyaml_compat_still_rejects_an_unclosed_flow_collection():
         yamlrocks.loads(source, option=yamlrocks.OPT_PYYAML_COMPAT)
 
 
+@pytest.mark.parametrize("marker", ["---", "..."])
+@pytest.mark.parametrize("item_indent", ["", "  "])
+def test_document_marker_inside_a_flow_collection_is_an_error(marker, item_indent):
+    """A document marker inside an open flow collection is rejected, as PyYAML
+    rejects it, with or without compat: it is never folded into a plain scalar
+    (which would load `[x, ---]` as the item `x ---`)."""
+    source = f"a: [\n{item_indent}x\n{marker}\n]\n"
+    with pytest.raises(yaml.YAMLError):
+        yaml.safe_load(source)
+
+    for option in (0, yamlrocks.OPT_PYYAML_COMPAT):
+        with pytest.raises(yamlrocks.YAMLRocksParseError):
+            yamlrocks.loads(source, option=option)
+
+
+@pytest.mark.parametrize("all_documents", [False, True])
+def test_pyyaml_compat_upgrade_normalizes_a_lenient_flow_layout(all_documents):
+    """Upgrading stamps `%YAML 1.2`, so a layout only compat reads is re-emitted
+    canonically rather than verbatim: the upgraded output reloads strictly."""
+    source = "command: [\n  'a',\n  'b'\n]\n# kept\n"
+    option = (
+        yamlrocks.OPT_PYYAML_COMPAT
+        | yamlrocks.OPT_ROUND_TRIP
+        | yamlrocks.OPT_UPGRADE_1_1
+    )
+
+    if all_documents:
+        [doc] = yamlrocks.loads_all(source, option=option)
+    else:
+        doc = yamlrocks.loads(source, option=option)
+    upgraded = doc.to_yaml()
+
+    assert upgraded.startswith(b"%YAML 1.2\n")
+    assert b"# kept" in upgraded
+    assert yamlrocks.loads(upgraded) == {"command": ["a", "b"]}
+
+
+def test_pyyaml_compat_upgrade_keeps_a_valid_layout_verbatim():
+    """A compat source that is valid YAML anyway still upgrades byte-for-byte
+    (plus the `%YAML 1.2` stamp); only lenient-only layouts are re-emitted."""
+    source = "command: [\n  'a'\n  ]\n"
+    doc = yamlrocks.loads(
+        source,
+        option=yamlrocks.OPT_PYYAML_COMPAT
+        | yamlrocks.OPT_ROUND_TRIP
+        | yamlrocks.OPT_UPGRADE_1_1,
+    )
+
+    assert doc.to_yaml() == b"%YAML 1.2\n---\n" + source.encode()
+
+
 def test_pyyaml_compat_flow_leniency_reaches_included_files(tmp_path):
     """Included files and secrets.yaml are read in the same dialect as the root,
     so a lenient flow layout in either loads under OPT_PYYAML_COMPAT."""

@@ -12,7 +12,27 @@ mod event;
 
 pub use event::{Event, EventKind};
 
+use crate::resolver::Schema;
 use crate::scanner::{Comment, ScanError, Scanner, Span, Token, TokenKind};
+
+/// How strictly to read the input. The default is spec-strict.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ParseOptions {
+    /// Accept flow-collection content at or below its block's indentation, as
+    /// PyYAML does. See [`Scanner::set_lenient_flow_indent`].
+    pub lenient_flow_indent: bool,
+}
+
+impl ParseOptions {
+    /// The options that go with a scalar schema. PyYAML's schema (selected by
+    /// `OPT_PYYAML_COMPAT`) also reads the layouts PyYAML accepts, so one flag
+    /// switches the whole PyYAML dialect and every load path agrees on it.
+    pub fn for_schema(schema: Schema) -> Self {
+        Self {
+            lenient_flow_indent: schema == Schema::Yaml11PyYaml,
+        }
+    }
+}
 
 /// Diagnostic for a bare scalar key in a block mapping that is not followed by
 /// `:`. Shared so the fast decoder and the round-trip composer report a missing
@@ -78,6 +98,13 @@ impl<'input> Parser<'input> {
             peeked: None,
             input_len: input.len(),
         }
+    }
+
+    /// Apply `options` to how the input is read.
+    pub fn with_options(mut self, options: ParseOptions) -> Self {
+        self.scanner
+            .set_lenient_flow_indent(options.lenient_flow_indent);
+        self
     }
 
     /// Whether the input began with a UTF-8 byte order mark (now skipped). The
@@ -190,7 +217,8 @@ impl<'input> Parser<'input> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EventKind, Parser};
+    use super::{EventKind, ParseOptions, Parser};
+    use crate::resolver::Schema;
 
     fn scalars(src: &str) -> usize {
         Parser::new(src)
@@ -225,6 +253,25 @@ mod tests {
         assert!(!implicit
             .iter()
             .any(|e| matches!(e.kind, EventKind::DocumentStart)));
+    }
+
+    #[test]
+    fn lenient_flow_indent_accepts_a_closing_bracket_at_the_block_indent() {
+        // Spec-strict by default (test-suite case 9C9N); PyYAML's dialect opts in.
+        let src = "command: [\n  'a',\n  'b'\n]\n";
+        assert!(Parser::new(src).parse_all().is_err());
+
+        let lenient = ParseOptions {
+            lenient_flow_indent: true,
+        };
+        assert!(Parser::new(src).with_options(lenient).parse_all().is_ok());
+    }
+
+    #[test]
+    fn only_the_pyyaml_schema_reads_leniently() {
+        assert!(ParseOptions::for_schema(Schema::Yaml11PyYaml).lenient_flow_indent);
+        assert!(!ParseOptions::for_schema(Schema::Yaml11).lenient_flow_indent);
+        assert!(!ParseOptions::for_schema(Schema::Yaml12).lenient_flow_indent);
     }
 
     #[test]

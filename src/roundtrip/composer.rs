@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::parser::{Event, EventKind, Parser};
+use crate::parser::{Event, EventKind, ParseOptions, Parser};
 use crate::resolver::{ResolvedValue, Schema};
 use crate::scanner::{Comment, ScalarStyle, ScanError, Span};
 
@@ -9,7 +9,12 @@ use super::ast::{Comments, HeadComment, NodeStyle, YamlNode, YamlNodeKind};
 /// Compose a YAML string into a rich AST that preserves all structure,
 /// including comments reattached to their nearest nodes.
 pub fn compose(input: &str) -> Result<Vec<YamlNode>, ScanError> {
-    let mut parser = Parser::new(input);
+    compose_with(input, ParseOptions::default())
+}
+
+/// Like [`compose`], reading the input with `options`.
+pub fn compose_with(input: &str, options: ParseOptions) -> Result<Vec<YamlNode>, ScanError> {
+    let mut parser = Parser::new(input).with_options(options);
     let (events, comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, false)?;
@@ -34,8 +39,8 @@ fn mark_leading_bom(nodes: &mut [YamlNode], had_bom: bool) {
 /// `safe_load_all` document count. Used by the multi-document annotated path
 /// (`loads_all`); the round-trip path uses [`compose`], which drops empty
 /// documents so byte-for-byte re-emission is unaffected.
-pub fn compose_all(input: &str) -> Result<Vec<YamlNode>, ScanError> {
-    let mut parser = Parser::new(input);
+pub fn compose_all(input: &str, options: ParseOptions) -> Result<Vec<YamlNode>, ScanError> {
+    let mut parser = Parser::new(input).with_options(options);
     let (events, comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, true)?;
@@ -46,8 +51,11 @@ pub fn compose_all(input: &str) -> Result<Vec<YamlNode>, ScanError> {
 
 /// Compose every document together with its verbatim source slice. Boundaries
 /// come from the parser's document/directive events, never from scanning lines.
-pub fn compose_all_with_source(input: &str) -> Result<Vec<(YamlNode, String)>, ScanError> {
-    let mut parser = Parser::new(input);
+pub fn compose_all_with_source(
+    input: &str,
+    options: ParseOptions,
+) -> Result<Vec<(YamlNode, String)>, ScanError> {
+    let mut parser = Parser::new(input).with_options(options);
     let (events, comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, true)?;
@@ -93,8 +101,12 @@ fn without_next_line_indent(raw: &str, followed: bool) -> &str {
 
 /// Compose with an explicit `file_id` stamped on every span, for include
 /// resolution and source-file tracking.
-pub fn compose_with_file_id(input: &str, file_id: u32) -> Result<Vec<YamlNode>, ScanError> {
-    let mut parser = Parser::new_with_file_id(input, file_id);
+pub fn compose_with_file_id(
+    input: &str,
+    file_id: u32,
+    options: ParseOptions,
+) -> Result<Vec<YamlNode>, ScanError> {
+    let mut parser = Parser::new_with_file_id(input, file_id).with_options(options);
     let (events, comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, false)?;

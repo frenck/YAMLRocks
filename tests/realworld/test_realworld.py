@@ -591,6 +591,31 @@ else:
         assert isinstance(doc, yamlrocks.YAMLRocksDocument)
         assert doc.to_yaml() == raw
 
+    # -- PyYAML compatibility: flow collections closed at the block indent -----
+
+    #: The known-invalid files that break only the flow-indentation rule (test
+    #: suite case 9C9N). PyYAML accepts them, so OPT_PYYAML_COMPAT has to as well.
+    _LENIENT_FLOW_FILES = [
+        rel for rel, reason in KNOWN_INVALID.items() if "9C9N" in reason
+    ]
+
+    @pytest.mark.parametrize("rel", _LENIENT_FLOW_FILES)
+    def test_pyyaml_compat_reads_lenient_flow_layouts(rel: str) -> None:
+        """Under OPT_PYYAML_COMPAT, a real config whose flow collection closes at
+        its block's indent loads exactly as PyYAML loads it, and round-trips."""
+        yaml = pytest.importorskip("yaml")
+        path = REPOS_DIR / rel
+        if not path.is_file():
+            pytest.skip(f"{rel} is not checked out")
+        raw = path.read_bytes()
+
+        compat = yamlrocks.OPT_PYYAML_COMPAT
+        assert yamlrocks.loads_all(raw, option=compat) == list(yaml.safe_load_all(raw))
+
+        doc = yamlrocks.loads(raw, option=compat | yamlrocks.OPT_ROUND_TRIP)
+        assert isinstance(doc, yamlrocks.YAMLRocksDocument)
+        assert doc.to_yaml() == raw
+
     # -- Home Assistant: enter via configuration.yaml and resolve includes -----
 
     #: HA repos whose include-graph round-trip is a known (strict) xfail because

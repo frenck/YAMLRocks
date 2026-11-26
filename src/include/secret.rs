@@ -107,13 +107,16 @@ impl IncludeResolver {
         if let Some(canonical) = canonical {
             if let Ok(content) = std::fs::read_to_string(&canonical) {
                 let file_id = self.register_file(path.to_path_buf(), Some(content.clone()));
-                let nodes = compose_with_file_id(&content, file_id).map_err(|e| IncludeError {
-                    kind: IncludeErrorKind::Invalid,
-                    message: format!("invalid secrets.yaml: {}", e.message),
-                    path: path.to_path_buf(),
-                    include_stack: Vec::new(),
-                    span: None,
-                })?;
+                let nodes =
+                    compose_with_file_id(&content, file_id, self.parse_options).map_err(|e| {
+                        IncludeError {
+                            kind: IncludeErrorKind::Invalid,
+                            message: format!("invalid secrets.yaml: {}", e.message),
+                            path: path.to_path_buf(),
+                            include_stack: Vec::new(),
+                            span: None,
+                        }
+                    })?;
                 match nodes.first().map(|n| &n.kind) {
                     // An empty secrets.yaml (no document) is an empty secrets set.
                     None | Some(YamlNodeKind::Null) => {}

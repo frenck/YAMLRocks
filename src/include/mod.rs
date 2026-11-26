@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
+use crate::parser::ParseOptions;
 use crate::roundtrip::ast::{IncludeSource, YamlNode, YamlNodeKind};
 use crate::roundtrip::composer::compose_with_file_id;
 use crate::scanner::{ScalarStyle, Span};
@@ -70,6 +71,9 @@ pub struct IncludeResolver {
     /// Whether `!include_dir_*` descends into subdirectories (`os.walk`-style).
     /// Off by default (top level only); enabled via `OPT_INCLUDE_DIR_RECURSIVE`.
     dir_recursive: bool,
+    /// How to read every file this load composes: the root document, each
+    /// included file, and any `secrets.yaml`, so they all follow one dialect.
+    parse_options: ParseOptions,
     /// Running count of file expansions this load has performed, bounded by
     /// [`MAX_INCLUDE_EXPANSIONS`] to stop a diamond-lattice fan-out (see that
     /// constant). Incremented once per included-file read in `read_and_compose`.
@@ -125,6 +129,7 @@ impl IncludeResolver {
             secrets_cache: HashMap::new(),
             tags,
             dir_recursive: false,
+            parse_options: ParseOptions::default(),
             expansions: 0,
             warnings: Vec::new(),
             collect_missing_secrets: false,
@@ -149,6 +154,12 @@ impl IncludeResolver {
     /// descend into subdirectories instead of reading only the top level.
     pub fn with_dir_recursive(mut self, recursive: bool) -> Self {
         self.dir_recursive = recursive;
+        self
+    }
+
+    /// Read every composed file with `options` (see [`ParseOptions`]).
+    pub fn with_parse_options(mut self, options: ParseOptions) -> Self {
+        self.parse_options = options;
         self
     }
 
@@ -210,12 +221,14 @@ impl IncludeResolver {
         let root = root_path.unwrap_or_else(|| self.base_dir.join("<root>"));
         let file_id = self.register_file(root.clone(), Some(content.to_owned()));
 
-        let nodes = compose_with_file_id(content, file_id).map_err(|e| IncludeError {
-            kind: IncludeErrorKind::Parse,
-            message: e.message,
-            path: root.clone(),
-            include_stack: Vec::new(),
-            span: Some(e.span),
+        let nodes = compose_with_file_id(content, file_id, self.parse_options).map_err(|e| {
+            IncludeError {
+                kind: IncludeErrorKind::Parse,
+                message: e.message,
+                path: root.clone(),
+                include_stack: Vec::new(),
+                span: Some(e.span),
+            }
         })?;
 
         let mut resolved = Vec::new();
@@ -730,12 +743,14 @@ impl IncludeResolver {
             span: None,
         })?;
         let file_id = self.register_file(path.to_path_buf(), Some(content.clone()));
-        let nodes = compose_with_file_id(&content, file_id).map_err(|e| IncludeError {
-            kind: IncludeErrorKind::Parse,
-            message: e.message,
-            path: path.to_path_buf(),
-            include_stack: stack.to_vec(),
-            span: Some(e.span),
+        let nodes = compose_with_file_id(&content, file_id, self.parse_options).map_err(|e| {
+            IncludeError {
+                kind: IncludeErrorKind::Parse,
+                message: e.message,
+                path: path.to_path_buf(),
+                include_stack: stack.to_vec(),
+                span: Some(e.span),
+            }
         })?;
         Ok((file_id, nodes))
     }

@@ -101,7 +101,7 @@ testing before 1.0.
 | --------------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------- |
 | Comments not preceded by whitespace                             | Rejects as invalid YAML               | Add whitespace before `#` or quote the value when `#` is data.          |
 | Multi-line quoted scalar continuations at the block indent      | Rejects as invalid YAML               | Indent continuation lines past the parent block.                        |
-| Flow collection content not indented past the surrounding block | Rejects as invalid YAML               | Re-indent the flow collection or use block style.                       |
+| Flow collection content not indented past the surrounding block | Accepted under `OPT_PYYAML_COMPAT`    | Strict mode rejects it; re-indent the collection or use block style.    |
 | Template files with `.yaml` extension                           | Not standalone YAML                   | Render with the owning tool first, or exclude from parser-level checks. |
 | Unknown application tags                                        | Preserved or passed through by opt-in | Register handlers only for tags the application wants to interpret.     |
 

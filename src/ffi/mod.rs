@@ -14,6 +14,7 @@ use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PyString};
 use crate::decode;
 use crate::encode::{self, EmitOptions, NullStyle};
 use crate::include::{IncludeResolver, ResolveTags};
+use crate::parser::ParseOptions;
 use crate::resolver::Schema;
 use crate::roundtrip::document::{YAMLRocksDocument, YAMLRocksDocumentView};
 use crate::roundtrip::{composer, YamlNode};
@@ -409,7 +410,13 @@ pub fn loads(
     }
 
     if let Some(schema) = schema.as_ref() {
-        validate_schema(py, &input, schema.bind(py), yaml_11)?;
+        validate_schema(
+            py,
+            &input,
+            schema.bind(py),
+            yaml_11,
+            ParseOptions::for_schema(yaml_schema),
+        )?;
     }
 
     let handler = tag_handler.as_ref().map(|h| h.bind(py));
@@ -473,7 +480,8 @@ pub fn loads_all(
     };
 
     if opts & OPT_ROUND_TRIP != 0 {
-        let documents = composer::compose_all_with_source(&input)
+        let parse_options = ParseOptions::for_schema(yaml_schema);
+        let documents = composer::compose_all_with_source(&input, parse_options)
             .map_err(|e| errors::parse_error(py, &e, None))?;
         let list = PyList::empty(py);
         for (node, source) in documents {
@@ -497,6 +505,13 @@ pub fn loads_all(
                 dup_warn,
                 opts & OPT_YAML_1_1_WARN != 0 && document_schema.is_yaml_11(),
             )?;
+            if upgrade && parse_options.lenient_flow_indent {
+                crate::roundtrip::upgrade::mark_lenient_only_files_modified(
+                    &mut nodes,
+                    &source,
+                    &[],
+                );
+            }
             let doc = YAMLRocksDocument::new(nodes)
                 .with_source(source)
                 .with_null_style(null_style_from_opts(opts)?)
@@ -521,7 +536,8 @@ pub fn loads_all(
         // would otherwise annotate a malformed structure); see `loads_via_ast`.
         py.detach(|| decode::decode_with(&input, yaml_schema, false, reject_complex_keys))
             .map_err(|e| errors::decode_error(py, &e, None))?;
-        let nodes = composer::compose_all(&input).map_err(|e| errors::parse_error(py, &e, None))?;
+        let nodes = composer::compose_all(&input, ParseOptions::for_schema(yaml_schema))
+            .map_err(|e| errors::parse_error(py, &e, None))?;
         if dup_error {
             composer::check_duplicate_keys(&nodes, yaml_schema)
                 .map_err(|e| errors::duplicate_key_error(py, &e, None))?;
@@ -1023,8 +1039,10 @@ fn validate_schema(
     input: &str,
     schema: &Bound<'_, PyAny>,
     yaml_11: bool,
+    parse_options: ParseOptions,
 ) -> PyResult<()> {
-    let nodes = composer::compose(input).map_err(|e| errors::parse_error(py, &e, None))?;
+    let nodes = composer::compose_with(input, parse_options)
+        .map_err(|e| errors::parse_error(py, &e, None))?;
     validate_schema_root(py, &nodes, Some(schema), yaml_11)
 }
 
@@ -1154,10 +1172,12 @@ fn loads_roundtrip(
     null_style: NullStyle,
     double_quotes: bool,
 ) -> PyResult<Py<PyAny>> {
+    let parse_options = ParseOptions::for_schema(yaml_schema);
     let (mut nodes, file_map, file_sources) = if tags.any() {
         let base_dir = include_dir.unwrap_or_else(|| PathBuf::from("."));
         let mut resolver = IncludeResolver::new(base_dir, tags)
             .with_dir_recursive(dir_recursive)
+            .with_parse_options(parse_options)
             .with_collect_missing_secrets(missing.secret.collect())
             .with_collect_missing_env_vars(missing.env_var.collect());
         let nodes = resolver
@@ -1171,7 +1191,8 @@ fn loads_roundtrip(
         let (file_map, file_sources) = resolver.into_parts();
         (nodes, file_map, file_sources)
     } else {
-        let nodes = composer::compose(input).map_err(|e| errors::parse_error(py, &e, None))?;
+        let nodes = composer::compose_with(input, parse_options)
+            .map_err(|e| errors::parse_error(py, &e, None))?;
         (nodes, Vec::new(), Vec::new())
     };
 
@@ -1188,6 +1209,15 @@ fn loads_roundtrip(
         dup_warn,
         yaml_11_warn,
     )?;
+    // Upgrading promises output the strict reader loads; under compat, rewrite
+    // any file (root or include) whose layout only the lenient reader accepts.
+    if upgrade && parse_options.lenient_flow_indent {
+        crate::roundtrip::upgrade::mark_lenient_only_files_modified(
+            &mut nodes,
+            input,
+            &file_sources,
+        );
+    }
     validate_schema_root(py, &nodes, schema, yaml_schema.is_yaml_11())?;
     // The schema governs how an edited-in scalar is quoted, so it must match what
     // the document re-emits as. An upgraded document is rewritten to canonical
@@ -1278,10 +1308,12 @@ fn loads_via_ast(
         }
     }
 
+    let parse_options = ParseOptions::for_schema(convert.yaml_schema);
     let (nodes, file_map, file_sources) = if tags.any() {
         let base_dir = include_dir.unwrap_or_else(|| PathBuf::from("."));
         let mut resolver = IncludeResolver::new(base_dir, tags)
             .with_dir_recursive(dir_recursive)
+            .with_parse_options(parse_options)
             .with_collect_missing_secrets(missing.secret.collect())
             .with_collect_missing_env_vars(missing.env_var.collect());
         let nodes = resolver
@@ -1295,7 +1327,8 @@ fn loads_via_ast(
         let (file_map, file_sources) = resolver.into_parts();
         (nodes, file_map, file_sources)
     } else {
-        let nodes = composer::compose(input).map_err(|e| errors::parse_error(py, &e, None))?;
+        let nodes = composer::compose_with(input, parse_options)
+            .map_err(|e| errors::parse_error(py, &e, None))?;
         // Register the root document's path (from `load(path)`, passed as
         // `root_path`) so annotated nodes report `__file__` even without
         // `!include` resolution. The composer stamps root nodes with file_id 0,

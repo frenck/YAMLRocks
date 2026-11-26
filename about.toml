@@ -8,6 +8,32 @@
 # third-party licenses; it is the project, not a dependency.
 private = { ignore = true }
 
+# Only count crates that can end up in a wheel we ship. Without this list,
+# `cargo about` walks every target in the lockfile, so a dependency that only
+# exists for a target we never build (like `wasm32`) shows up as a third-party
+# license we do not actually distribute. Keep this in sync with the wheel
+# matrix in .github/workflows/build-wheels.yaml.
+targets = [
+  # manylinux
+  "x86_64-unknown-linux-gnu",
+  "i686-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "armv7-unknown-linux-gnueabihf",
+  "powerpc64le-unknown-linux-gnu",
+  # musllinux
+  "x86_64-unknown-linux-musl",
+  "i686-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "armv7-unknown-linux-musleabihf",
+  # macOS
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  # Windows
+  "x86_64-pc-windows-msvc",
+  "i686-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+]
+
 accepted = [
   "MIT",
   "Apache-2.0",

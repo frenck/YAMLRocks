@@ -209,3 +209,13 @@ def test_empty_keys_reemit_from_a_file(tmp_path: Path) -> None:
     doc["a"] = 2
 
     assert doc.to_yaml() == b"a: 2\n: v\n?\n: w\n"
+
+
+def test_detached_copy_of_an_unterminated_keep_scalar_keeps_both_values():
+    """A keep scalar that ended the input reads back unchanged when a detached copy repeats it."""
+    doc = yamlrocks.loads(b"a: &anchor\n  k: |+\n    x", option=RT)
+    doc["b"] = {}
+    doc.node["b"].make_alias("anchor")
+    doc.node["b"].detach()
+
+    assert yamlrocks.loads(doc.to_yaml()) == {"a": {"k": "x"}, "b": {"k": "x"}}

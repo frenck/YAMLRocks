@@ -215,6 +215,11 @@ struct RoundTripEmitter {
     /// is keep-chomped (`|+`), so a line break written after it would change
     /// its value.
     unterminated_raw_keeps: bool,
+    /// Whether an earlier such keep-chomped scalar already had output after it
+    /// when a later one took its place in the two fields above. A source's
+    /// last scalar can be written more than once (a detached copy of an
+    /// anchored node replays the same source), and only the last is tracked.
+    earlier_keep_followed: bool,
     /// Whether a keep-chomped block scalar that ended the input without a line
     /// break may be replayed from its source. Cleared for the second pass of
     /// [`run_emitter`], which rebuilds it from its value instead.
@@ -242,6 +247,7 @@ impl RoundTripEmitter {
             inline_comment_written: None,
             unterminated_raw_end: None,
             unterminated_raw_keeps: false,
+            earlier_keep_followed: false,
             replay_unterminated_keep: true,
             continuation_floor: 0,
         }
@@ -251,6 +257,11 @@ impl RoundTripEmitter {
     /// break has output after it, which the line break closing its line then
     /// joins (see [`run_emitter`]).
     fn unterminated_keep_followed(&self) -> bool {
+        self.earlier_keep_followed || self.tracked_keep_followed()
+    }
+
+    /// The same question for the one scalar currently tracked.
+    fn tracked_keep_followed(&self) -> bool {
         self.unterminated_raw_keeps
             && self
                 .unterminated_raw_end
@@ -878,6 +889,9 @@ impl RoundTripEmitter {
                         // emitter's to write.
                         let block = matches!(style, ScalarStyle::Literal | ScalarStyle::Folded);
                         if block && !raw.ends_with(['\n', '\r']) {
+                            // Tracking this one replaces the previous one, so
+                            // settle first whether that one was followed.
+                            self.earlier_keep_followed |= self.tracked_keep_followed();
                             self.unterminated_raw_end = Some(self.buf.len());
                             self.unterminated_raw_keeps = block_header_keeps(raw);
                         }

@@ -202,3 +202,17 @@ def test_upgrade_replaces_declared_version_before_tag_directive():
     out = yamlrocks.upgrade(src)
     assert out == b"%YAML 1.2\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n"
     assert yamlrocks.loads(out) == {"v": "1"}
+
+
+def test_upgrade_keeps_a_multiline_plain_scalar_loadable():
+    """upgrade() replays an untouched multi-line plain scalar as written."""
+    out = yamlrocks.upgrade(b"a: yes\nb: text\n\n  ...\nc: 3\n")
+    assert out == STAMP + b"a: true\nb: text\n\n  ...\nc: 3\n"
+    assert yamlrocks.loads(out) == {"a": True, "b": "text\n...", "c": 3}
+
+
+def test_upgrade_keeps_a_multiline_single_quoted_scalar_loadable():
+    """upgrade() replays an untouched multi-line single-quoted scalar as written."""
+    out = yamlrocks.upgrade(b"a: yes\nr:\n  - 'a\n\n    b'\n")
+    assert out == STAMP + b"a: true\nr:\n  - 'a\n\n    b'\n"
+    assert yamlrocks.loads(out) == {"a": True, "r": ["a\nb"]}

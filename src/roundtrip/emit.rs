@@ -136,6 +136,13 @@ struct RoundTripEmitter {
     /// line break is dropped again in [`finish`](Self::finish): under keep
     /// chomping (`|+`) it would otherwise become part of the scalar's value.
     unterminated_raw_end: Option<usize>,
+    /// The lowest column a continuation line of a multi-line plain or quoted
+    /// scalar may start at in the block position being written: one past the
+    /// column of the mapping key or sequence dash that holds it, zero at the
+    /// document root. A replayed source line left of it would end the enclosing
+    /// collection instead of continuing the scalar. Flow collections inherit it
+    /// from the block position they sit in.
+    continuation_floor: usize,
 }
 
 impl RoundTripEmitter {
@@ -148,6 +155,7 @@ impl RoundTripEmitter {
             emitting_key: false,
             inline_comment_written: None,
             unterminated_raw_end: None,
+            continuation_floor: 0,
         }
     }
 
@@ -249,6 +257,7 @@ impl RoundTripEmitter {
             }
             _ => {
                 self.emit_anchor_tag(node);
+                self.continuation_floor = 0;
                 // A root block scalar's body sits one step in, matching the fast
                 // encoder's `emit_literal_block(s, step())`.
                 self.emit_inline_content(node, self.step());
@@ -438,6 +447,7 @@ impl RoundTripEmitter {
             // key line (`key: # note`). Keep both where they were: pushing the
             // comment past the value would move it onto a line it was never on.
             _ if val.comments.inline_before_value => {
+                self.continuation_floor = indent + 1;
                 self.emit_value_below_introducer(val, child);
             }
             _ => {
@@ -447,6 +457,7 @@ impl RoundTripEmitter {
                     self.buf.push(b' ');
                 }
                 self.emit_anchor_tag(val);
+                self.continuation_floor = indent + 1;
                 // A block-scalar value's body sits one step past the key, matching
                 // the fast encoder (`emit_literal_block(s, indent + step())`).
                 self.emit_inline_content(val, indent + self.step());
@@ -638,6 +649,7 @@ impl RoundTripEmitter {
             // An item written below its `-`, with a comment left on the dash
             // line; both keep their place (see the mapping-value arm).
             _ if item.comments.inline_before_value => {
+                self.continuation_floor = indent + 1;
                 self.emit_value_below_introducer(item, child);
             }
             _ => {
@@ -647,6 +659,7 @@ impl RoundTripEmitter {
                     self.buf.push(b' ');
                 }
                 self.emit_anchor_tag(item);
+                self.continuation_floor = indent + 1;
                 self.emit_inline_content(item, child);
                 self.emit_inline_comment(&item.comments);
                 self.end_line();
@@ -681,10 +694,17 @@ impl RoundTripEmitter {
             YamlNodeKind::Scalar(value, style) => {
                 // An unmodified block scalar replays its verbatim source: folding
                 // a `>` block is lossy, so the original lines cannot be rebuilt.
+                // So does a plain or quoted scalar the author spread over several
+                // lines, as long as those lines still hold it where it is written.
                 if let Some(raw) = node.comments.raw.as_deref() {
-                    if !node.comments.modified {
+                    if !node.comments.modified && self.raw_replay_fits(raw, value, *style) {
                         self.buf.extend_from_slice(raw.as_bytes());
-                        if !raw.ends_with(['\n', '\r']) {
+                        // Only a block scalar's source ends in its own line
+                        // break; a flow scalar's always stops at its last
+                        // character, and the line break after it is the
+                        // emitter's to write.
+                        let block = matches!(style, ScalarStyle::Literal | ScalarStyle::Folded);
+                        if block && !raw.ends_with(['\n', '\r']) {
                             self.unterminated_raw_end = Some(self.buf.len());
                         }
                         return;
@@ -720,6 +740,36 @@ impl RoundTripEmitter {
         }
     }
 
+    /// Whether a scalar's verbatim source can be replayed at the current output
+    /// position. A block scalar's always is. A multi-line plain or quoted
+    /// scalar keeps its continuation lines at their source columns, so it fits
+    /// only where each of them still continues the scalar, and never as a key:
+    /// an implicit key must stay on one line, and an explicit one is rebuilt
+    /// from its value rather than threading the key's position through here.
+    /// The checks the plain arms of [`emit_scalar`](Self::emit_scalar) make
+    /// before writing a value verbatim apply to its source just the same.
+    ///
+    /// A plain scalar's last line ending in a lone `?`, `-`, or `:` is not
+    /// replayed either. In the source a flow indicator followed it (`?}`), but
+    /// the emitter may write a line break there instead, and a lone indicator
+    /// at the end of a line opens a key, an entry, or a value.
+    fn raw_replay_fits(&self, raw: &str, value: &str, style: ScalarStyle) -> bool {
+        match style {
+            ScalarStyle::Literal | ScalarStyle::Folded => true,
+            _ if self.emitting_key => false,
+            ScalarStyle::Plain if value.starts_with('\u{feff}') => false,
+            ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => false,
+            ScalarStyle::Plain
+                if raw.rsplit(['\n', '\r']).next().is_some_and(|last| {
+                    matches!(last.trim_start_matches(' '), "?" | "-" | ":")
+                }) =>
+            {
+                false
+            }
+            _ => continuation_lines_fit(raw, self.continuation_floor),
+        }
+    }
+
     fn emit_key(&mut self, key: &YamlNode, indent: usize) {
         let was_key = self.emitting_key;
         self.emitting_key = true;
@@ -749,6 +799,15 @@ impl RoundTripEmitter {
             ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => {
                 self.push_quoted(value);
             }
+            // A line break in a plain value comes from a blank line in its
+            // source (one blank line folds to one `\n`). Writing it verbatim
+            // would put the rest of the value at column 0, where it reads as a
+            // new key, a document marker, or invalid YAML. Its source lines were
+            // not replayed (the value was edited, or they no longer fit where it
+            // is written), so rebuild it on one line, with the break escaped.
+            ScalarStyle::Plain if value.contains(['\n', '\r']) => {
+                self.push_quoted(value);
+            }
             ScalarStyle::Plain
                 if self.dump.width > 0
                     && !self.emitting_key
@@ -759,7 +818,11 @@ impl RoundTripEmitter {
                 self.push_quoted(value);
             }
             ScalarStyle::Plain => self.buf.extend_from_slice(value.as_bytes()),
-            ScalarStyle::SingleQuoted => self.push_styled_quotes(value, true),
+            // Single quotes cannot escape a line break either, so a value with
+            // one takes double quotes for the same reason as a plain one above.
+            ScalarStyle::SingleQuoted => {
+                self.push_styled_quotes(value, !value.contains(['\n', '\r']));
+            }
             ScalarStyle::DoubleQuoted => self.push_styled_quotes(value, false),
             // Defensive: a block scalar is invalid inside a flow collection. The
             // producers downgrade these before they get here (the represent
@@ -1186,6 +1249,24 @@ fn synthetic_key_needs_explicit(key: &YamlNode, is_first: bool) -> bool {
     !is_first && key.synthetic && (key.tag.is_some() || key.anchor.is_some())
 }
 
+/// Whether the continuation lines of a multi-line plain or quoted scalar's
+/// source (`raw`, every line after its first) still continue it when replayed
+/// with `floor` as the lowest column they may start at. Blank and space-only
+/// lines are empty lines of the scalar, which need no indentation. A line at
+/// column 0 must also not start like a `---`/`...` document marker; the source
+/// could not have held one there, but the check costs nothing and keeps the
+/// replay from ever writing one.
+fn continuation_lines_fit(raw: &str, floor: usize) -> bool {
+    raw.split(['\n', '\r']).skip(1).all(|line| {
+        let indent = line.bytes().take_while(|&byte| byte == b' ').count();
+        if indent == line.len() {
+            return true;
+        }
+
+        indent >= floor && !(indent == 0 && (line.starts_with("---") || line.starts_with("...")))
+    })
+}
+
 fn node_has_comments(node: &YamlNode) -> bool {
     !node.comments.head.is_empty()
         || node.comments.inline.is_some()
@@ -1325,5 +1406,99 @@ mod tests {
         assert_eq!(doc(synthetic_null(), NullStyle::Empty), "k:\n");
         assert_eq!(doc(synthetic_null(), NullStyle::Tilde), "k: ~\n");
         assert_eq!(doc(synthetic_null(), NullStyle::Null), "k: null\n");
+    }
+
+    /// An unmodified plain or quoted scalar spread over several lines replays
+    /// its source lines, in every block and flow position it can take, and the
+    /// line break after it (it never ends in one itself) is still written.
+    #[test]
+    fn multiline_flow_scalars_replay_their_source() {
+        for src in [
+            "b: text\n\n  ...\nc: 3\n",
+            "b: text\n\n  more\n",
+            "b: x\n  y\n",
+            "r:\n  - x\n\n    y\n  - z\n",
+            "- 'a\n\n  b'\n",
+            "f: [x\n\n  y, z]\n",
+            "f: {k: x\n\n  y}\n",
+            "b: 'x\n\n  y'\n",
+            "b: \"x\n\n  y\"\n",
+            "b: \"x\\\n  y\"\n",
+            "b: # note\n  x\n\n  y\n",
+            "text\n\nmore\n",
+        ] {
+            assert_eq!(reemit(src), src);
+        }
+    }
+
+    /// Where a scalar's source lines would no longer sit past its key, or the
+    /// scalar is a key, the source is not replayed. A value holding a line
+    /// break is then double-quoted, which keeps it on one line; one without
+    /// stays in its own style, folded onto one line.
+    #[test]
+    fn multiline_flow_scalars_rebuild_where_their_source_does_not_fit() {
+        // The emitter indents a nested mapping two columns, past the source's
+        // continuation lines at column 2.
+        assert_eq!(reemit("a:\n b: x\n\n  y\n"), "a:\n  b: \"x\\ny\"\n");
+        assert_eq!(reemit("a:\n b: 'x\n\n  y'\n"), "a:\n  b: \"x\\ny\"\n");
+        assert_eq!(reemit("a:\n b: 'x\n  y'\n"), "a:\n  b: 'x y'\n");
+        assert_eq!(reemit("a:\n b: \"x\n\n  y\"\n"), "a:\n  b: \"x\\ny\"\n");
+
+        // Keys are rebuilt from their value: an implicit key must stay on one
+        // line, so the replay is never tried there.
+        assert_eq!(reemit("? x\n\n  y\n: v\n"), "? \"x\\ny\"\n: v\n");
+        assert_eq!(reemit("{x\n\n  y: v}\n"), "{\"x\\ny\": v}\n");
+
+        // A last line holding a lone `?` was closed by a `,` in the source; the
+        // commented layout below puts a line break after it instead, which
+        // would turn it into an explicit key.
+        let lone_indicator = "{a: x\n  ?, # c\n b: 1}\n";
+        let out = reemit(lone_indicator);
+        assert!(!out.contains("\n  ?\n"), "lone `?` replayed:\n{out}");
+        assert!(same_value(lone_indicator, &out));
+    }
+
+    /// An edited plain or single-quoted value holding a line break is never
+    /// written with that break raw (which would land the rest of the value at
+    /// column 0); it takes double quotes. Without a break the style is kept.
+    #[test]
+    fn edited_scalar_with_a_line_break_is_double_quoted() {
+        use crate::scanner::ScalarStyle;
+
+        let doc = |text: &str, style| {
+            let mut value = YamlNode::new(
+                YamlNodeKind::Scalar(text.to_owned(), style),
+                Span::default(),
+            );
+            value.mark_modified();
+            let root = YamlNode::new(
+                YamlNodeKind::Mapping(vec![(scalar("k"), value)]),
+                Span::default(),
+            );
+            String::from_utf8(emit_roundtrip_with(&root, NullStyle::Null)).unwrap()
+        };
+
+        assert_eq!(doc("a\n...", ScalarStyle::Plain), "k: \"a\\n...\"\n");
+        assert_eq!(doc("a\nb", ScalarStyle::SingleQuoted), "k: \"a\\nb\"\n");
+        assert_eq!(doc("a\tb", ScalarStyle::SingleQuoted), "k: 'a\tb'\n");
+        assert_eq!(doc("a b", ScalarStyle::Plain), "k: a b\n");
+    }
+
+    /// The fit rule itself: every continuation line that holds content must
+    /// start at or past the floor, blank lines are free, and a column-0 line
+    /// never starts like a document marker.
+    #[test]
+    fn continuation_lines_fit_the_floor() {
+        use super::continuation_lines_fit;
+
+        assert!(continuation_lines_fit("x\n\n  y", 1));
+        assert!(continuation_lines_fit("x\n\n  y", 2));
+        assert!(!continuation_lines_fit("x\n\n  y", 3));
+        assert!(continuation_lines_fit("'x\n   \n  y'", 2));
+        assert!(continuation_lines_fit("x\r\n\r\n  y", 2));
+        assert!(!continuation_lines_fit("x\n\t y", 1));
+        assert!(continuation_lines_fit("x\ny", 0));
+        assert!(!continuation_lines_fit("x\n...", 0));
+        assert!(!continuation_lines_fit("'x\n---'", 0));
     }
 }

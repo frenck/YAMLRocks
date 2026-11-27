@@ -231,10 +231,13 @@ pub struct Comments {
     /// written compactly on its parent's dash line (`- - 1`) rather than broken
     /// to the next line. Preserved so the compact layout survives a re-emit.
     pub compact: bool,
-    /// The verbatim source of a block scalar (`|`/`>`), from the indicator
-    /// through its last content line. Folding a `>` block loses the author's
-    /// line breaks, so the emitter cannot reconstruct it; it replays this slice
-    /// instead. `None` for every other node and for an edited (synthetic) scalar.
+    /// The verbatim source of a scalar whose layout its value cannot rebuild: a
+    /// block scalar (`|`/`>`), from the indicator through its last content line,
+    /// or a plain or quoted scalar that spans several lines, from its first
+    /// character through its last (closing quote included). Folding loses the
+    /// author's line breaks, so the emitter replays this slice instead while the
+    /// node is unmodified. `None` for every other node and for an edited
+    /// (synthetic) scalar.
     pub raw: Option<String>,
     /// Comments after a blank line following this node.
     pub foot: Vec<String>,

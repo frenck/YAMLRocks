@@ -132,9 +132,9 @@ yamlrocks.dumps({"s": "line 1\nline 2\n"})
 
 The chomping indicator is chosen automatically so the block round-trips exactly:
 `|` keeps a single trailing newline, `|-` strips it when there is none, and `|+`
-keeps extra trailing blank lines. A string a literal block cannot represent
-faithfully (it contains a carriage return or other control character, or its
-first line begins with whitespace) falls back to a double-quoted scalar, so
+keeps extra trailing blank lines. A string a block scalar cannot hold (it
+contains a carriage return or other control character), or whose first line
+begins with whitespace, is written as a double-quoted scalar instead, so
 `loads(dumps(x)) == x` holds for every string.
 
 ### Document markers: `OPT_EXPLICIT_START` and `OPT_EXPLICIT_END`

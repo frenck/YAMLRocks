@@ -177,7 +177,9 @@ struct RoundTripEmitter {
     /// column of the mapping key or sequence dash that holds it, zero at the
     /// document root. A replayed source line left of it would end the enclosing
     /// collection instead of continuing the scalar. Flow collections inherit it
-    /// from the block position they sit in.
+    /// from the block position they sit in. A block scalar's content must
+    /// start at it too, and its indentation indicator counts from the column
+    /// just left of it (see [`parent_indent`](Self::parent_indent)).
     continuation_floor: usize,
 }
 
@@ -453,6 +455,7 @@ impl RoundTripEmitter {
             _ => {
                 self.buf.push(b' ');
                 self.emit_anchor_tag(key);
+                self.continuation_floor = indent + 1;
                 self.emit_key(key, indent + self.step());
                 self.end_line();
             }
@@ -787,10 +790,11 @@ impl RoundTripEmitter {
                 }
             }
             YamlNodeKind::Scalar(value, style) => {
-                // An unmodified block scalar replays its verbatim source: folding
-                // a `>` block is lossy, so the original lines cannot be rebuilt.
-                // So does a plain or quoted scalar the author spread over several
-                // lines, as long as those lines still hold it where it is written.
+                // An unmodified block scalar replays its verbatim source, which
+                // keeps the author's layout: where a folded block's lines broke
+                // cannot be rebuilt from its value. So does a plain or quoted
+                // scalar the author spread over several lines. Either only as
+                // long as those lines still hold it where it is written.
                 if let Some(raw) = node.comments.raw.as_deref() {
                     if !node.comments.modified && self.raw_replay_fits(raw, value, *style) {
                         self.buf.extend_from_slice(raw.as_bytes());
@@ -805,26 +809,12 @@ impl RoundTripEmitter {
                         return;
                     }
                 }
-                // A block scalar's trailing comment belongs on its header line
-                // (`key: | # note`). After the body it would sit on a line of
-                // its own, and for an empty body that line would be read back
-                // as the scalar's content.
-                if let (Some(_), ScalarStyle::Literal | ScalarStyle::Folded) =
-                    (&node.comments.inline, style)
-                {
-                    if self.flow_depth == 0 {
-                        let marker = if *style == ScalarStyle::Literal {
-                            b'|'
-                        } else {
-                            b'>'
-                        };
-                        crate::emit_util::push_block_scalar_header(&mut self.buf, value, marker);
-                        self.emit_inline_comment(&node.comments);
-                        crate::emit_util::push_block_scalar_body(&mut self.buf, value, indent);
-                        return;
+                match style {
+                    ScalarStyle::Literal | ScalarStyle::Folded if self.flow_depth == 0 => {
+                        self.emit_block_scalar(node, value, *style, indent);
                     }
+                    _ => self.emit_scalar(value, *style),
                 }
-                self.emit_scalar(value, *style, indent);
             }
             YamlNodeKind::Alias(name) => {
                 self.buf.push(b'*');
@@ -836,13 +826,22 @@ impl RoundTripEmitter {
     }
 
     /// Whether a scalar's verbatim source can be replayed at the current output
-    /// position. A block scalar's always is. A multi-line plain or quoted
-    /// scalar keeps its continuation lines at their source columns, so it fits
-    /// only where each of them still continues the scalar, and never as a key:
-    /// an implicit key must stay on one line, and an explicit one is rebuilt
-    /// from its value rather than threading the key's position through here.
-    /// The checks the plain arms of [`emit_scalar`](Self::emit_scalar) make
-    /// before writing a value verbatim apply to its source just the same.
+    /// position. A multi-line plain or quoted scalar keeps its continuation
+    /// lines at their source columns, so it fits only where each of them still
+    /// continues the scalar, and never as a key: an implicit key must stay on
+    /// one line, and an explicit one is rebuilt from its value rather than
+    /// threading the key's position through here. The checks the plain arms of
+    /// [`emit_scalar`](Self::emit_scalar) make before writing a value verbatim
+    /// apply to its source just the same.
+    ///
+    /// A block scalar keeps its body lines at their source columns too, and
+    /// what they mean depends on the indentation of the node holding it: the
+    /// content must sit deeper than that node, and an indentation indicator in
+    /// the header (`|2`) counts from it. Without an indicator, the source
+    /// reads the same as long as its first line with content still starts at
+    /// or past the floor. Otherwise the source is read back as if it sat
+    /// here, one column left of the floor, and replayed only when that gives
+    /// the same value.
     ///
     /// A plain scalar's last line ending in a lone `?`, `-`, or `:` is not
     /// replayed either. In the source a flow indicator followed it (`?}`), but
@@ -851,7 +850,12 @@ impl RoundTripEmitter {
     /// it from the line start just as spaces do.
     fn raw_replay_fits(&self, raw: &str, value: &str, style: ScalarStyle) -> bool {
         match style {
-            ScalarStyle::Literal | ScalarStyle::Folded => true,
+            ScalarStyle::Literal | ScalarStyle::Folded if self.flow_depth > 0 => false,
+            ScalarStyle::Literal | ScalarStyle::Folded => match detected_block_indent(raw) {
+                Some(column) => column >= self.continuation_floor,
+                None => crate::scanner::reread_block_scalar(raw, self.parent_indent())
+                    .is_some_and(|reread| reread == value),
+            },
             _ if self.emitting_key => false,
             ScalarStyle::Plain if value.starts_with('\u{feff}') => false,
             ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => false,
@@ -873,7 +877,7 @@ impl RoundTripEmitter {
         self.emitting_key = was_key;
     }
 
-    fn emit_scalar(&mut self, value: &str, style: ScalarStyle, body_indent: usize) {
+    fn emit_scalar(&mut self, value: &str, style: ScalarStyle) {
         match style {
             // A plain scalar whose first character is U+FEFF cannot be emitted
             // verbatim: if it lands at the start of the stream, the scanner
@@ -920,15 +924,14 @@ impl RoundTripEmitter {
                 self.push_styled_quotes(value, !value.contains(['\n', '\r']));
             }
             ScalarStyle::DoubleQuoted => self.push_styled_quotes(value, false),
-            // Defensive: a block scalar is invalid inside a flow collection. The
-            // producers downgrade these before they get here (the represent
-            // lowering, the assignment style rules); if a future producer misses
-            // that, emit valid YAML rather than an unparsable `[|`.
-            ScalarStyle::Literal | ScalarStyle::Folded if self.flow_depth > 0 => {
+            // Block context writes these through `emit_block_scalar`, so they
+            // only get here inside a flow collection, where a block scalar is
+            // invalid. The producers downgrade them before that (the represent
+            // lowering, the assignment style rules); if a future producer
+            // misses it, emit valid YAML rather than an unparsable `[|`.
+            ScalarStyle::Literal | ScalarStyle::Folded => {
                 crate::emit_util::push_double_quoted(&mut self.buf, value);
             }
-            ScalarStyle::Literal => self.emit_block_scalar(value, body_indent, b'|'),
-            ScalarStyle::Folded => self.emit_block_scalar(value, body_indent, b'>'),
         }
     }
 
@@ -974,14 +977,58 @@ impl RoundTripEmitter {
         }
     }
 
-    /// Emit a block scalar whose body lines sit at the absolute column
-    /// `body_indent`. The caller computes that column for its context (a mapping
-    /// value: `key + step`; a sequence item: `dash + 2`; the document root:
-    /// `step`), matching the fast encoder. The writer itself is shared with the
-    /// fast encoder ([`crate::emit_util::push_block_scalar`]) so the chomping
+    /// Write a block scalar from its value, in its own style, with the body
+    /// lines at the absolute column `body_indent`. The caller computes that
+    /// column for its context (a mapping value: `key + step`; a sequence item:
+    /// `dash + 2`; the document root: `step`), matching the fast encoder. The
+    /// writer itself is shared with the fast encoder
+    /// ([`crate::emit_util::push_block_scalar`]), so the header and folding
     /// rules cannot drift between the two.
-    fn emit_block_scalar(&mut self, value: &str, body_indent: usize, marker: u8) {
-        crate::emit_util::push_block_scalar(&mut self.buf, value, marker, body_indent);
+    ///
+    /// Both block styles hold the same strings, so a folded scalar stays
+    /// folded and a literal one literal. A value neither can hold (a carriage
+    /// return, a control character) is double-quoted instead, as it would be
+    /// inside a flow collection.
+    ///
+    /// A trailing comment belongs on the header line (`key: | # note`). After
+    /// the body it would sit on a line of its own, and for an empty body that
+    /// line would be read back as the scalar's content.
+    fn emit_block_scalar(
+        &mut self,
+        node: &YamlNode,
+        value: &str,
+        style: ScalarStyle,
+        body_indent: usize,
+    ) {
+        if !crate::emit_util::block_scalar_capable(value) {
+            self.push_styled_quotes(value, false);
+            return;
+        }
+
+        let marker = if style == ScalarStyle::Literal {
+            b'|'
+        } else {
+            b'>'
+        };
+        // At the document root there is no parent node; an indentation
+        // indicator there counts from column 0.
+        let parent_indent = self.parent_indent().max(0) as usize;
+
+        crate::emit_util::push_block_scalar_header(
+            &mut self.buf,
+            value,
+            marker,
+            body_indent - parent_indent,
+        );
+        self.emit_inline_comment(&node.comments);
+        crate::emit_util::push_block_scalar_body(&mut self.buf, value, marker, body_indent);
+    }
+
+    /// The indentation of the block mapping or sequence that holds the node
+    /// being written, the one its continuation floor sits a column past: -1 at
+    /// the document root.
+    fn parent_indent(&self) -> i32 {
+        self.continuation_floor as i32 - 1
     }
 
     fn emit_flow_sequence(&mut self, items: &[YamlNode], indent: usize) {
@@ -1385,6 +1432,48 @@ fn continuation_lines_fit(raw: &str, floor: usize) -> bool {
     })
 }
 
+/// The column a reader detects a block scalar's indentation at, from its
+/// source (`raw`, from the `|`/`>` header through its last line): the leading
+/// spaces of its first line with content. Every other line then reads the same
+/// wherever the scalar sits, as long as that column is still past its parent.
+///
+/// `None` when the header carries an indentation indicator, which fixes the
+/// indentation relative to the parent instead, or when no line has content,
+/// where the line that follows the scalar takes part in the detection.
+///
+/// This runs for every replayed block scalar, so it reads only the header and
+/// the leading spaces of the lines up to the first with content.
+fn detected_block_indent(raw: &str) -> Option<usize> {
+    let bytes = raw.as_bytes();
+    let header_end = bytes
+        .iter()
+        .position(|&byte| matches!(byte, b'\n' | b'\r'))?;
+
+    // The indicators follow the `|`/`>` directly; a space, tab or `#` ends them.
+    let has_indentation_indicator = bytes[..header_end]
+        .iter()
+        .skip(1)
+        .take_while(|&&byte| !matches!(byte, b' ' | b'\t' | b'#'))
+        .any(u8::is_ascii_digit);
+    if has_indentation_indicator {
+        return None;
+    }
+
+    let mut rest = &bytes[header_end..];
+    loop {
+        let line_start = rest
+            .iter()
+            .position(|&byte| !matches!(byte, b'\n' | b'\r'))?;
+        rest = &rest[line_start..];
+
+        let spaces = rest.iter().position(|&byte| byte != b' ')?;
+        if !matches!(rest[spaces], b'\n' | b'\r') {
+            return Some(spaces);
+        }
+        rest = &rest[spaces..];
+    }
+}
+
 fn node_has_comments(node: &YamlNode) -> bool {
     !node.comments.head.is_empty()
         || node.comments.inline.is_some()
@@ -1663,6 +1752,127 @@ mod tests {
         assert_eq!(doc("a\nb", ScalarStyle::SingleQuoted), "k: \"a\\nb\"\n");
         assert_eq!(doc("a\tb", ScalarStyle::SingleQuoted), "k: 'a\tb'\n");
         assert_eq!(doc("a b", ScalarStyle::Plain), "k: a b\n");
+    }
+
+    /// An unmodified block scalar replays its source wherever that source still
+    /// reads back as its value: in every block position, with an indentation
+    /// indicator whose parent did not move, and with a header comment.
+    #[test]
+    fn block_scalars_replay_their_source() {
+        for src in [
+            "a: |\n  x\n",
+            "a: >\n  folded\n  text\n\n  more\n",
+            "a:\n  b: |2\n     x\n    y\n",
+            "- |1\n  x\n- >-\n  y\n",
+            "- - |\n    x\n",
+            "- k: |2\n     x\n",
+            "? |\n  key\n: v\n",
+            "a: | # note\n  x\n",
+            "a: # note\n  |\n  x\n",
+            "|\n  root\n",
+            ">2\n   root\n",
+            "a: |+\n  x\n\n",
+        ] {
+            assert_eq!(reemit(src), src);
+        }
+
+        // A key the emitter moves keeps its scalar's source as long as that
+        // still reads back the same there.
+        assert_eq!(reemit("a:\n b: |\n   x\n"), "a:\n  b: |\n   x\n");
+    }
+
+    /// Where a block scalar's source would read back as something else, it is
+    /// rewritten from its value instead: its body would no longer sit past its
+    /// key, or its indentation indicator would count from a parent that moved.
+    #[test]
+    fn block_scalars_rebuild_where_their_source_does_not_fit() {
+        // The emitter indents the nested mapping two columns, onto the source's
+        // body lines at column 2.
+        assert_eq!(reemit("a:\n b: |\n  x\n"), "a:\n  b: |\n    x\n");
+        assert_eq!(reemit("a:\n b: >\n  x\n  y\n"), "a:\n  b: >\n    x y\n");
+
+        // `|1` under a key at column 1 means column 2; under the key moved to
+        // column 2 it would mean column 3.
+        assert_eq!(reemit("a:\n b: |1\n   x\n"), "a:\n  b: |2\n     x\n");
+    }
+
+    /// A modified block scalar is rewritten in its own style with a header and
+    /// body that read back as its value: a folded one keeps its line breaks, a
+    /// leading space keeps its indentation indicator, and a comment goes on the
+    /// header line.
+    #[test]
+    fn modified_block_scalars_keep_their_value() {
+        let modified = |src: &str, comment: Option<&str>| {
+            let mut nodes = crate::roundtrip::composer::compose(src).unwrap();
+            let YamlNodeKind::Mapping(pairs) = &mut nodes[0].kind else {
+                panic!("not a mapping: {src:?}");
+            };
+            let value = &mut pairs.last_mut().unwrap().1;
+            value.comments.inline = comment.map(str::to_owned);
+            value.mark_modified();
+            let text =
+                String::from_utf8(super::emit_roundtrip_all_with(&nodes, NullStyle::Null)).unwrap();
+            assert!(same_value(src, &text), "data changed: {src:?} -> {text:?}");
+            text
+        };
+
+        assert_eq!(
+            modified("a: 1\nb: >\n  ab\n\n  cd\n", Some("t")),
+            "a: 1\nb: > # t\n  ab\n\n  cd\n"
+        );
+        assert_eq!(
+            modified("a: 1\nb: |2\n   x\n  y\n", Some("t")),
+            "a: 1\nb: |2 # t\n   x\n  y\n"
+        );
+        assert_eq!(
+            modified("b: >\n  a\n    more\n  b\n\n\n  c\n", None),
+            "b: >\n  a\n    more\n  b\n\n\n  c\n"
+        );
+        assert_eq!(modified("b: |+\n\n", None), "b: |+\n\n");
+        assert_eq!(modified("b: >-\n\n  \n", None), "b: >-\n\n");
+    }
+
+    /// A block-styled value no block scalar can hold (a carriage return)
+    /// falls back to double quotes, with its comment after it.
+    #[test]
+    fn block_scalar_with_a_carriage_return_is_double_quoted() {
+        use crate::scanner::ScalarStyle;
+
+        for style in [ScalarStyle::Literal, ScalarStyle::Folded] {
+            let mut value = YamlNode::new(
+                YamlNodeKind::Scalar("a\rb\n".to_owned(), style),
+                Span::default(),
+            );
+            value.comments.inline = Some("note".to_owned());
+            value.mark_modified();
+            let root = YamlNode::new(
+                YamlNodeKind::Mapping(vec![(scalar("k"), value)]),
+                Span::default(),
+            );
+            assert_eq!(
+                String::from_utf8(emit_roundtrip_with(&root, NullStyle::Null)).unwrap(),
+                "k: \"a\\rb\\n\" # note\n"
+            );
+        }
+    }
+
+    /// The detected indentation is the leading spaces of the first line with
+    /// content; an indentation indicator or a scalar without content leaves it
+    /// to a full read.
+    #[test]
+    fn detected_block_indent_reads_the_first_content_line() {
+        use super::detected_block_indent;
+
+        assert_eq!(detected_block_indent("|\n  x\n"), Some(2));
+        assert_eq!(
+            detected_block_indent(">- # note\n\n   \n    x\n  y\n"),
+            Some(4)
+        );
+        assert_eq!(detected_block_indent("|+\r\n\r\n  \tx\r\n"), Some(2));
+        assert_eq!(detected_block_indent("|\nx\n"), Some(0));
+        assert_eq!(detected_block_indent("|2\n   x\n"), None);
+        assert_eq!(detected_block_indent("|-1 # c\n  x\n"), None);
+        assert_eq!(detected_block_indent("|+\n\n  \n"), None);
     }
 
     /// The fit rule itself: every continuation line that holds content must

@@ -593,6 +593,10 @@ Round-trip mode keeps the parts of a document that carry human intent:
 - Flow (`[a, b]`, `{a: 1}`) versus block collection layout, and a block
   sequence's indentation (`-` at the key's column versus indented a step)
 - An explicit `---` document-start marker
+- Empty documents in a stream (a bare `---`, or one holding only comments),
+  comments included, so an edit never changes how many documents the stream
+  holds. Indexing, `len()`, and `to_dict()` skip them and see only the
+  documents with content.
 - Blank lines and indentation
 - Anchors (`&name`), aliases (`*name`), and merge keys (`<<`)
 - Custom tags and `!include` directives (see [includes](/guides/includes/))

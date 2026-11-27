@@ -19,7 +19,7 @@ use super::anchors::{
     alias_target_path, build_anchor_map, collect_alias_paths, collect_anchor_paths,
     collect_anchor_refs, detached_clone, find_anchor_path, path_precedes,
 };
-use super::ast::{HeadComment, NodeStyle, YamlNode, YamlNodeKind};
+use super::ast::{EmptyDocuments, HeadComment, NodeStyle, YamlNode, YamlNodeKind};
 use super::emit;
 use super::emit::{emit_roundtrip_all_with, emit_roundtrip_with};
 use super::value::{node_to_python_key, node_to_python_with, python_to_node, ObjectCache};
@@ -189,7 +189,11 @@ impl YAMLRocksDocument {
                 .nodes
                 .get_mut(idx)
                 .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
-            *node = python_to_node(py, value, double_quotes, schema)?;
+            let mut new_root = python_to_node(py, value, double_quotes, schema)?;
+            // The empty documents around a root belong to the stream, not to
+            // the value being replaced.
+            new_root.empty_documents = node.empty_documents.take();
+            *node = new_root;
             node.mark_modified();
             Ok(())
         }
@@ -228,7 +232,10 @@ impl YAMLRocksDocument {
                     "index out of range",
                 ));
             }
-            self.nodes.remove(idx);
+            let removed = self.nodes.remove(idx);
+            if let Some(empty_documents) = removed.empty_documents {
+                keep_empty_documents(&mut self.nodes, idx, *empty_documents);
+            }
             // The cached source still contains the removed document; drop it so
             // the stream re-emits from the AST instead of replaying verbatim.
             self.source = None;
@@ -595,12 +602,26 @@ impl YAMLRocksDocument {
     }
 
     /// Re-emit the document from the AST (used when modified or sourceless).
+    /// Always as a stream, even for one root: the empty documents around it
+    /// are part of the stream, not of the root.
     fn emit_nodes(&self) -> Vec<u8> {
-        if self.nodes.len() == 1 {
-            emit_roundtrip_with(&self.nodes[0], self.null_style)
-        } else {
-            emit_roundtrip_all_with(&self.nodes, self.null_style)
-        }
+        emit_roundtrip_all_with(&self.nodes, self.null_style)
+    }
+}
+
+/// Hand the empty documents of a root removed from `nodes` at `idx` to a
+/// remaining neighbour, so deleting a document removes only that document.
+/// The ones before it now precede the root that followed it; with no root
+/// after it, they and any that ended the stream move to the new last root.
+/// With no root left at all, there is nothing to carry them.
+fn keep_empty_documents(nodes: &mut [YamlNode], idx: usize, removed: EmptyDocuments) {
+    if let Some(next) = nodes.get_mut(idx) {
+        let carried = next.empty_documents.get_or_insert_with(Default::default);
+        carried.before.splice(0..0, removed.before);
+    } else if let Some(last) = nodes.last_mut() {
+        let carried = last.empty_documents.get_or_insert_with(Default::default);
+        carried.after.extend(removed.before);
+        carried.after.extend(removed.after);
     }
 }
 
@@ -609,32 +630,31 @@ impl YAMLRocksDocument {
 /// byte order mark stays first; an existing `---` document-start marker is
 /// reused, otherwise one is added. Any `%YAML` directive among the leading
 /// directives is dropped (the canonical 1.2 declaration replaces it); a `%TAG`
-/// directive is kept in place, with `%YAML 1.2` inserted ahead of it.
+/// directive is kept in place, with `%YAML 1.2` inserted ahead of it. Comment
+/// and blank lines may sit before, between, or after those directives; the
+/// stamp goes ahead of all of them.
 fn stamp_yaml_1_2(buf: &mut Vec<u8>) {
     const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
     let at = if buf.starts_with(&BOM) { BOM.len() } else { 0 };
-    // Walk the leading directive lines. A `%YAML` line is dropped (the canonical
-    // 1.2 declaration below replaces it; this also keeps re-stamping idempotent);
-    // any other directive (a `%TAG` handle) is kept and skipped over so the
-    // marker is found past it, not before it. Inserting `%YAML 1.2\n---\n` ahead
-    // of a `%TAG` would strand the handle after a document start and fail to
-    // reload.
+    // Walk the leading lines up to the first document's marker or content. A
+    // `%YAML` line is dropped (the canonical 1.2 declaration below replaces it;
+    // this also keeps re-stamping idempotent); any other directive (a `%TAG`
+    // handle) is kept and skipped over so the marker is found past it, not
+    // before it. Inserting `%YAML 1.2\n---\n` ahead of a `%TAG` would strand the
+    // handle after a document start and fail to reload. Comment and blank lines
+    // are skipped too: a `---` after them is still the first document's marker,
+    // and adding another one ahead of them would add a document.
     let mut cursor = at;
     loop {
         let rest = &buf[cursor..];
-        let line_len = rest.iter().position(|&b| b == b'\n').map(|n| n + 1);
+        let line_len = line_length(rest);
         if rest.starts_with(b"%YAML") {
-            match line_len {
-                Some(len) => {
-                    buf.drain(cursor..cursor + len);
-                }
-                None => buf.truncate(cursor),
+            buf.drain(cursor..cursor + line_len);
+        } else if rest.starts_with(b"%") || is_comment_or_blank_line(&rest[..line_len]) {
+            if line_len == 0 {
+                break;
             }
-        } else if rest.starts_with(b"%") {
-            match line_len {
-                Some(len) => cursor += len,
-                None => break,
-            }
+            cursor += line_len;
         } else {
             break;
         }
@@ -643,7 +663,7 @@ fn stamp_yaml_1_2(buf: &mut Vec<u8>) {
     let has_marker = body.starts_with(b"---")
         && body
             .get(3)
-            .is_none_or(|&b| matches!(b, b'\n' | b'\r' | b' '));
+            .is_none_or(|&b| matches!(b, b'\n' | b'\r' | b' ' | b'\t'));
     let mut stamp: Vec<u8> = b"%YAML 1.2\n".to_vec();
     if !has_marker {
         // No directives precede us here (a directive always carries its own
@@ -651,6 +671,24 @@ fn stamp_yaml_1_2(buf: &mut Vec<u8>) {
         stamp.extend_from_slice(b"---\n");
     }
     buf.splice(at..at, stamp);
+}
+
+/// The length of the first line of `text`, its line break included (`\n`,
+/// `\r\n`, or a lone `\r`), or all of `text` when it has no line break.
+fn line_length(text: &[u8]) -> usize {
+    match text.iter().position(|&b| b == b'\n' || b == b'\r') {
+        Some(at) if text[at] == b'\r' && text.get(at + 1) == Some(&b'\n') => at + 2,
+        Some(at) => at + 1,
+        None => text.len(),
+    }
+}
+
+/// Whether `line` holds nothing but whitespace, optionally ending in a comment.
+fn is_comment_or_blank_line(line: &[u8]) -> bool {
+    let content = line
+        .iter()
+        .position(|&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
+    content.is_none_or(|at| line[at] == b'#')
 }
 
 /// A live proxy onto a nested node of a [`YAMLRocksDocument`], addressed by path.
@@ -907,6 +945,9 @@ impl YAMLRocksNode {
         new_val.comments.foot = std::mem::take(&mut node.comments.foot);
         new_val.anchor = node.anchor.take();
         new_val.tag = node.tag.take();
+        // Set only on a document root: the empty documents around it belong to
+        // the stream, so replacing the root's value keeps them.
+        new_val.empty_documents = node.empty_documents.take();
         new_val.mark_modified();
         *node = new_val;
         Ok(())
@@ -2174,7 +2215,46 @@ fn leaves_to_list(py: Python<'_>, leaves: Vec<(Vec<Py<PyAny>>, Py<PyAny>)>) -> P
 
 #[cfg(test)]
 mod tests {
-    use super::stamp_yaml_1_2;
+    use super::{keep_empty_documents, stamp_yaml_1_2};
+    use crate::encode::NullStyle;
+    use crate::roundtrip::composer::compose;
+    use crate::roundtrip::emit::emit_roundtrip_all_with;
+
+    /// Remove root `idx` the way `del doc[idx]` does and re-emit the stream.
+    fn delete_root(input: &str, idx: usize) -> String {
+        let mut nodes = compose(input).unwrap();
+        let removed = nodes.remove(idx);
+        if let Some(empty_documents) = removed.empty_documents {
+            keep_empty_documents(&mut nodes, idx, *empty_documents);
+        }
+        String::from_utf8(emit_roundtrip_all_with(&nodes, NullStyle::Null)).unwrap()
+    }
+
+    #[test]
+    fn deleting_a_root_keeps_the_empty_documents_before_it() {
+        assert_eq!(
+            delete_root("a: 1\n---\n# x\n---\nb: 2\n---\nc: 3\n", 1),
+            "a: 1\n---\n# x\n---\nc: 3\n"
+        );
+    }
+
+    #[test]
+    fn deleting_the_last_root_keeps_the_empty_documents_around_it() {
+        assert_eq!(
+            delete_root("a: 1\n---\n# x\n---\nb: 2\n--- # y\n", 1),
+            "a: 1\n---\n# x\n--- # y\n"
+        );
+    }
+
+    #[test]
+    fn deleting_a_root_closes_its_empty_documents_before_a_directive() {
+        // The empty document now sits right before a root with a `%YAML`
+        // directive, which is only valid after a `...`.
+        assert_eq!(
+            delete_root("---\n---\nb: 1\n...\n%YAML 1.2\n---\nc: 2\n", 0),
+            "---\n...\n%YAML 1.2\n---\nc: 2\n"
+        );
+    }
 
     fn stamp(input: &[u8]) -> Vec<u8> {
         let mut buf = input.to_vec();
@@ -2212,6 +2292,44 @@ mod tests {
         assert_eq!(
             stamp(b"%YAML 1.1\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n"),
             b"%YAML 1.2\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n",
+        );
+    }
+
+    #[test]
+    fn finds_the_marker_past_leading_comments() {
+        assert_eq!(
+            stamp(b"# head\n\n---\n---\na: 1\n"),
+            b"%YAML 1.2\n# head\n\n---\n---\na: 1\n"
+        );
+        assert_eq!(stamp(b"# head\na: 1\n"), b"%YAML 1.2\n---\n# head\na: 1\n");
+    }
+
+    #[test]
+    fn finds_directives_past_leading_comments() {
+        assert_eq!(
+            stamp(b"# head\n%TAG !e! tag:x:\n---\na: 1\n"),
+            b"%YAML 1.2\n# head\n%TAG !e! tag:x:\n---\na: 1\n"
+        );
+        assert_eq!(
+            stamp(b"%TAG !e! tag:x:\n# head\n---\na: 1\n"),
+            b"%YAML 1.2\n%TAG !e! tag:x:\n# head\n---\na: 1\n"
+        );
+        assert_eq!(
+            stamp(b"# head\n%YAML 1.1\n---\na: 1\n"),
+            b"%YAML 1.2\n# head\n---\na: 1\n"
+        );
+        assert_eq!(
+            stamp(b"# head\r\n%YAML 1.2\r\n---\r\na: 1\r\n"),
+            b"%YAML 1.2\n# head\r\n---\r\na: 1\r\n"
+        );
+    }
+
+    #[test]
+    fn does_not_skip_past_a_lone_carriage_return() {
+        // A lone `\r` ends the comment line; the `---` after it is the marker.
+        assert_eq!(
+            stamp(b"# head\r---\ra: 1\r"),
+            b"%YAML 1.2\n# head\r---\ra: 1\r"
         );
     }
 

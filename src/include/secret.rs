@@ -56,6 +56,7 @@ impl IncludeResolver {
                     tag: "!secret".to_owned(),
                     target: name,
                     target_file_id: None,
+                    empty_documents: None,
                 });
                 return Ok(resolved);
             }

@@ -542,6 +542,91 @@ def test_a_date_shaped_string_stays_plain_without_timestamps():
     assert doc.to_yaml() == b"x: 2024-01-02\n"
 
 
+# -- Index conversions ------------------------------------------------------------
+
+
+class IndexFailed(Exception):
+    """The error a failing `__index__` raises in these tests."""
+
+
+class FailingIndex:
+    """An index whose `__index__` raises."""
+
+    def __index__(self):
+        raise IndexFailed("no index today")
+
+
+def _sequence_and_stream():
+    """A document with a sequence, and a stream, each with the container to index."""
+    doc = load(b"a: [1, 2]\n")
+    stream = load(b"a: 0\n---\nb: 1\n")
+    return [(doc, doc["a"]), (stream, stream)]
+
+
+@pytest.mark.parametrize("operation", ["read", "get", "set", "delete"])
+@pytest.mark.parametrize("container", ["sequence", "stream"])
+def test_an_index_whose_index_raises_is_raised_and_changes_nothing(
+    operation, container
+):
+    """An exception from `__index__` propagates from every operation, with no edit made."""
+    owner, target = _sequence_and_stream()[0 if container == "sequence" else 1]
+    before = owner.to_yaml()
+    with pytest.raises(IndexFailed, match="no index today"):
+        if operation == "read":
+            target[FailingIndex()]
+        elif operation == "get":
+            target.get(FailingIndex(), "default")
+        elif operation == "set":
+            target[FailingIndex()] = 5
+        else:
+            del target[FailingIndex()]
+    assert owner.to_yaml() == before
+
+
+def test_a_cursor_index_whose_index_raises_is_raised():
+    """Indexing a node cursor propagates an exception from `__index__`."""
+    doc = load(b"a: [1, 2]\n")
+    with pytest.raises(IndexFailed):
+        doc.node["a"][FailingIndex()]
+
+
+def test_an_absent_or_non_index_key_is_still_a_miss():
+    """`get()` returns its default for an index past the end or a key that is no index."""
+    for _owner, target in _sequence_and_stream():
+        assert target.get(5, "default") == "default"
+        assert target.get(1.5, "default") == "default"
+
+
+def test_a_read_whose_index_deletes_a_document_raises():
+    """`stream[i]` raises when `__index__` deleted a document, instead of reading its neighbour."""
+    stream = load(b"a: 0\n---\nb: 1\n")
+
+    class DeletesFirst:
+        def __index__(self):
+            del stream[0]
+            return 0
+
+    with pytest.raises(RuntimeError, match="changed while"):
+        stream[DeletesFirst()]
+    assert stream.to_dict() == {"b": 1}
+
+
+def test_a_read_whose_index_shifts_a_sequence_raises():
+    """`seq[i]` and `node[i]` raise when `__index__` shifted the sequence under them."""
+    doc = load(b"a: [1, 2, 3]\n")
+
+    class DeletesFirst:
+        def __index__(self):
+            del doc["a"][0]
+            return 0
+
+    with pytest.raises(RuntimeError, match="changed while"):
+        doc["a"][DeletesFirst()]
+    with pytest.raises(RuntimeError, match="changed while"):
+        doc.node["a"][DeletesFirst()]
+    assert doc.to_dict() == {"a": [3]}
+
+
 # -- No panic escapes ----------------------------------------------------------
 
 

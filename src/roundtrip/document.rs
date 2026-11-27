@@ -55,13 +55,41 @@ pub(crate) enum PathSeg {
 }
 
 fn seg_from_key(key: &Bound<'_, PyAny>) -> PyResult<PathSeg> {
-    if let Ok(idx) = key.extract::<usize>() {
-        return Ok(PathSeg::Index(idx));
+    Ok(step_from_key(key)?)
+}
+
+/// [`seg_from_key`], telling apart a key that is no key at all (missing, for
+/// `get()`) from one whose own `__index__` raised (a failed lookup).
+fn step_from_key(key: &Bound<'_, PyAny>) -> Result<PathSeg, LookupFailure> {
+    if let Some(index) = index_of(key)? {
+        // A negative or oversized index is no position, as for any key that
+        // is neither an index nor a string.
+        if let Ok(index) = index.extract::<usize>() {
+            return Ok(PathSeg::Index(index));
+        }
+    } else if let Ok(text) = key.extract::<String>() {
+        return Ok(PathSeg::Key(text));
     }
-    let s: String = key
-        .extract()
-        .map_err(|_| pyo3::exceptions::PyTypeError::new_err("mapping keys must be str or int"))?;
-    Ok(PathSeg::Key(s))
+    Err(LookupFailure::Missing(
+        pyo3::exceptions::PyTypeError::new_err("mapping keys must be str or int"),
+    ))
+}
+
+/// `key` as a Python `int`, through its `__index__`, or `None` when it has no
+/// `__index__` at all. An exception that `__index__` raises is raised: hiding
+/// it as "not an index" would report the callback's failure as a missing key.
+fn index_of<'py>(key: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyInt>>> {
+    if let Ok(index) = key.cast_exact::<PyInt>() {
+        return Ok(Some(index.clone()));
+    }
+    let py = key.py();
+    if !key.get_type().hasattr(pyo3::intern!(py, "__index__"))? {
+        return Ok(None);
+    }
+    let index = py
+        .import(pyo3::intern!(py, "operator"))?
+        .call_method1(pyo3::intern!(py, "index"), (key,))?;
+    Ok(Some(index.cast_into::<PyInt>()?))
 }
 
 /// A structure-preserving YAML document returned by `loads(..., OPT_ROUND_TRIP)`.
@@ -1400,17 +1428,19 @@ impl YAMLRocksNode {
         // A key that is not an exact `str` or `int` runs its own `__index__` to
         // become a step. That runs with no borrow held, after the same stale
         // check every key gets first.
-        let converted = if converts_without_python(key) {
-            None
+        let (converted, doc) = if converts_without_python(key) {
+            (None, read_document(root)?)
         } else {
             let doc = read_document(root)?;
             let base = alias_followed_path(&doc.nodes, &self.path);
             resolve_path(&doc.nodes, &base).ok_or_else(stale_node)?;
+            let revision = doc.revision;
             drop(doc);
-            Some(seg_from_key(key)?)
+            let seg = seg_from_key(key)?;
+            // A position taken for one tree must not be applied to another.
+            (Some(seg), read_unchanged(root, revision)?)
         };
 
-        let doc = read_document(root)?;
         let mut path = alias_followed_path(&doc.nodes, &self.path);
         let node = resolve_path(&doc.nodes, &path).ok_or_else(stale_node)?;
         let seg = match converted {
@@ -2092,15 +2122,18 @@ fn get_child(
             }
         }
         _ if converts_without_python(key) => {
-            let step = seg_from_key(key).map_err(missing)?;
+            let step = step_from_key(key)?;
             (doc, Some(step))
         }
         _ => {
-            // The key's `__index__` runs with no borrow held. A position is
-            // looked up afresh afterwards, like any read.
+            // The key's `__index__` runs with no borrow held. The position it
+            // gives is only meaningful in the tree it was taken for, so a
+            // write in between fails the read rather than hitting a shifted
+            // item.
+            let revision = doc.revision;
             drop(doc);
-            let step = seg_from_key(key).map_err(missing)?;
-            (read_document(root)?, Some(step))
+            let step = step_from_key(key)?;
+            (read_unchanged(root, revision)?, Some(step))
         }
     };
 
@@ -2621,18 +2654,27 @@ fn lookup_item(
     key: &Bound<'_, PyAny>,
 ) -> Result<Py<PyAny>, LookupFailure> {
     let py = slf.py();
-    if read_document(slf)?.nodes.len() == 1 {
-        return get_child(py, slf, &[], key, stale_view);
-    }
+    let revision = {
+        let this = read_document(slf)?;
+        if this.nodes.len() == 1 {
+            drop(this);
+            return get_child(py, slf, &[], key, stale_view);
+        }
+        this.revision
+    };
 
     // The index is converted with no borrow held: an `__index__` method is
-    // free to read this document.
-    let idx: usize = key.extract().map_err(|_| {
+    // free to read this document. One that changes it fails the read, since
+    // the index may now name a different document.
+    let not_an_index = || {
         LookupFailure::Missing(pyo3::exceptions::PyKeyError::new_err(
             "multi-document access requires an integer index",
         ))
-    })?;
-    let this = read_document(slf)?;
+    };
+    let idx: usize = index_of(key)?
+        .and_then(|index| index.extract().ok())
+        .ok_or_else(not_an_index)?;
+    let this = read_unchanged(slf, revision)?;
     let node = this
         .nodes
         .get(idx)

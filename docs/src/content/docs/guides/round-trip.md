@@ -179,12 +179,15 @@ print(doc.to_yaml().decode())
 ```
 
 :::caution[One document, one writer at a time]
-A round-trip document is not locked for concurrent use. Any number of threads
-can read it at the same time, but a write that overlaps another call on the
-same document, from another thread or from a key's or value's own Python code
-in the middle of an assignment, raises `RuntimeError` instead of writing to a
-document that moved under it. Guard a document that threads share and write to
-with a lock, or give each thread its own.
+A round-trip document is not locked for concurrent use. Python code that runs
+while a key or value is converted (its `__eq__`, `__index__`, or `__float__`)
+may read the document freely. If that code changes the document, its own edit
+stands, and the call it ran inside raises `RuntimeError` and changes nothing,
+since what it was about to do may no longer fit. A write that overlaps another
+call on the same document, from another thread for example, is a conflict:
+either side can raise `RuntimeError`. Any number of threads can read at the same
+time. Guard a document that threads share and write to with a lock, or give
+each thread its own.
 :::
 
 ## Deleting keys

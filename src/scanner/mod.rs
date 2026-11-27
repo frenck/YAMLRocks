@@ -40,6 +40,28 @@ const MAX_FLOW_DEPTH: usize = 1000;
 /// on its own, report it identically.
 const FLOW_INDENT_MESSAGE: &str = "flow content must be indented more than its block context";
 
+/// Read a block scalar from its source text alone, as if the node holding it
+/// had the indentation `parent_indent` (-1 at the document root). `source`
+/// starts at the `|` or `>` header and ends after the scalar's last line, as
+/// the round-trip composer keeps it. Returns `None` when that text is not a
+/// block scalar at that indentation.
+///
+/// The round-trip emitter uses this to decide whether replaying the source
+/// where the scalar is written now still yields its value: the block's
+/// indentation, and so what its lines mean, depends on where it sits.
+pub(crate) fn reread_block_scalar(source: &str, parent_indent: i32) -> Option<String> {
+    let literal = match source.as_bytes().first()? {
+        b'|' => true,
+        b'>' => false,
+        _ => return None,
+    };
+
+    let mut reader = Reader::new(source);
+    scalar::scan_block(&mut reader, literal, parent_indent)
+        .ok()
+        .map(Cow::into_owned)
+}
+
 /// YAML scanner: converts a byte stream into a sequence of tokens.
 ///
 /// The scanner handles indentation tracking, block/flow context management,

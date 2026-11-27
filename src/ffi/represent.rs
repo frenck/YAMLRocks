@@ -1362,10 +1362,9 @@ fn node_style(flow: bool) -> NodeStyle {
 /// rejected; every other style has content it cannot hold:
 ///
 /// - A block scalar (`literal`/`folded`) normalizes line endings and cannot hold
-///   a `\r` or a non-printable control; a `folded` scalar rewrites interior
-///   newlines, so any newline makes it lossy; a `literal` auto-detects its
-///   indentation from the first content line, so a leading space or tab there
-///   would be swallowed (this emitter writes no indentation indicator).
+///   a `\r` or a non-printable control. Anything else it holds exactly: the
+///   emitter writes an indentation indicator for leading spaces and spells a
+///   folded scalar's line breaks so they read back unchanged.
 /// - A `single` scalar cannot escape: a line break folds (or fails to parse)
 ///   and a control character would be written raw, which `loads` rejects.
 /// - A `plain` scalar has no quoting at all: content that re-reads as
@@ -1398,16 +1397,7 @@ fn style_lossiness(value: &str, style: ScalarStyle) -> Option<&'static str> {
             if value.chars().any(crate::emit_util::is_non_printable) {
                 return Some("it contains a non-printable control character");
             }
-            if matches!(style, ScalarStyle::Folded) && value.contains('\n') {
-                return Some("folding would rewrite its line breaks");
-            }
-            let first = value.split('\n').find(|line| !line.is_empty());
-            match first {
-                Some(line) if line.starts_with([' ', '\t']) => {
-                    Some("its first line begins with whitespace")
-                }
-                _ => None,
-            }
+            None
         }
     }
 }

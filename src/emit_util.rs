@@ -107,22 +107,28 @@ pub(crate) fn is_non_printable(c: char) -> bool {
 /// for multi-line content, so it is the default; strings it cannot represent
 /// faithfully fall back to a double-quoted scalar.
 ///
-/// It cannot represent: a single-line string; a carriage return or other C0
-/// control character (only `\n` and `\t` are allowed in block content); or a
-/// first content line that begins with whitespace (the block's indentation is
-/// auto-detected from it, which would silently swallow the leading spaces).
+/// It is not used for: a single-line string; a value no block scalar can hold
+/// (see [`block_scalar_capable`]); or a first content line that begins with
+/// whitespace. That last one would need an explicit indentation indicator
+/// (`|2`), and a double-quoted scalar reads more plainly there.
 ///
 /// Shared by the fast encoder and the round-trip `represent` path so both choose
 /// a literal block under exactly the same conditions.
 pub(crate) fn use_literal_block(value: &str) -> bool {
-    if !value.contains('\n') {
-        return false;
-    }
-    if value.chars().any(|c| c == '\r' || is_non_printable(c)) {
+    if !value.contains('\n') || !block_scalar_capable(value) {
         return false;
     }
     let first_content = value.split('\n').find(|line| !line.is_empty());
     !matches!(first_content, Some(line) if line.starts_with([' ', '\t']))
+}
+
+/// Whether a block scalar (`|` or `>`) can hold `value` so it reads back
+/// identically. Block content is raw text without escapes: a carriage return
+/// in it is a line break, which reading normalizes to `\n`, and a non-printable
+/// character is rejected outright. Every other string fits both block styles,
+/// given the indentation indicator and folding rules of [`push_block_scalar`].
+pub(crate) fn block_scalar_capable(value: &str) -> bool {
+    !value.chars().any(|c| c == '\r' || is_non_printable(c))
 }
 
 /// The body of a double-quoted scalar (no surrounding quotes), with the escapes
@@ -155,33 +161,62 @@ pub(crate) fn double_quoted_body(value: &str) -> String {
     out
 }
 
-/// Append `value` to `buf` as a block scalar (`|` or `>` per `marker`), body
-/// lines at the absolute column `body_indent`. The chomping indicator is
-/// reverse-engineered from the value's trailing newlines, since chomping was
-/// already applied when the value was produced:
+/// Append `value` to `buf` as a block scalar (`|` or `>` per `marker`) that
+/// reads back as exactly `value`. The body lines sit at the absolute column
+/// `body_indent`; `parent_indent` is the indentation of the node holding the
+/// scalar (0 at the document root), which an indentation indicator counts
+/// from. The caller checks [`block_scalar_capable`] first.
 ///
-/// - 0 trailing → strip (`-`)
-/// - 1 trailing → clip (default, no indicator) — except an all-newline value
-///   whose body is empty (`"\n"`), where clip would chomp the lone newline away
-///   on re-read, so keep (`+`) preserves it
-/// - 2+ trailing → keep (`+`), preserving the extra blank lines
+/// The header carries what a reader cannot infer from the body:
+///
+/// - An indentation indicator when the first line with content starts with a
+///   space. A reader takes the leading spaces of that line as the block's
+///   indentation, so without the indicator they would be lost.
+/// - The chomping indicator, from the value's trailing line breaks: none is
+///   strip (`-`); one is clip (no indicator), except for a value that is only
+///   that line break, which clip would drop, so it takes keep (`+`); two or
+///   more is keep (`+`), with the extra ones written as empty lines.
+///
+/// A folded body also needs its line breaks spelled the way folding reads
+/// them, see [`push_block_scalar_body`].
 ///
 /// Shared by the fast encoder and the round-trip emitter so both write block
-/// scalars, and their chomping edge cases, identically.
-pub(crate) fn push_block_scalar(buf: &mut Vec<u8>, value: &str, marker: u8, body_indent: usize) {
-    push_block_scalar_header(buf, value, marker);
-    push_block_scalar_body(buf, value, body_indent);
+/// scalars, and their edge cases, identically.
+pub(crate) fn push_block_scalar(
+    buf: &mut Vec<u8>,
+    value: &str,
+    marker: u8,
+    parent_indent: usize,
+    body_indent: usize,
+) {
+    push_block_scalar_header(buf, value, marker, body_indent - parent_indent);
+    push_block_scalar_body(buf, value, marker, body_indent);
 }
 
-/// The header of a block scalar: the `|`/`>` marker and its chomping indicator,
-/// without the line break that ends the header line. Split from
-/// [`push_block_scalar_body`] so a comment can close the header line
+/// The header of a block scalar: the `|`/`>` marker, its indentation indicator
+/// when it needs one, and its chomping indicator, without the line break that
+/// ends the header line. `indentation` is how far the body sits past the
+/// parent node's indentation, the number an indentation indicator holds. Split
+/// from [`push_block_scalar_body`] so a comment can close the header line
 /// (`key: | # note`), the one place a block scalar's trailing comment can go.
-pub(crate) fn push_block_scalar_header(buf: &mut Vec<u8>, value: &str, marker: u8) {
+pub(crate) fn push_block_scalar_header(
+    buf: &mut Vec<u8>,
+    value: &str,
+    marker: u8,
+    indentation: usize,
+) {
     let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
     let body = value.trim_end_matches('\n');
 
     buf.push(marker);
+
+    if needs_indentation_indicator(body) {
+        // An indentation indicator is a single digit; the emitters indent by
+        // two or four columns.
+        debug_assert!((1..=9).contains(&indentation));
+        buf.push(b'0' + indentation as u8);
+    }
+
     match trailing {
         0 => buf.push(b'-'),
         1 if body.is_empty() => buf.push(b'+'),
@@ -190,23 +225,55 @@ pub(crate) fn push_block_scalar_header(buf: &mut Vec<u8>, value: &str, marker: u
     }
 }
 
+/// Whether a block scalar body needs an explicit indentation indicator: its
+/// first line with content starts with a space. Leading empty lines are
+/// written without any spaces, so they never take part in the detection.
+fn needs_indentation_indicator(body: &str) -> bool {
+    body.trim_start_matches('\n').starts_with(' ')
+}
+
 /// The rest of a block scalar after its header: the line break that ends the
 /// header line, then the body lines at the absolute column `body_indent`.
-pub(crate) fn push_block_scalar_body(buf: &mut Vec<u8>, value: &str, body_indent: usize) {
+///
+/// A literal body is the value's lines as they are. A folded body (`marker`
+/// is `>`) differs in one place: a line break between two text lines (lines
+/// that do not start with a space or a tab) folds. A single one reads back as
+/// a space, and of several, the first is dropped. So between two text lines
+/// the folded body writes one empty line more than the value holds. Line
+/// breaks next to a more-indented line, leading empty lines and trailing ones
+/// are read as written and need nothing extra.
+pub(crate) fn push_block_scalar_body(
+    buf: &mut Vec<u8>,
+    value: &str,
+    marker: u8,
+    body_indent: usize,
+) {
     let trailing = value.bytes().rev().take_while(|&b| b == b'\n').count();
     let body = value.trim_end_matches('\n');
+    let folded = marker == b'>';
 
     buf.push(b'\n');
 
+    let mut after_text_line = false;
     for line in body.split('\n') {
         if line.is_empty() {
             buf.push(b'\n');
-        } else {
-            buf.resize(buf.len() + body_indent, b' ');
-            buf.extend_from_slice(line.as_bytes());
-            buf.push(b'\n');
+            continue;
         }
+
+        if folded {
+            let text_line = !line.starts_with([' ', '\t']);
+            if text_line && after_text_line {
+                buf.push(b'\n');
+            }
+            after_text_line = text_line;
+        }
+
+        buf.resize(buf.len() + body_indent, b' ');
+        buf.extend_from_slice(line.as_bytes());
+        buf.push(b'\n');
     }
+
     // For "keep", emit the blank lines beyond the single implicit newline.
     for _ in 1..trailing {
         buf.push(b'\n');
@@ -269,7 +336,113 @@ pub(crate) fn push_folded(buf: &mut Vec<u8>, content: &str, cont_indent: usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_float, push_double_quoted, push_single_quoted};
+    use super::{
+        block_scalar_capable, canonical_float, push_block_scalar, push_double_quoted,
+        push_single_quoted,
+    };
+
+    /// Write `value` as a mapping value's block scalar (parent at column 0,
+    /// body at column 2), returning the header and body text.
+    fn block(value: &str, marker: u8) -> String {
+        let mut buf = Vec::new();
+        push_block_scalar(&mut buf, value, marker, 0, 2);
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn literal_block_headers_and_bodies() {
+        // `(value, expected header line + body)` for a `|` scalar under a key.
+        let cases: &[(&str, &str)] = &[
+            ("a\nb\n", "|\n  a\n  b\n"),
+            ("a\nb", "|-\n  a\n  b\n"),
+            ("a\n\n\n", "|+\n  a\n\n\n"),
+            ("", "|-\n\n"),
+            ("\n", "|+\n\n"),
+            ("\n\n", "|+\n\n\n"),
+            ("\n\nx\n", "|\n\n\n  x\n"),
+            ("a \nb\t\n", "|\n  a \n  b\t\n"),
+            ("\tx\n", "|\n  \tx\n"),
+            // Leading spaces on the first line with content need the indicator,
+            // which counts from the parent's indentation.
+            (" x\ny\n", "|2\n   x\n  y\n"),
+            ("\n  x", "|2-\n\n    x\n"),
+            ("  \nx\n", "|2\n    \n  x\n"),
+            (" \n\n", "|2+\n   \n\n"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(block(value, b'|'), *expected, "value {value:?}");
+        }
+    }
+
+    #[test]
+    fn folded_block_spells_line_breaks_the_way_folding_reads_them() {
+        // `(value, expected header line + body)` for a `>` scalar under a key.
+        // Between two text lines a folded body needs one empty line more than
+        // the value has; next to a more-indented line it needs none.
+        let cases: &[(&str, &str)] = &[
+            ("ab cd\n", ">\n  ab cd\n"),
+            ("ab\ncd\n", ">\n  ab\n\n  cd\n"),
+            ("ab\n\ncd", ">-\n  ab\n\n\n  cd\n"),
+            ("a\n  b\nc\n", ">\n  a\n    b\n  c\n"),
+            ("a\n\tb\nc\n", ">\n  a\n  \tb\n  c\n"),
+            ("a\n\n  b\n\nc\n", ">\n  a\n\n    b\n\n  c\n"),
+            ("\nfirst\nsecond\n", ">\n\n  first\n\n  second\n"),
+            ("a \nb\n\n", ">+\n  a \n\n  b\n\n"),
+            ("  lead\nrest\n", ">2\n    lead\n  rest\n"),
+            ("", ">-\n\n"),
+            ("\n", ">+\n\n"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(block(value, b'>'), *expected, "value {value:?}");
+        }
+    }
+
+    #[test]
+    fn block_scalars_read_back_as_their_value() {
+        // Every writer output reads back through the scanner as the value it
+        // was written from, in both styles, at several parent indentations
+        // (including the document root, -1) and indentation steps.
+        let values = [
+            "a\nb\n",
+            "ab\n\ncd\n",
+            "a\n  b\n\n c\nd",
+            " x\ny\n",
+            "\n\n  x\n\n",
+            "  \n\t\nx \n",
+            "#a\n---\n...\n",
+            "",
+            "\n",
+            "\n\n\n",
+            "x",
+            "   ",
+            "a\n\n\n b\n\nc\n\n\n",
+        ];
+        for value in values {
+            for marker in *b"|>" {
+                for (parent, step) in [(-1, 2), (0, 2), (0, 4), (2, 2), (4, 4), (6, 2)] {
+                    let parent_column = parent.max(0) as usize;
+                    let mut buf = Vec::new();
+                    push_block_scalar(&mut buf, value, marker, parent_column, parent_column + step);
+                    let text = String::from_utf8(buf).unwrap();
+                    let reread = crate::scanner::reread_block_scalar(&text, parent);
+                    assert_eq!(
+                        reread.as_deref(),
+                        Some(value),
+                        "value {value:?}, marker {}, parent {parent}, step {step}: {text:?}",
+                        marker as char
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn block_scalars_cannot_hold_carriage_returns_or_controls() {
+        assert!(block_scalar_capable("a\n\tb \u{85}\u{feff}"));
+        assert!(!block_scalar_capable("a\rb"));
+        assert!(!block_scalar_capable("a\u{1}b"));
+        assert!(!block_scalar_capable("a\u{fffe}b"));
+    }
 
     #[test]
     fn canonical_float_special_values() {

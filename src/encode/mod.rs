@@ -167,7 +167,7 @@ impl<'a> Emitter<'a> {
                 self.emit_block_sequence(items, 0);
             }
             Value::String(s) if Self::use_literal_block(s) => {
-                self.emit_literal_block(s, self.step());
+                self.emit_literal_block(s, 0, self.step());
             }
             // A tagged root value: `!tag` then its inner value, which may itself
             // be a block collection or block scalar.
@@ -253,7 +253,7 @@ impl<'a> Emitter<'a> {
             }
             Value::String(s) if Self::use_literal_block(s) => {
                 self.buf.push(b' ');
-                self.emit_literal_block(s, indent + self.step());
+                self.emit_literal_block(s, indent, indent + self.step());
             }
             // An empty-style null in block mapping-value position emits nothing
             // after the colon (`key:`), which the parser reads back as null.
@@ -300,9 +300,11 @@ impl<'a> Emitter<'a> {
     /// none → strip (`|-`), one → clip (`|`), two or more → keep (`|+`). The
     /// writer is shared with the round-trip emitter
     /// ([`crate::emit_util::push_block_scalar`]) so the chomping rules cannot
-    /// drift between the two.
-    fn emit_literal_block(&mut self, value: &str, indent: usize) {
-        crate::emit_util::push_block_scalar(&mut self.buf, value, b'|', indent);
+    /// drift between the two. `parent_indent` is the indentation of the
+    /// mapping or sequence holding the value, `body_indent` the column its
+    /// lines are written at.
+    fn emit_literal_block(&mut self, value: &str, parent_indent: usize, body_indent: usize) {
+        crate::emit_util::push_block_scalar(&mut self.buf, value, b'|', parent_indent, body_indent);
     }
 
     // -- Block sequence --
@@ -324,7 +326,7 @@ impl<'a> Emitter<'a> {
                 }
                 Value::String(s) if Self::use_literal_block(s) => {
                     self.buf.push(b' ');
-                    self.emit_literal_block(s, child_indent);
+                    self.emit_literal_block(s, indent, child_indent);
                 }
                 // An empty-style null as a block sequence entry is a bare `-`,
                 // which the parser reads back as a null item.

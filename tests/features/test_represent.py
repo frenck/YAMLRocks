@@ -246,13 +246,13 @@ def test_sequence_error_after_deep_item_tears_down_iteratively():
 
 
 def test_explicit_block_style_rejects_lossy_values():
-    """An explicit literal/folded style that cannot round-trip the value is rejected."""
+    """An explicit literal/folded style is rejected only for values no block scalar can hold."""
     scalar = yamlrocks.YAMLRocksScalar
     cases = [
-        ("a\nb", "folded"),
-        ("  indented\nrest", "literal"),
         ("a\rb", "literal"),
+        ("a\rb", "folded"),
         ("a\x00b", "folded"),
+        ("a\x00b", "literal"),
     ]
     for value, style in cases:
         with pytest.raises(ValueError, match="cannot represent this value"):
@@ -262,14 +262,23 @@ def test_explicit_block_style_rejects_lossy_values():
                     scalar(_val, style=_st) if v == _val else None
                 ),
             )
-    # A lossless literal (single or multi-line, no leading whitespace) is fine and
-    # reloads unchanged.
-    out = yamlrocks.dumps(
-        {"k": "line1\nline2"},
-        represent=lambda v: scalar(v, style="literal") if v == "line1\nline2" else None,
-    )
-    assert out == b"k: |-\n  line1\n  line2\n"
-    assert yamlrocks.loads(out) == {"k": "line1\nline2"}
+    # Any other value is fine in either block style and reloads unchanged: a
+    # leading space takes an indentation indicator, and a folded line break is
+    # written as the empty line folding reads it from.
+    cases = [
+        ("line1\nline2", "literal", b"k: |-\n  line1\n  line2\n"),
+        ("  indented\nrest", "literal", b"k: |2-\n    indented\n  rest\n"),
+        ("a\nb", "folded", b"k: >-\n  a\n\n  b\n"),
+    ]
+    for value, style, expected in cases:
+        out = yamlrocks.dumps(
+            {"k": value},
+            represent=lambda v, _val=value, _st=style: (
+                scalar(_val, style=_st) if v == _val else None
+            ),
+        )
+        assert out == expected
+        assert yamlrocks.loads(out) == {"k": value}
     # An explicit double-quoted style is never rejected: it escapes a carriage
     # return and control characters, so it round-trips losslessly.
     for value in ("a\rb", "a\x00b"):

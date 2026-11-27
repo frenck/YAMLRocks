@@ -465,6 +465,11 @@ fn python_to_node_depth_inner(
         node.synthetic = true;
         return Ok(node);
     }
+    // A view, node cursor, or document assigns a copy of the plain data it
+    // holds, converted like any other plain value.
+    if let Some(plain) = super::document::plain_value_of_round_trip_object(obj) {
+        return python_to_node_depth(py, plain?.bind(py), double_quotes, schema, depth + 1);
+    }
     if let Ok(b) = obj.extract::<bool>() {
         let s = if b { "true" } else { "false" };
         return Ok(YamlNode::new(

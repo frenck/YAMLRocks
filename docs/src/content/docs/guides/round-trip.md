@@ -439,6 +439,16 @@ doc.node["staging"]["retries"].value = 99
 doc.node["defaults"]["retries"].value  # 99  (the anchor itself changed)
 ```
 
+Item access works the same way. `doc["staging"]` is a view of the anchored
+mapping, so it reads that mapping's entries, and a write through it changes the
+definition once, while `staging` stays a `*d` alias on re-emit:
+
+```python
+doc["staging"]["timeout"]  # 30
+doc["staging"]["timeout"] = 45
+doc["defaults"]["timeout"]  # 45
+```
+
 That is usually what you want for shared config. When it is not, detach first.
 
 ### Detaching an alias

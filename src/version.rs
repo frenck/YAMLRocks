@@ -23,11 +23,10 @@ pub fn leading_yaml_version(input: &str) -> Option<(u32, u32)> {
             continue;
         }
         if let Some(rest) = line.strip_prefix('%') {
-            // A directive line. Only `%YAML` carries a version; an in-line
-            // comment (` #...`) and other directives (`%TAG`) are skipped.
-            let mut parts = rest.split_whitespace().take_while(|p| !p.starts_with('#'));
-            if parts.next() == Some("YAML") {
-                return parts.next().and_then(parse_version);
+            // A directive line. Only `%YAML` carries a version; other
+            // directives (`%TAG`) are skipped.
+            if let Some(version) = directive_version(rest) {
+                return version;
             }
             continue;
         }
@@ -40,6 +39,27 @@ pub fn leading_yaml_version(input: &str) -> Option<(u32, u32)> {
         break;
     }
     None
+}
+
+/// The version declared by one of a document's directives, given its text
+/// without the leading `%` (`YAML 1.1`, as the round-trip AST keeps it), or
+/// `None` when the directives declare none. Reads them the way
+/// [`leading_yaml_version`] reads the stream prefix, so a document of a stream
+/// is judged by the same rule as a document loaded on its own.
+pub fn declared_yaml_version<'a>(
+    directives: impl IntoIterator<Item = &'a str>,
+) -> Option<(u32, u32)> {
+    directives.into_iter().find_map(directive_version)?
+}
+
+/// For a `%YAML` directive (text after the `%`), the version it declares, or
+/// `Some(None)` when that version does not parse; `None` for any other
+/// directive. An in-line comment (` #...`) is not part of the directive.
+fn directive_version(directive: &str) -> Option<Option<(u32, u32)>> {
+    let mut parts = directive
+        .split_whitespace()
+        .take_while(|p| !p.starts_with('#'));
+    (parts.next() == Some("YAML")).then(|| parts.next().and_then(parse_version))
 }
 
 /// Whether a declared version selects the YAML 1.1 schema. Only `1.1` does; any
@@ -63,7 +83,7 @@ fn parse_component(component: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::leading_yaml_version;
+    use super::{declared_yaml_version, leading_yaml_version};
 
     #[test]
     fn detects_declared_versions() {
@@ -94,5 +114,20 @@ mod tests {
     fn rejects_malformed_version() {
         assert_eq!(leading_yaml_version("%YAML 1\n---\nx: 1\n"), None);
         assert_eq!(leading_yaml_version("%YAML x.y\n---\nx: 1\n"), None);
+    }
+
+    #[test]
+    fn reads_the_version_a_document_declares() {
+        assert_eq!(declared_yaml_version(["YAML 1.1"]), Some((1, 1)));
+        assert_eq!(
+            declared_yaml_version(["TAG !e! tag:example.com,2000:", "YAML 1.2 # note"]),
+            Some((1, 2))
+        );
+        assert_eq!(
+            declared_yaml_version(["TAG !e! tag:example.com,2000:"]),
+            None
+        );
+        assert_eq!(declared_yaml_version(Vec::<&str>::new()), None);
+        assert_eq!(declared_yaml_version(["YAML x.y"]), None);
     }
 }

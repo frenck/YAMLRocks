@@ -333,6 +333,12 @@ pub fn loads(
             upgrade,
             schema,
             yaml_schema,
+            // A later document of a stream that declares no `%YAML` version
+            // reads under what the options alone select.
+            Schema::new(
+                opts & OPT_YAML_1_1 != 0 || upgrade || pyyaml_compat,
+                pyyaml_compat,
+            ),
             resolve_timestamps,
             dup_error,
             dup_warn,
@@ -1163,6 +1169,7 @@ fn loads_roundtrip(
     upgrade: bool,
     schema: Option<&Bound<'_, PyAny>>,
     yaml_schema: Schema,
+    undeclared_schema: Schema,
     resolve_timestamps: bool,
     dup_error: bool,
     dup_warn: bool,
@@ -1230,6 +1237,7 @@ fn loads_roundtrip(
         .with_double_quotes(double_quotes)
         .with_upgraded(upgrade)
         .with_schema(emit_schema)
+        .with_undeclared_schema(undeclared_schema)
         .with_resolve_timestamps(resolve_timestamps);
     Ok(Py::new(py, doc)?.into_any())
 }

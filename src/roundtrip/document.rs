@@ -94,6 +94,12 @@ pub struct YAMLRocksDocument {
     /// a string `y` keeps quotes under strict 1.1); loaded scalars keep their
     /// original text. Defaults to 1.2.
     pub schema: Schema,
+    /// The schema the load options select for a document that declares no
+    /// `%YAML` version. `schema` already accounts for the first document's own
+    /// directive; a later document of a stream applies its own directive, or
+    /// this, the way `loads_all(..., OPT_ROUND_TRIP)` reads it (see
+    /// [`YAMLRocksDocument::stream_document_schema`]). Defaults to 1.2.
+    pub undeclared_schema: Schema,
     /// Whether reads (`to_dict`, indexing, `walk`, `keys`) resolve a plain
     /// timestamp scalar to a `date`/`datetime` (`OPT_TIMESTAMPS`, or
     /// `OPT_PYYAML_COMPAT` which implies it). Off by default.
@@ -137,7 +143,6 @@ impl YAMLRocksDocument {
     fn __getitem__(slf: &Bound<'_, Self>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         let py = slf.py();
         let this = slf.borrow();
-        let schema = this.schema;
         if this.nodes.len() == 1 {
             let anchors = build_anchor_map(&this.nodes);
             access_child(
@@ -147,7 +152,7 @@ impl YAMLRocksDocument {
                 &this.nodes[0],
                 key,
                 &anchors,
-                schema,
+                this.schema,
                 this.resolve_timestamps,
             )
         } else {
@@ -169,46 +174,48 @@ impl YAMLRocksDocument {
                 document_prefix(this.nodes.len(), idx),
                 node,
                 &anchors,
-                schema,
+                this.stream_document_schema(node),
                 this.resolve_timestamps,
             )
         }
     }
 
     fn __setitem__(
-        &mut self,
-        py: Python<'_>,
+        slf: &Bound<'_, Self>,
         key: &Bound<'_, PyAny>,
         value: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let double_quotes = self.double_quotes;
-        let schema = self.schema;
-        if self.nodes.len() == 1 {
-            let anchors = build_anchor_map(&self.nodes);
-            set_child(
-                py,
-                &mut self.nodes[0],
-                key,
-                value,
-                double_quotes,
-                schema,
-                &anchors,
-                self.resolve_timestamps,
-            )
-        } else {
-            let idx: usize = key.extract()?;
-            let node = self
-                .nodes
-                .get_mut(idx)
-                .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
-            let mut new_root = python_to_node(py, value, double_quotes, schema)?;
-            // The empty documents around a root belong to the stream, not to
-            // the value being replaced.
-            new_root.empty_documents = node.empty_documents.take();
-            *node = new_root;
-            node.mark_modified();
-            Ok(())
+        let py = slf.py();
+        let root = slf.clone().unbind();
+        if slf.try_borrow()?.nodes.len() == 1 {
+            return assign_at(py, &root, &[], key, value);
         }
+
+        // A stream of several: the key selects a document to replace whole.
+        // The value is converted before the document is borrowed for writing
+        // (see [`Assignment`]).
+        let idx: usize = key.extract()?;
+        let (double_quotes, schema) = {
+            let this = slf.try_borrow()?;
+            let schema = this
+                .nodes
+                .get(idx)
+                .map_or(this.schema, |root| this.stream_document_schema(root));
+            (this.double_quotes, schema)
+        };
+        let mut new_root = python_to_node(py, value, double_quotes, schema)?;
+
+        let mut this = slf.try_borrow_mut()?;
+        let node = this
+            .nodes
+            .get_mut(idx)
+            .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
+        // The empty documents around a root belong to the stream, not to
+        // the value being replaced.
+        new_root.empty_documents = node.empty_documents.take();
+        *node = new_root;
+        node.mark_modified();
+        Ok(())
     }
 
     fn __delitem__(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -440,12 +447,13 @@ impl YAMLRocksDocument {
         } else {
             let list = PyList::empty(py);
             for node in &self.nodes {
-                // Each document resolves its aliases against its own anchors.
+                // Each document resolves its aliases against its own anchors,
+                // and its scalars under its own schema.
                 let anchors = build_anchor_map(std::slice::from_ref(node));
                 let _ = list.append(node_to_python_with(
                     py,
                     node,
-                    self.schema,
+                    self.stream_document_schema(node),
                     self.resolve_timestamps,
                     &anchors,
                 ));
@@ -546,6 +554,7 @@ impl YAMLRocksDocument {
             double_quotes: true,
             upgraded: false,
             schema: Schema::Yaml12,
+            undeclared_schema: Schema::Yaml12,
             resolve_timestamps: false,
         }
     }
@@ -567,6 +576,7 @@ impl YAMLRocksDocument {
             double_quotes: true,
             upgraded: false,
             schema: Schema::Yaml12,
+            undeclared_schema: Schema::Yaml12,
             resolve_timestamps: false,
         }
     }
@@ -602,6 +612,13 @@ impl YAMLRocksDocument {
         self
     }
 
+    /// Set the schema the load options select for a document of the stream
+    /// that declares no `%YAML` version.
+    pub fn with_undeclared_schema(mut self, schema: Schema) -> Self {
+        self.undeclared_schema = schema;
+        self
+    }
+
     /// Set whether reads resolve plain timestamp scalars to `date`/`datetime`
     /// (`OPT_TIMESTAMPS` or `OPT_PYYAML_COMPAT`).
     pub fn with_resolve_timestamps(mut self, resolve_timestamps: bool) -> Self {
@@ -620,6 +637,41 @@ impl YAMLRocksDocument {
             stamp_yaml_1_2(&mut bytes);
         }
         bytes
+    }
+
+    /// The schema one document of a stream of several reads and writes under:
+    /// the one `loads_all(..., OPT_ROUND_TRIP)` gives that document on its own.
+    /// A `%YAML` directive applies to its own document only, so the document's
+    /// own directive decides, and one without a directive takes the schema the
+    /// load options select. An upgraded stream is rewritten as 1.2 throughout.
+    fn stream_document_schema(&self, root: &YamlNode) -> Schema {
+        if self.upgraded {
+            return self.schema;
+        }
+
+        let declared =
+            crate::version::declared_yaml_version(root.directives.iter().map(String::as_str));
+        match declared {
+            Some(version) => Schema::new(
+                crate::version::selects_yaml_11(version),
+                self.undeclared_schema == Schema::Yaml11PyYaml,
+            ),
+            None => self.undeclared_schema,
+        }
+    }
+
+    /// The schema for reading and writing at a handle's `path`. A path into a
+    /// single-document object uses the object's own schema; a path into one
+    /// document of a stream uses that document's (see
+    /// [`stream_document_schema`](Self::stream_document_schema)).
+    fn schema_at(&self, path: &[PathSeg]) -> Schema {
+        match split_document(&self.nodes, path) {
+            Some(split) if !split.prefix.is_empty() => split
+                .document
+                .first()
+                .map_or(self.schema, |root| self.stream_document_schema(root)),
+            _ => self.schema,
+        }
     }
 
     /// The full path to a node at `inner` steps below the first document's
@@ -732,10 +784,11 @@ pub struct YAMLRocksDocumentView {
 impl YAMLRocksDocumentView {
     fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
         let doc = self.root.borrow(py);
-        let (document, node) =
-            resolve_in_document(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let target = self.target_path(&doc);
+        let (document, node) = resolve_in_document(&doc.nodes, &target).ok_or_else(stale_view)?;
         let anchors = build_anchor_map(document);
-        container_len(py, node, doc.schema, &anchors, doc.resolve_timestamps)
+        let schema = doc.schema_at(&target);
+        container_len(py, node, schema, &anchors, doc.resolve_timestamps)
     }
 
     fn __getitem__(slf: &Bound<'_, Self>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -743,53 +796,39 @@ impl YAMLRocksDocumentView {
         let this = slf.borrow();
         let root = this.root.clone_ref(py);
         let doc = root.borrow(py);
-        let (document, node) =
-            resolve_in_document(&doc.nodes, &this.path).ok_or_else(stale_view)?;
+        let target = this.target_path(&doc);
+        let (document, node) = resolve_in_document(&doc.nodes, &target).ok_or_else(stale_view)?;
         let anchors = build_anchor_map(document);
         let root_bound = root.bind(py);
         access_child(
             py,
             root_bound,
-            &this.path,
+            &target,
             node,
             key,
             &anchors,
-            doc.schema,
+            doc.schema_at(&target),
             doc.resolve_timestamps,
         )
     }
 
     fn __setitem__(
-        &mut self,
+        &self,
         py: Python<'_>,
         key: &Bound<'_, PyAny>,
         value: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let mut doc = self.root.borrow_mut(py);
-        let double_quotes = doc.double_quotes;
-        let schema = doc.schema;
-        let resolve_timestamps = doc.resolve_timestamps;
-        let anchors = document_anchors(&doc.nodes, &self.path);
-        let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_view)?;
-        set_child(
-            py,
-            node,
-            key,
-            value,
-            double_quotes,
-            schema,
-            &anchors,
-            resolve_timestamps,
-        )
+        let target = self.target_path(&*self.root.try_borrow(py)?);
+        assign_at(py, &self.root, &target, key, value)
     }
 
-    fn __delitem__(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn __delitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);
-        let schema = doc.schema;
+        let target = self.target_path(&doc);
+        let schema = doc.schema_at(&target);
         let resolve_timestamps = doc.resolve_timestamps;
-        let anchors = document_anchors(&doc.nodes, &self.path);
-        let (root, inner) =
-            split_document_mut(&mut doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let anchors = document_anchors(&doc.nodes, &target);
+        let (root, inner) = split_document_mut(&mut doc.nodes, &target).ok_or_else(stale_view)?;
         // Guard against orphaning an alias elsewhere in the document (see the
         // top-level `__delitem__`): snapshot the tree and the already-dangling
         // aliases, roll back only if the delete newly orphans one. Aliases never
@@ -813,7 +852,7 @@ impl YAMLRocksDocumentView {
 
     fn __contains__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<bool> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let node = resolve_path(&doc.nodes, &self.target_path(&doc)).ok_or_else(stale_view)?;
         Ok(node_contains(node, key))
     }
 
@@ -831,14 +870,22 @@ impl YAMLRocksDocumentView {
 
     fn keys(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let (document, node) =
-            resolve_in_document(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let target = self.target_path(&doc);
+        let (document, node) = resolve_in_document(&doc.nodes, &target).ok_or_else(stale_view)?;
         let anchors = build_anchor_map(document);
-        node_keys(py, node, &anchors, doc.schema, doc.resolve_timestamps)
+        node_keys(
+            py,
+            node,
+            &anchors,
+            doc.schema_at(&target),
+            doc.resolve_timestamps,
+        )
     }
 
     /// The [`YAMLRocksNode`] cursor for this view's node: a metadata-bearing handle
-    /// exposing comments, source location, style, anchor, and tag.
+    /// exposing comments, source location, style, anchor, and tag. For a view
+    /// reached through an alias this is the alias node itself, the one
+    /// `doc.node[...]` reaches; indexing the cursor follows the alias.
     #[getter]
     fn node(&self, py: Python<'_>) -> PyResult<Py<YAMLRocksNode>> {
         Py::new(
@@ -853,13 +900,13 @@ impl YAMLRocksDocumentView {
     /// The resolved plain-Python value of this node (dict/list/scalar).
     fn unwrap(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let (document, node) =
-            resolve_in_document(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let target = self.target_path(&doc);
+        let (document, node) = resolve_in_document(&doc.nodes, &target).ok_or_else(stale_view)?;
         let anchors = build_anchor_map(document);
         Ok(node_to_python_with(
             py,
             node,
-            doc.schema,
+            doc.schema_at(&target),
             doc.resolve_timestamps,
             &anchors,
         ))
@@ -871,7 +918,7 @@ impl YAMLRocksDocumentView {
     }
 
     /// The node's 1-based source range `(start_line, start_col, end_line,
-    /// end_col)`.
+    /// end_col)`. For a view reached through an alias, the alias's own range.
     fn range(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
         let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_view)?;
@@ -882,8 +929,8 @@ impl YAMLRocksDocumentView {
     /// relative to this node.
     fn walk(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let (document, node) =
-            resolve_in_document(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let target = self.target_path(&doc);
+        let (document, node) = resolve_in_document(&doc.nodes, &target).ok_or_else(stale_view)?;
         let anchors = build_anchor_map(document);
         let mut out: Vec<(Vec<Py<PyAny>>, Py<PyAny>)> = Vec::new();
         collect_leaves(
@@ -892,16 +939,17 @@ impl YAMLRocksDocumentView {
             &mut Vec::new(),
             &mut out,
             &anchors,
-            doc.schema,
+            doc.schema_at(&target),
             doc.resolve_timestamps,
         )?;
         leaves_to_list(py, out)
     }
 
-    /// Serialize just this nested node back to YAML bytes.
+    /// Serialize just this nested node back to YAML bytes. For a view reached
+    /// through an alias, the anchored node it shares.
     fn to_yaml(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let node = resolve_path(&doc.nodes, &self.target_path(&doc)).ok_or_else(stale_view)?;
         Ok(PyBytes::new(py, &emit_roundtrip_with(node, doc.null_style))
             .into_any()
             .unbind())
@@ -909,10 +957,22 @@ impl YAMLRocksDocumentView {
 
     fn __repr__(&self, py: Python<'_>) -> String {
         let doc = self.root.borrow(py);
-        match resolve_path(&doc.nodes, &self.path) {
+        match resolve_path(&doc.nodes, &self.target_path(&doc)) {
             Some(node) => format!("YAMLRocksDocumentView({})", node_kind_name(node)),
             None => "YAMLRocksDocumentView(<stale>)".to_owned(),
         }
+    }
+}
+
+impl YAMLRocksDocumentView {
+    /// The path of the container this view reads and writes. A view reached
+    /// through an alias (`ref: *base`) sits at the alias but works on the
+    /// anchored container it names, looked up in the view's own document, the
+    /// way a node cursor indexes through an alias. Reads see the anchor's data,
+    /// and a write changes the anchor's value, which every alias to it shares,
+    /// while the alias itself stays an alias.
+    fn target_path(&self, doc: &YAMLRocksDocument) -> Vec<PathSeg> {
+        alias_followed_path(&doc.nodes, &self.path)
     }
 }
 
@@ -948,7 +1008,7 @@ impl YAMLRocksNode {
         Ok(node_to_python_with(
             py,
             node,
-            doc.schema,
+            doc.schema_at(&self.path),
             doc.resolve_timestamps,
             &anchors,
         ))
@@ -957,11 +1017,15 @@ impl YAMLRocksNode {
     /// Replace this node's value, preserving its comments, anchor, and tag.
     #[setter]
     fn set_value(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let mut doc = self.root.borrow_mut(py);
-        let double_quotes = doc.double_quotes;
-        let schema = doc.schema;
-        let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
+        // Convert before borrowing the document for writing (see [`Assignment`]).
+        let (double_quotes, schema) = {
+            let doc = self.root.try_borrow(py)?;
+            (doc.double_quotes, doc.schema_at(&self.path))
+        };
         let mut new_val = python_to_node(py, value, double_quotes, schema)?;
+
+        let mut doc = self.root.try_borrow_mut(py)?;
+        let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
         new_val.comments.head = std::mem::take(&mut node.comments.head);
         new_val.comments.inline = node.comments.inline.take();
         // Keep the alignment padding around the value so an edit preserves the
@@ -1467,6 +1531,60 @@ fn alias_followed_path(roots: &[YamlNode], path: &[PathSeg]) -> Vec<PathSeg> {
         .unwrap_or_else(|| path.to_vec())
 }
 
+/// The plain data a round-trip object holds, for assigning it as a value: what
+/// `unwrap()` gives for a [`YAMLRocksDocumentView`], `value` for a
+/// [`YAMLRocksNode`], and `to_dict()` for a [`YAMLRocksDocument`]. `None` for
+/// any other object.
+///
+/// Assigning one of these copies its current data, aliases expanded, the same
+/// as assigning that plain value would. The copy does not carry the source's
+/// comments, styles, or anchors: those belong to where the data was written,
+/// and the copied nodes' source layout (a block scalar's raw text, a flow
+/// collection's line breaks) is not valid at a different indentation. The
+/// source is read through a shared borrow, which is why every value-taking
+/// write converts its value before it borrows the target for writing (see
+/// [`Assignment`]); a source that is borrowed for writing all the same raises
+/// an ordinary `RuntimeError`.
+pub(crate) fn plain_value_of_round_trip_object(
+    value: &Bound<'_, PyAny>,
+) -> Option<PyResult<Py<PyAny>>> {
+    let py = value.py();
+    if let Ok(view) = value.cast::<YAMLRocksDocumentView>() {
+        return Some(view.try_borrow().map_err(PyErr::from).and_then(|view| {
+            let doc = view.root.try_borrow(py)?;
+            plain_value_at(py, &doc, &view.target_path(&doc)).ok_or_else(stale_view)
+        }));
+    }
+    if let Ok(cursor) = value.cast::<YAMLRocksNode>() {
+        return Some(cursor.try_borrow().map_err(PyErr::from).and_then(|cursor| {
+            let doc = cursor.root.try_borrow(py)?;
+            plain_value_at(py, &doc, &cursor.path).ok_or_else(stale_node)
+        }));
+    }
+    if let Ok(document) = value.cast::<YAMLRocksDocument>() {
+        return Some(
+            document
+                .try_borrow()
+                .map_err(PyErr::from)
+                .map(|doc| doc.to_dict(py)),
+        );
+    }
+    None
+}
+
+/// The resolved plain-Python value of the node at `path`, read the way the
+/// node's own document reads it.
+fn plain_value_at(py: Python<'_>, doc: &YAMLRocksDocument, path: &[PathSeg]) -> Option<Py<PyAny>> {
+    let (document, node) = resolve_in_document(&doc.nodes, path)?;
+    Some(node_to_python_with(
+        py,
+        node,
+        doc.schema_at(path),
+        doc.resolve_timestamps,
+        &build_anchor_map(document),
+    ))
+}
+
 /// The anchors of the document a path addresses, which are the only ones its
 /// aliases can refer to. Empty when the path no longer addresses a document;
 /// resolving the node itself then reports the stale handle.
@@ -1970,77 +2088,161 @@ fn wrap_node(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn set_child(
+/// A `key: value` write into a mapping or sequence, prepared from Python
+/// before the target document is borrowed for writing.
+///
+/// Preparing runs Python code that may read the document, or even write to
+/// it: converting the value calls its `__index__` or `__float__`, or copies a
+/// view, node cursor, or document of this same object (see
+/// [`plain_value_of_round_trip_object`]), and matching the key against the mapping's
+/// keys calls the key's `__eq__`. None of that may happen while the document
+/// is borrowed for writing, so every value-taking write prepares first, under
+/// at most a shared borrow, and then applies the result with no Python code
+/// running in between.
+struct Assignment {
+    value: YamlNode,
+    /// The key as a sequence index, for a write into a sequence.
+    index: PyResult<usize>,
+    /// The key as a new mapping key node, for a write that adds an entry. Kept
+    /// as a result: a key that matches an existing entry never needs it, so a
+    /// key that cannot become a node only fails when it would be added.
+    new_key: PyResult<YamlNode>,
+}
+
+impl Assignment {
+    fn prepare(
+        py: Python<'_>,
+        key: &Bound<'_, PyAny>,
+        value: &Bound<'_, PyAny>,
+        double_quotes: bool,
+        schema: Schema,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            value: python_to_node(py, value, double_quotes, schema)?,
+            index: key.extract(),
+            new_key: python_to_node(py, key, double_quotes, schema),
+        })
+    }
+}
+
+/// Where an [`Assignment`] lands in its container.
+enum Slot {
+    /// The value of the mapping entry at this position.
+    Entry(usize),
+    /// A new entry at the end of the mapping.
+    NewEntry,
+    /// The sequence item at this index.
+    Item(usize),
+}
+
+/// Find where writing `key` into `node` lands. Matching a mapping key runs the
+/// key's `__eq__`, which is why this takes the node shared, apart from the
+/// write itself (see [`Assignment`]).
+fn find_slot(
     py: Python<'_>,
-    node: &mut YamlNode,
+    node: &YamlNode,
     key: &Bound<'_, PyAny>,
-    value: &Bound<'_, PyAny>,
-    double_quotes: bool,
+    assignment: &Assignment,
     schema: Schema,
     anchors: &HashMap<String, YamlNode>,
     resolve_timestamps: bool,
-) -> PyResult<()> {
-    match &mut node.kind {
-        YamlNodeKind::Mapping(pairs) => {
-            let mut new_val = python_to_node(py, value, double_quotes, schema)?;
-            new_val.mark_modified();
-            // Match an existing key by its resolved value (so `doc[True] = x`
-            // updates a `yes:` entry under 1.1), mirroring read access. On a
-            // duplicate key, update its last occurrence: that is the effective
-            // entry the cursor reads and `loads()` keeps (see [`child_ref`]).
-            let existing = pairs.iter().rposition(|(k, _)| {
-                key_node_matches(py, k, key, schema, resolve_timestamps, anchors)
-            });
-            if let Some(i) = existing {
-                let v = &mut pairs[i].1;
-                // Replacing a value keeps the metadata attached to it (its
-                // comments, anchor, and tag), matching `YAMLRocksNode.set_value`, so
-                // an edit does not silently drop nearby comments or markup.
-                new_val.comments.head = std::mem::take(&mut v.comments.head);
-                new_val.comments.inline = v.comments.inline.take();
-                new_val.comments.value_pad = v.comments.value_pad;
-                new_val.comments.inline_spaces = v.comments.inline_spaces;
-                new_val.comments.inline_before_value = v.comments.inline_before_value;
-                new_val.comments.foot = std::mem::take(&mut v.comments.foot);
-                new_val.anchor = v.anchor.take();
-                new_val.tag = v.tag.take();
-                *v = new_val;
-                return Ok(());
-            }
-            // No key matched: add one, building the key node from the Python key
-            // so a non-string key (`doc[True] = ...`) and a string that needs
-            // quoting under the schema both emit correctly.
-            let mut new_key = python_to_node(py, key, double_quotes, schema)?;
-            new_key.mark_modified();
-            pairs.push((new_key, new_val));
-            Ok(())
-        }
+) -> PyResult<Slot> {
+    match &node.kind {
+        // Match an existing key by its resolved value (so `doc[True] = x`
+        // updates a `yes:` entry under 1.1), mirroring read access. On a
+        // duplicate key, update its last occurrence: that is the effective
+        // entry the cursor reads and `loads()` keeps (see [`child_ref`]).
+        YamlNodeKind::Mapping(pairs) => Ok(pairs
+            .iter()
+            .rposition(|(k, _)| key_node_matches(py, k, key, schema, resolve_timestamps, anchors))
+            .map_or(Slot::NewEntry, Slot::Entry)),
         YamlNodeKind::Sequence(items) => {
-            let idx: usize = key.extract()?;
-            let target = items
-                .get_mut(idx)
-                .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
-            let mut new_val = python_to_node(py, value, double_quotes, schema)?;
-            new_val.mark_modified();
-            // Carry the replaced item's metadata (comments, anchor, tag) onto
-            // the new value so editing a list entry preserves the markup around
-            // it, matching `YAMLRocksNode.set_value`.
-            new_val.comments.head = std::mem::take(&mut target.comments.head);
-            new_val.comments.inline = target.comments.inline.take();
-            new_val.comments.value_pad = target.comments.value_pad;
-            new_val.comments.inline_spaces = target.comments.inline_spaces;
-            new_val.comments.inline_before_value = target.comments.inline_before_value;
-            new_val.comments.foot = std::mem::take(&mut target.comments.foot);
-            new_val.anchor = target.anchor.take();
-            new_val.tag = target.tag.take();
-            *target = new_val;
-            Ok(())
+            let index = *assignment.index.as_ref().map_err(|err| err.clone_ref(py))?;
+            if index >= items.len() {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    "index out of range",
+                ));
+            }
+            Ok(Slot::Item(index))
         }
         _ => Err(pyo3::exceptions::PyTypeError::new_err(
             "node is not a mapping or sequence",
         )),
     }
+}
+
+/// Write a prepared value into the slot [`find_slot`] found in `node`.
+fn write_slot(node: &mut YamlNode, slot: Slot, assignment: Assignment) -> PyResult<()> {
+    let mut new_val = assignment.value;
+    new_val.mark_modified();
+    let target = match (&mut node.kind, slot) {
+        (YamlNodeKind::Mapping(pairs), Slot::Entry(position)) => {
+            pairs.get_mut(position).map(|(_, value)| value)
+        }
+        (YamlNodeKind::Mapping(pairs), Slot::NewEntry) => {
+            // No key matched: add one, building the key node from the Python
+            // key so a non-string key (`doc[True] = ...`) and a string that
+            // needs quoting under the schema both emit correctly.
+            let mut new_key = assignment.new_key?;
+            new_key.mark_modified();
+            pairs.push((new_key, new_val));
+            return Ok(());
+        }
+        (YamlNodeKind::Sequence(items), Slot::Item(index)) => items.get_mut(index),
+        _ => None,
+    };
+    // Nothing runs between finding the slot and writing it, so it is there.
+    let target = target.ok_or_else(stale_view)?;
+
+    // Replacing a value keeps the metadata attached to it (its comments,
+    // anchor, and tag), matching `YAMLRocksNode.set_value`, so an edit does
+    // not silently drop nearby comments or markup.
+    new_val.comments.head = std::mem::take(&mut target.comments.head);
+    new_val.comments.inline = target.comments.inline.take();
+    new_val.comments.value_pad = target.comments.value_pad;
+    new_val.comments.inline_spaces = target.comments.inline_spaces;
+    new_val.comments.inline_before_value = target.comments.inline_before_value;
+    new_val.comments.foot = std::mem::take(&mut target.comments.foot);
+    new_val.anchor = target.anchor.take();
+    new_val.tag = target.tag.take();
+    *target = new_val;
+    Ok(())
+}
+
+/// Write `key: value` into the container at `path` of `root`: prepare the
+/// value and find its slot first, then borrow the document for writing (see
+/// [`Assignment`]). Shared by item assignment on a document and on a view.
+fn assign_at(
+    py: Python<'_>,
+    root: &Py<YAMLRocksDocument>,
+    path: &[PathSeg],
+    key: &Bound<'_, PyAny>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let (double_quotes, schema) = {
+        let doc = root.try_borrow(py)?;
+        (doc.double_quotes, doc.schema_at(path))
+    };
+    let assignment = Assignment::prepare(py, key, value, double_quotes, schema)?;
+
+    let slot = {
+        let doc = root.try_borrow(py)?;
+        let (document, node) = resolve_in_document(&doc.nodes, path).ok_or_else(stale_view)?;
+        let anchors = build_anchor_map(document);
+        find_slot(
+            py,
+            node,
+            key,
+            &assignment,
+            schema,
+            &anchors,
+            doc.resolve_timestamps,
+        )?
+    };
+
+    let mut doc = root.try_borrow_mut(py)?;
+    let node = resolve_path_mut(&mut doc.nodes, path).ok_or_else(stale_view)?;
+    write_slot(node, slot, assignment)
 }
 
 /// Collect every `*alias` name referenced anywhere in a node subtree.
@@ -2378,10 +2580,12 @@ fn leaves_to_list(py: Python<'_>, leaves: Vec<(Vec<Py<PyAny>>, Py<PyAny>)>) -> P
 #[cfg(test)]
 mod tests {
     use super::{
-        document_index, document_prefix, keep_empty_documents, resolve_head, resolve_head_mut,
-        resolve_path, resolve_path_mut, stamp_yaml_1_2, HeadScope, PathSeg,
+        alias_followed_path, document_index, document_prefix, keep_empty_documents, resolve_head,
+        resolve_head_mut, resolve_path, resolve_path_mut, stamp_yaml_1_2, HeadScope, PathSeg,
+        YAMLRocksDocument,
     };
     use crate::encode::NullStyle;
+    use crate::resolver::Schema;
     use crate::roundtrip::ast::{YamlNode, YamlNodeKind};
     use crate::roundtrip::composer::compose;
     use crate::roundtrip::emit::emit_roundtrip_all_with;
@@ -2612,5 +2816,70 @@ mod tests {
         let mut later_key = second;
         later_key.push(key("c"));
         assert!(resolve_head_mut(&mut roots, &later_key).is_some());
+    }
+
+    #[test]
+    fn a_path_at_an_alias_follows_it_to_the_anchor_of_its_own_document() {
+        let roots =
+            compose("base: &x {v: 1}\n---\nbase: &x {v: 2}\nref: *x\nplain: {v: 3}\n").unwrap();
+        let mut alias = document_prefix(roots.len(), 1);
+        alias.push(key("ref"));
+        let mut anchor = document_prefix(roots.len(), 1);
+        anchor.push(key("base"));
+        assert_eq!(alias_followed_path(&roots, &alias), anchor);
+
+        // Anything that is not an alias keeps its own path.
+        let mut plain = document_prefix(roots.len(), 1);
+        plain.push(key("plain"));
+        assert_eq!(alias_followed_path(&roots, &plain), plain);
+    }
+
+    /// A stream object loaded with no `%YAML` flags, as `loads` builds it.
+    fn stream(source: &str, undeclared: Schema) -> YAMLRocksDocument {
+        let nodes = compose(source).unwrap();
+        let first =
+            crate::version::declared_yaml_version(nodes[0].directives.iter().map(String::as_str));
+        let schema = first.map_or(undeclared, |version| {
+            Schema::new(crate::version::selects_yaml_11(version), false)
+        });
+        YAMLRocksDocument::new(nodes)
+            .with_schema(schema)
+            .with_undeclared_schema(undeclared)
+    }
+
+    #[test]
+    fn each_document_of_a_stream_reads_under_its_own_directive() {
+        let doc = stream(
+            "%YAML 1.2\n---\na: 1\n...\n%YAML 1.1\n---\nb: 2\n...\n---\nc: 3\n",
+            Schema::Yaml12,
+        );
+        let schemas: Vec<Schema> = (0..3)
+            .map(|index| doc.schema_at(&document_prefix(3, index)))
+            .collect();
+        assert_eq!(schemas, [Schema::Yaml12, Schema::Yaml11, Schema::Yaml12]);
+    }
+
+    #[test]
+    fn a_document_without_a_directive_takes_the_schema_the_options_select() {
+        let doc = stream("%YAML 1.2\n---\na: 1\n...\n---\nb: 2\n", Schema::Yaml11);
+        assert_eq!(doc.schema_at(&document_prefix(2, 0)), Schema::Yaml12);
+        assert_eq!(doc.schema_at(&document_prefix(2, 1)), Schema::Yaml11);
+    }
+
+    #[test]
+    fn a_single_document_uses_its_own_schema() {
+        let doc = stream("a: 1\n", Schema::Yaml12).with_schema(Schema::Yaml11);
+        assert_eq!(doc.schema_at(&[key("a")]), Schema::Yaml11);
+    }
+
+    #[test]
+    fn an_upgraded_stream_writes_as_1_2_throughout() {
+        let doc = stream(
+            "%YAML 1.2\n---\na: 1\n...\n%YAML 1.1\n---\nb: 2\n",
+            Schema::Yaml11,
+        )
+        .with_upgraded(true)
+        .with_schema(Schema::Yaml12);
+        assert_eq!(doc.schema_at(&document_prefix(2, 1)), Schema::Yaml12);
     }
 }

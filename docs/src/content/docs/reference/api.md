@@ -549,14 +549,19 @@ doc.locate(["missing"])  # None
 ```
 
 When the stream holds several documents with content, the object behaves as a
-list of them: `len()` counts the documents, `doc[n]` is a
-[`YAMLRocksDocumentView`](#yamlrocksdocumentview) of the nth one (empty documents
-are not counted), `doc[n] = value` replaces it, `del doc[n]` removes it, and
-`to_dict()` returns a list. Everything you do through `doc[n]`, its nested views,
-and its `node` cursor reads and edits that document alone, with its own anchors.
-The document-wide `node`, `locate`, `anchors`, `walk`, and `range` address the
-first document. A view or cursor taken before `del doc[n]` raises `KeyError`
-afterwards, rather than reading whichever document moved into its place.
+list of them: `len()` counts the documents (empty documents are not counted),
+`doc[n] = value` replaces the nth one, `del doc[n]` removes it, and `to_dict()`
+returns a list. For a mapping or sequence document, `doc[n]` is a
+[`YAMLRocksDocumentView`](#yamlrocksdocumentview); a scalar document reads as
+its plain value, with no view or `node` cursor. Everything you do through a
+document's view, its nested views, and its `node` cursor reads and edits that
+document alone, under its own anchors and its own `%YAML` version, exactly as
+the same document loaded on its own with `loads_all(..., option=OPT_ROUND_TRIP)`
+would. That per-document object is also the way to a `node` cursor for a scalar
+document. The document-wide `node`, `locate`, `anchors`, `walk`, and `range`
+address the first document. A view or cursor taken before `del doc[n]` raises
+`KeyError` afterwards, rather than reading whichever document moved into its
+place.
 
 ```python
 doc = yamlrocks.loads(
@@ -597,6 +602,22 @@ server = doc["server"]  # a YAMLRocksDocumentView
 server["port"] = 443  # writes through to doc
 doc.to_yaml()
 # b'server:\n  host: localhost\n  port: 443\n'
+```
+
+A view reached through an alias (`ref: *base`) works on the anchored mapping or
+sequence: reads see its entries, and a write changes the anchor's value, shared
+by every alias to it, while the alias stays an alias. Its `node` and `range()`
+are the alias's own.
+
+Assigning a view, a `YAMLRocksNode`, or a whole `YAMLRocksDocument` as a value
+(`doc["copy"] = doc["server"]`) stores a copy of its current plain data, what
+`unwrap()` returns, so it can come from the same document. The copy does not
+carry the source's comments, styles, or anchors.
+
+```python
+doc["backup"] = doc["server"]
+doc["server"]["port"] = 8443
+doc["backup"]["port"]  # 443
 ```
 
 ### `YAMLRocksNode`

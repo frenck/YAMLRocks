@@ -496,7 +496,7 @@ to serialize.
 | ------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `origin: str \| None`     | The path the document was loaded from, or `None`.                                                       |
 | `explicit_start: bool`    | Whether the document began with an explicit `---` marker. Read-only.                                    |
-| `__len__()`               | Number of top-level entries.                                                                            |
+| `__len__()`               | Number of top-level entries, or of documents in a stream of several.                                    |
 | `__getitem__(key)`        | Read a value. A nested mapping or sequence returns a [`YAMLRocksDocumentView`](#yamlrocksdocumentview). |
 | `__setitem__(key, value)` | Set a value; the change is reflected by `to_yaml`.                                                      |
 | `__delitem__(key)`        | Delete a mapping key or sequence item; raises `KeyError`/`IndexError` if absent.                        |
@@ -546,6 +546,30 @@ node = doc.locate(["port"])
 node.line, node.column  # (1, 7), the value, 1-indexed
 node.range()  # (1, 7, 1, 19)
 doc.locate(["missing"])  # None
+```
+
+When the stream holds several documents with content, the object behaves as a
+list of them: `len()` counts the documents, `doc[n]` reads the nth one (empty
+documents are not counted), `doc[n] = value` replaces it, `del doc[n]` removes
+it, and `to_dict()` returns a list. For a mapping or sequence document, `doc[n]`
+is a [`YAMLRocksDocumentView`](#yamlrocksdocumentview): everything you do through
+it, its nested views, and its `node` cursor reads and edits that document alone,
+with its own anchors. A scalar document reads as its plain value, which has no
+`node`; load the stream with `loads_all(..., option=OPT_ROUND_TRIP)` to get an
+object per document, each with its own cursor.
+The document-wide `node`, `locate`, `anchors`, `walk`, and `range` address the
+first document. A view or cursor taken before `del doc[n]` raises `KeyError`
+afterwards, rather than reading whichever document moved into its place.
+
+```python
+doc = yamlrocks.loads(
+    b"name: app\n---\nport: 8080  # default\n", option=yamlrocks.OPT_ROUND_TRIP
+)
+len(doc)  # 2
+doc[1]["port"] = 9090
+doc[1].node["port"].comment  # 'default'
+doc.to_yaml()
+# b'name: app\n---\nport: 9090  # default\n'
 ```
 
 :::note[Round-trip fidelity]

@@ -2093,8 +2093,10 @@ fn get_child(
     stale: fn() -> PyErr,
 ) -> Result<Py<PyAny>, LookupFailure> {
     let missing = LookupFailure::Missing;
+    // A stale handle is a failed lookup, not a miss: the container itself can
+    // no longer be read, so `get()` raises the same error `[]` does.
     let doc = read_document(root)?;
-    let node = resolve_path(&doc.nodes, path).ok_or_else(|| missing(stale()))?;
+    let node = resolve_path(&doc.nodes, path).ok_or_else(stale)?;
 
     let (doc, step) = match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
@@ -2137,7 +2139,7 @@ fn get_child(
         }
     };
 
-    let (document, node) = resolve_in_document(&doc.nodes, path).ok_or_else(|| missing(stale()))?;
+    let (document, node) = resolve_in_document(&doc.nodes, path).ok_or_else(stale)?;
     let found = step.and_then(|step| Some((child_ref(node, &step)?, step)));
     let Some((child, step)) = found else {
         let in_sequence = matches!(node.kind, YamlNodeKind::Sequence(_));

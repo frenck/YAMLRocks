@@ -506,6 +506,33 @@ def test_get_still_returns_the_default_for_a_missing_key():
     assert doc.get(["a", "list"], "default") == "default"
 
 
+def test_get_on_a_stale_view_raises_like_indexing():
+    """`get()` on a view whose node is gone raises `KeyError('stale view')`, as `[]` does."""
+    doc = load()
+    view = doc["b"]
+    del doc["b"]
+    with pytest.raises(KeyError, match="stale view"):
+        view["x"]
+    with pytest.raises(KeyError, match="stale view"):
+        view.get("x", "fallback")
+
+
+def test_get_on_a_view_made_stale_by_a_document_delete_raises():
+    """A view into a stream goes stale when a document is deleted, and `get()` says so."""
+    stream = load(b"a: {x: 1}\n---\nb: {y: 2}\n")
+    view = stream[1]["b"]
+    del stream[0]
+    with pytest.raises(KeyError, match="stale view"):
+        view.get("y", "fallback")
+
+
+def test_get_on_a_live_view_still_returns_the_default_for_a_missing_key():
+    """A missing child of a live container still gives `get()` its default."""
+    doc = load()
+    assert doc["b"].get("missing", "fallback") == "fallback"
+    assert doc["a"].get(9, "fallback") == "fallback"
+
+
 def test_a_null_key_is_replaced_and_removed_rather_than_duplicated():
     """Assigning `doc[None]` twice keeps one null key, and `del doc[None]` removes it."""
     doc = load(b"a: 1\n")

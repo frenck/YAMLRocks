@@ -181,6 +181,43 @@ impl RoundTripEmitter {
         }
     }
 
+    /// The token a null node is written with, or `None` for a null written as
+    /// its properties alone (see [`is_property_only_null`]). A synthetic null
+    /// styled `~` renders as the tilde indicator; every other null (loaded, or
+    /// styled `null`/empty in a position where empty is unsafe) renders as the
+    /// `null` keyword.
+    fn null_token(&self, node: &YamlNode) -> Option<&'static [u8]> {
+        if is_property_only_null(node) {
+            return None;
+        }
+
+        if matches!(self.synthetic_null(node), Some(NullStyle::Tilde)) {
+            Some(b"~")
+        } else {
+            Some(b"null")
+        }
+    }
+
+    /// Whether a mapping value or sequence item is written as an empty entry
+    /// (`key:`, `-`), followed only by its properties and its comment.
+    ///
+    /// That is a null written as its properties alone, and any other empty
+    /// node that reads back the same without a token: a loaded null (written
+    /// empty in its source), a synthetic null in the `empty` style, or an empty
+    /// plain scalar. Those last three are left to the general value arms when
+    /// they carry a comment of their own.
+    fn is_empty_entry(&self, node: &YamlNode) -> bool {
+        if is_property_only_null(node) {
+            return true;
+        }
+
+        is_empty_scalar(node)
+            && node.comments.inline.is_none()
+            && self
+                .synthetic_null(node)
+                .is_none_or(|style| style == NullStyle::Empty)
+    }
+
     // -- Document entry --
 
     /// The finished output. A block scalar replayed from source without a final
@@ -241,19 +278,24 @@ impl RoundTripEmitter {
                 };
                 self.emit_block_sequence(items, body);
             }
-            // A synthetic tagged empty null at the root keeps just its tag on its
-            // own line (`!t`), matching the fast path's Tagged + empty-null
-            // handling; the `null` token (`!t null`) would reload as the string
-            // "null" rather than an empty value. A bare (untagged) null still
-            // renders as the `null` keyword via the inline arm below.
+            // A tagged empty root keeps just its properties on its own line
+            // (`!t`): the `null` token (`!t null`) would reload as the string
+            // "null" rather than an empty value. That holds for a loaded null
+            // written that way, and for a synthetic tagged null in the empty
+            // style, matching the fast path's Tagged + empty-null handling. A
+            // bare (untagged) null still renders as the `null` keyword via the
+            // inline arm below.
             YamlNodeKind::Null
-                if node.synthetic
-                    && node.tag.is_some()
-                    && node.comments.inline.is_none()
-                    && node.anchor.is_none()
-                    && matches!(self.synthetic_null(node), Some(NullStyle::Empty)) =>
+                if is_property_only_null(node)
+                    || (node.synthetic
+                        && node.tag.is_some()
+                        && node.comments.inline.is_none()
+                        && node.anchor.is_none()
+                        && matches!(self.synthetic_null(node), Some(NullStyle::Empty))) =>
             {
-                self.emit_anchor_tag_line(node, 0);
+                self.emit_properties(node);
+                self.emit_inline_comment(&node.comments);
+                self.buf.push(b'\n');
             }
             _ => {
                 self.emit_anchor_tag(node);
@@ -426,23 +468,15 @@ impl RoundTripEmitter {
                 // with its dashes.
                 self.emit_foot(&val.comments, seq_indent);
             }
-            // A `key:` with no value: emitted empty for a loaded null (preserving
-            // it) and for a synthetic null whose style is `empty`. A synthetic
-            // null styled `null`/`~` falls through to the inline arm below. Any
-            // tag and/or anchor is kept as bare properties (`key: !x`,
-            // `key: !x &id001`, `key: &id001`), never collapsed to `key:` (which
-            // drops them) nor expanded to `key: !x null` (which reloads as the
-            // string "null" rather than an empty value); this matches the fast
-            // path and keeps a shared tagged empty value lossless under aliasing.
-            _ if is_empty_scalar(val)
-                && val.comments.inline.is_none()
-                && self
-                    .synthetic_null(val)
-                    .is_none_or(|s| s == NullStyle::Empty) =>
-            {
-                self.emit_anchor_tag_compact(val);
-                self.buf.push(b'\n');
-            }
+            // A `key:` with no value (see [`is_empty_entry`](Self::is_empty_entry)).
+            // A synthetic null styled `null`/`~` falls through to the inline arm
+            // below. Any tag and/or anchor is kept as bare properties
+            // (`key: !x`, `key: !x &id001`, `key: &id001`), never collapsed to
+            // `key:` (which drops them) nor expanded to `key: !x null` (which
+            // reloads as the string "null" rather than an empty value); this
+            // matches the fast path and keeps a shared tagged empty value
+            // lossless under aliasing.
+            _ if self.is_empty_entry(val) => self.emit_empty_entry(val, child),
             // A value the author wrote below its key, with a comment left on the
             // key line (`key: # note`). Keep both where they were: pushing the
             // comment past the value would move it onto a line it was never on.
@@ -489,6 +523,19 @@ impl RoundTripEmitter {
         self.write_indent(indent);
         self.emit_inline_content(val, indent);
         self.end_line();
+    }
+
+    /// Finish an empty entry (`key: !t # note`, `- &a`) on its introducer's
+    /// line. The cursor sits just past the `:` or `-`. Head comments the author
+    /// wrote below that line follow it at `indent`, where the value would have
+    /// started.
+    fn emit_empty_entry(&mut self, node: &YamlNode, indent: usize) {
+        self.emit_anchor_tag_compact(node);
+        self.emit_inline_comment(&node.comments);
+        self.buf.push(b'\n');
+        for comment in node.comments.head_below_introducer() {
+            self.emit_comment_line(comment, indent);
+        }
     }
 
     /// Ensure the buffer ends with exactly one newline (block scalars emit
@@ -576,14 +623,8 @@ impl RoundTripEmitter {
         // expanded to `- !x null` (which reloads as the string "null" rather than
         // an empty value); this matches the fast path and keeps a shared tagged
         // empty item lossless under aliasing.
-        if is_empty_scalar(item)
-            && item.comments.inline.is_none()
-            && self
-                .synthetic_null(item)
-                .is_none_or(|style| style == NullStyle::Empty)
-        {
-            self.emit_anchor_tag_compact(item);
-            self.buf.push(b'\n');
+        if self.is_empty_entry(item) {
+            self.emit_empty_entry(item, child);
             return;
         }
         match &item.kind {
@@ -680,16 +721,13 @@ impl RoundTripEmitter {
 
     fn emit_inline_content_inner(&mut self, node: &YamlNode, indent: usize) {
         match &node.kind {
-            // A synthetic null styled `~` renders as the tilde indicator; every
-            // other null (loaded, or styled `null`/empty in a position where empty
-            // is unsafe) renders as the `null` keyword.
+            // A null written as its properties alone leaves nothing here: the
+            // space after its tag or anchor already separates it from the `,`,
+            // `:` or `]` that follows (`[!t , a]`, `!t : a`).
             YamlNodeKind::Null => {
-                let token = if matches!(self.synthetic_null(node), Some(NullStyle::Tilde)) {
-                    b"~".as_slice()
-                } else {
-                    b"null".as_slice()
-                };
-                self.buf.extend_from_slice(token);
+                if let Some(token) = self.null_token(node) {
+                    self.buf.extend_from_slice(token);
+                }
             }
             YamlNodeKind::Scalar(value, style) => {
                 // An unmodified block scalar replays its verbatim source: folding
@@ -1070,6 +1108,12 @@ impl RoundTripEmitter {
             return;
         }
         self.write_indent(indent);
+        self.emit_properties(node);
+        self.buf.push(b'\n');
+    }
+
+    /// Emit a node's tag and anchor (`!t &a`) with no space before or after.
+    fn emit_properties(&mut self, node: &YamlNode) {
         if let Some(ref tag) = node.tag {
             self.buf.extend_from_slice(tag.as_bytes());
             if node.anchor.is_some() {
@@ -1080,7 +1124,6 @@ impl RoundTripEmitter {
             self.buf.push(b'&');
             self.buf.extend_from_slice(anchor.as_bytes());
         }
-        self.buf.push(b'\n');
     }
 
     /// Emit an include directive in value position, e.g. `!include foo.yaml`.
@@ -1193,6 +1236,18 @@ pub fn local_modified(node: &YamlNode) -> bool {
             .any(|it| it.source.is_none() && local_modified(it)),
         _ => false,
     }
+}
+
+/// Whether `node` is a loaded null that carries a tag or an anchor: one the
+/// author wrote as its properties alone (`key: !t`, `[!t , a]`, `!!str : v`).
+/// It keeps that form in every position. Adding a token would change the
+/// value: `!t null` is the string "null" under the tag `!t`, and `!!str null`
+/// is the string "null" where `!!str` alone is the empty string. A synthetic
+/// null is left to the document's null style instead, as the fast encoder does.
+fn is_property_only_null(node: &YamlNode) -> bool {
+    matches!(node.kind, YamlNodeKind::Null)
+        && !node.synthetic
+        && (node.tag.is_some() || node.anchor.is_some())
 }
 
 /// Whether a node represents an empty scalar (renders as nothing after `key:`).
@@ -1506,5 +1561,77 @@ mod tests {
         assert!(continuation_lines_fit("x\ny", 0));
         assert!(!continuation_lines_fit("x\n...", 0));
         assert!(!continuation_lines_fit("'x\n---'", 0));
+    }
+
+    /// A node written as its tag or anchor alone, with no content, re-emits
+    /// exactly as written in every position and under every null style. A
+    /// `null` token after the tag would read back as the string "null".
+    #[test]
+    fn tagged_empty_nodes_reemit_without_a_null_token() {
+        for input in [
+            // Mapping values, with and without an anchor or a comment.
+            "k: !t\n",
+            "k: !t # note\n",
+            "k: !t &a # note\n",
+            "k: &a # note\n",
+            "k: !!str # note\n",
+            "k: !t # note\n  # below\nz: 1\n",
+            // Sequence items.
+            "- !t\n- 2\n",
+            "- !t # note\n- 2\n",
+            "- !t &a # note\n- 2\n",
+            "- !t # note\n  # below\n- 2\n",
+            // Mapping keys.
+            "!t : a\n",
+            "!!null : a\n",
+            "!t &a : a\n",
+            // Flow collection entries.
+            "f: [!t , a]\n",
+            "f: [a, !!str ]\n",
+            "f: {b: !t , !!str : c}\n",
+            // The document root.
+            "!t\n",
+            "!t &a\n",
+            "!\n",
+            // The YAML test suite's FH7J, with its second mapping moved up onto
+            // the dash line as the emitter writes it.
+            "- !!str\n- !!null : a\n  b: !!str\n- !!str : !!null\n",
+        ] {
+            for style in [NullStyle::Empty, NullStyle::Tilde, NullStyle::Null] {
+                let nodes = crate::roundtrip::composer::compose(input).unwrap();
+                let out = super::emit_roundtrip_all_with(&nodes, style);
+                assert_eq!(std::str::from_utf8(&out).unwrap(), input, "{style:?}");
+            }
+        }
+    }
+
+    /// A tagged empty root keeps its comment on the same line as the tag.
+    #[test]
+    fn tagged_empty_root_keeps_its_comment() {
+        let mut root = crate::roundtrip::composer::compose("!t\n")
+            .unwrap()
+            .remove(0);
+        root.comments.inline = Some("note".to_owned());
+        let out = String::from_utf8(emit_roundtrip_with(&root, NullStyle::Null)).unwrap();
+        assert_eq!(out, "!t # note\n");
+    }
+
+    /// A synthetic tagged null (the `represent` path) still follows the null
+    /// style, so its output stays byte-identical to the fast encoder's.
+    #[test]
+    fn synthetic_tagged_null_follows_the_null_style() {
+        let doc = |style| {
+            let mut value = synthetic_null();
+            value.tag = Some("!t".to_owned());
+            let root = YamlNode::new(
+                YamlNodeKind::Mapping(vec![(scalar("k"), value)]),
+                Span::default(),
+            );
+            String::from_utf8(emit_roundtrip_with(&root, style)).unwrap()
+        };
+
+        assert_eq!(doc(NullStyle::Empty), "k: !t\n");
+        assert_eq!(doc(NullStyle::Tilde), "k: !t ~\n");
+        assert_eq!(doc(NullStyle::Null), "k: !t null\n");
     }
 }

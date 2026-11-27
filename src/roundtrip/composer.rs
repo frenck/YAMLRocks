@@ -1119,6 +1119,22 @@ impl<'input> Composer<'input> {
             }
         }
 
+        // A plain or quoted scalar written across several lines loses those line
+        // breaks once folded into its value, so keep its source too. The emitter
+        // replays it where the layout around it still holds it; single-line
+        // scalars rebuild exactly from their value and need no copy.
+        if let YamlNodeKind::Scalar(
+            _,
+            ScalarStyle::Plain | ScalarStyle::SingleQuoted | ScalarStyle::DoubleQuoted,
+        ) = &node.kind
+        {
+            node.comments.raw = self
+                .input
+                .get(span.offset..event_end)
+                .filter(|raw| raw.contains(['\n', '\r']))
+                .map(str::to_owned);
+        }
+
         Ok(Some(node))
     }
 

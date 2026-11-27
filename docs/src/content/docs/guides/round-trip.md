@@ -151,6 +151,48 @@ inspect a sub-tree, and assign through it to edit in place. When you want a
 detached, formatting-free copy instead, call `unwrap()` or `to_dict()`.
 :::
 
+### Assigning a view copies its data
+
+A view, a node cursor, or a whole document can itself be assigned as a value,
+into the same document or another one. What gets stored is a copy of the data it
+holds at that moment, so later edits to either side do not show up in the other:
+
+```python
+import yamlrocks
+
+doc = yamlrocks.loads(
+    b"staging:  # the test box\n  host: test.local\n  ports: [80]\n",
+    option=yamlrocks.OPT_ROUND_TRIP,
+)
+
+doc["production"] = doc["staging"]
+doc["production"]["host"] = "example.com"
+
+print(doc.to_yaml().decode())
+# staging:  # the test box
+#   host: test.local
+#   ports: [80]
+# production:
+#   host: example.com
+#   ports:
+#   - 80
+```
+
+The copy carries data only. Comments, anchors, tags, and the source layout stay
+where they were written, and aliases are expanded. Scalars are written the way a
+freshly assigned value is, quoted where the target document's YAML version needs
+it. A mapping key that is itself a collection (`? [a, b]`) and a timestamp read
+with `OPT_TIMESTAMPS` survive the copy, though neither could be assigned as a
+plain Python value.
+
+:::caution[One document, one writer at a time]
+A round-trip document is not locked for concurrent use. When two threads use the
+same document at once, or a key's or value's own Python code changes the
+document in the middle of an assignment, the call raises `RuntimeError` instead
+of writing to a document that moved under it. Give each thread its own document,
+or serialize access to a shared one with a lock.
+:::
+
 ## Deleting keys
 
 `del` removes a mapping key or a sequence item. The deleted entry takes its own

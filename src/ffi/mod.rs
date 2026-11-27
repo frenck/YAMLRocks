@@ -16,7 +16,7 @@ use crate::encode::{self, EmitOptions, NullStyle};
 use crate::include::{IncludeResolver, ResolveTags};
 use crate::parser::ParseOptions;
 use crate::resolver::Schema;
-use crate::roundtrip::document::{YAMLRocksDocument, YAMLRocksDocumentView};
+use crate::roundtrip::document::{read_document, YAMLRocksDocument, YAMLRocksDocumentView};
 use crate::roundtrip::{composer, YamlNode};
 
 pub(crate) use convert::py_int_from_decimal;
@@ -659,7 +659,7 @@ pub fn dumps(
     // emit-shaping arguments (option, width, serializers, default, represent)
     // do not apply here and are intentionally ignored; round-trip styles win.
     if let Ok(doc) = obj.cast::<YAMLRocksDocument>() {
-        return doc.borrow().to_yaml(py);
+        return read_document(doc)?.to_yaml(py);
     }
 
     // A `YAMLRocksDocumentView` is a sub-view with no document-level layout to
@@ -765,7 +765,7 @@ pub fn to_json(
     // An empty round-trip document (no nodes) projects to `null`, matching the
     // fast path where empty input loads as `None`.
     if let Ok(doc) = obj.cast::<YAMLRocksDocument>() {
-        if doc.borrow().nodes.is_empty() {
+        if read_document(doc)?.nodes.is_empty() {
             return Ok(PyBytes::new(py, b"null").into_any().unbind());
         }
     }

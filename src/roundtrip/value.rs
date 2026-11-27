@@ -411,13 +411,24 @@ pub(crate) fn node_to_python_key(
 /// Maximum object nesting depth when building an AST node from a Python value.
 /// Bounds recursion so a deeply nested or cyclic (self-referential) value raises
 /// instead of overflowing the native stack. Mirrors the encoder's limit.
-const MAX_ASSIGN_DEPTH: u32 = 1000;
+pub(crate) const MAX_ASSIGN_DEPTH: u32 = 1000;
+
+/// The error for a value nested deeper than [`MAX_ASSIGN_DEPTH`].
+pub(crate) fn too_deeply_nested() -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(
+        "value is too deeply nested to assign (possible self-reference)",
+    )
+}
 
 /// Build a fresh AST node from a plain Python value (for assignment).
 ///
 /// `double_quotes` is the document's quote preference: when a freshly assigned
 /// string must be quoted, it picks double or single quotes to match the style the
 /// document re-emits in.
+///
+/// A view, node cursor, or document of a round-trip object becomes a copy of
+/// the data it currently holds (see
+/// [`round_trip_data_copy`](crate::roundtrip::document::round_trip_data_copy)).
 pub(crate) fn python_to_node(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
@@ -453,50 +464,50 @@ fn python_to_node_depth_inner(
     let span = Span::default();
 
     if depth >= MAX_ASSIGN_DEPTH {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "value is too deeply nested to assign (possible self-reference)",
-        ));
+        return Err(too_deeply_nested());
     }
 
     if obj.is_none() {
-        let mut node = YamlNode::new(YamlNodeKind::Null, span);
-        // Mark it synthetic so re-emission applies the document's null style
-        // without disturbing loaded (untouched) nulls.
-        node.synthetic = true;
-        return Ok(node);
+        return Ok(assigned_null());
     }
     if let Ok(b) = obj.extract::<bool>() {
-        let s = if b { "true" } else { "false" };
-        return Ok(YamlNode::new(
-            YamlNodeKind::Scalar(s.to_owned(), ScalarStyle::Plain),
-            span,
+        return Ok(assigned_scalar(
+            ResolvedValue::Bool(b),
+            double_quotes,
+            schema,
         ));
     }
     if let Ok(i) = obj.extract::<i64>() {
-        return Ok(YamlNode::new(
-            YamlNodeKind::Scalar(i.to_string(), ScalarStyle::Plain),
-            span,
+        return Ok(assigned_scalar(
+            ResolvedValue::Int(i),
+            double_quotes,
+            schema,
         ));
     }
     // A Python int too large for i64 is still an integer (arbitrary precision):
     // store its exact decimal text as a plain scalar so it round-trips as an int
     // rather than being lossily coerced to a float below.
     if obj.cast::<pyo3::types::PyInt>().is_ok() {
-        return Ok(YamlNode::new(
-            YamlNodeKind::Scalar(obj.str()?.to_string(), ScalarStyle::Plain),
-            span,
+        let digits = obj.str()?.to_string();
+        return Ok(assigned_scalar(
+            ResolvedValue::BigInt(digits),
+            double_quotes,
+            schema,
         ));
     }
     if let Ok(f) = obj.extract::<f64>() {
-        let s = crate::emit_util::canonical_float(f);
-        return Ok(YamlNode::new(
-            YamlNodeKind::Scalar(s, ScalarStyle::Plain),
-            span,
+        return Ok(assigned_scalar(
+            ResolvedValue::Float(f),
+            double_quotes,
+            schema,
         ));
     }
     if let Ok(s) = obj.extract::<String>() {
-        let style = assigned_string_style(&s, double_quotes, schema);
-        return Ok(YamlNode::new(YamlNodeKind::Scalar(s, style), span));
+        return Ok(assigned_scalar(
+            ResolvedValue::String(s),
+            double_quotes,
+            schema,
+        ));
     }
     if let Ok(list) = obj.cast::<PyList>() {
         // Snapshot the elements before converting any: conversion runs arbitrary
@@ -530,11 +541,53 @@ fn python_to_node_depth_inner(
         }
         return Ok(YamlNode::new(YamlNodeKind::Mapping(pairs), span));
     }
+    if let Some(copy) =
+        crate::roundtrip::document::round_trip_data_copy(obj, double_quotes, schema, depth)
+    {
+        return copy;
+    }
 
     let repr = obj.repr()?.to_string();
     Err(pyo3::exceptions::PyTypeError::new_err(format!(
         "cannot convert {repr} to a YAML node"
     )))
+}
+
+/// A freshly assigned null. It is marked synthetic so re-emission applies the
+/// document's null style without disturbing loaded (untouched) nulls.
+pub(crate) fn assigned_null() -> YamlNode {
+    let mut node = YamlNode::new(YamlNodeKind::Null, crate::scanner::Span::default());
+    node.synthetic = true;
+    node
+}
+
+/// A freshly assigned scalar holding `value`, written so it reads back as that
+/// same value: a number or boolean in its plain canonical spelling, and a string
+/// quoted only where the document's `schema` would otherwise read it as
+/// something else.
+pub(crate) fn assigned_scalar(
+    value: ResolvedValue,
+    double_quotes: bool,
+    schema: Schema,
+) -> YamlNode {
+    let (text, style) = match value {
+        ResolvedValue::Null => return assigned_null(),
+        ResolvedValue::Bool(b) => (
+            if b { "true" } else { "false" }.to_owned(),
+            ScalarStyle::Plain,
+        ),
+        ResolvedValue::Int(i) => (i.to_string(), ScalarStyle::Plain),
+        ResolvedValue::BigInt(digits) => (digits, ScalarStyle::Plain),
+        ResolvedValue::Float(f) => (crate::emit_util::canonical_float(f), ScalarStyle::Plain),
+        ResolvedValue::String(s) => {
+            let style = assigned_string_style(&s, double_quotes, schema);
+            (s, style)
+        }
+    };
+    YamlNode::new(
+        YamlNodeKind::Scalar(text, style),
+        crate::scanner::Span::default(),
+    )
 }
 
 /// Choose the scalar style for a freshly assigned string. Unquoted when it can be

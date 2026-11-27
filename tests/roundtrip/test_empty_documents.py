@@ -129,7 +129,7 @@ def test_single_content_document_keeps_its_api(source):
 
 def test_included_file_keeps_its_empty_documents_to_itself(tmp_path):
     """An included file's empty documents never become documents of the includer."""
-    (tmp_path / "part.yaml").write_text("---\n# part note\n---\na: 1\n")
+    (tmp_path / "part.yaml").write_bytes(b"---\n# part note\n---\na: 1\n")
     doc = yamlrocks.loads(
         b"!include part.yaml\n",
         option=RT | yamlrocks.OPT_INCLUDES,
@@ -242,8 +242,8 @@ INCLUDES = RT | yamlrocks.OPT_INCLUDES | yamlrocks.OPT_SECRETS | yamlrocks.OPT_E
 @pytest.fixture
 def include_dir(tmp_path, monkeypatch):
     """A config directory with an included file, a secret, and an env var."""
-    (tmp_path / "part.yaml").write_text("---\n# part note\n---\na: 1\n")
-    (tmp_path / "secrets.yaml").write_text("password: hunter2\n")
+    (tmp_path / "part.yaml").write_bytes(b"---\n# part note\n---\na: 1\n")
+    (tmp_path / "secrets.yaml").write_bytes(b"password: hunter2\n")
     monkeypatch.setenv("YAMLROCKS_EMPTY_DOCUMENTS_TEST", "value")
     return tmp_path
 
@@ -266,7 +266,7 @@ def test_include_write_back_keeps_the_files_empty_documents(include_dir, source)
 def test_include_save_keeps_the_files_empty_documents(include_dir):
     """`save()` writes an edited included file with its empty documents intact."""
     root = include_dir / "root.yaml"
-    root.write_text("k: !include part.yaml\n")
+    root.write_bytes(b"k: !include part.yaml\n")
     doc = yamlrocks.load(str(root), option=INCLUDES, include_dir=str(include_dir))
     doc["k"]["a"] = 2
 

@@ -151,6 +151,45 @@ inspect a sub-tree, and assign through it to edit in place. When you want a
 detached, formatting-free copy instead, call `unwrap()` or `to_dict()`.
 :::
 
+### Assigning plain data, not views
+
+A view or node cursor is a live handle onto its document, not data, so it
+cannot be assigned as a value; doing so raises `TypeError`. Assign its plain
+data instead: `to_dict()` of a view, or `.value` of a cursor.
+
+```python
+import yamlrocks
+
+doc = yamlrocks.loads(
+    b"staging:\n  host: test.local\n  ports: [80]\n",
+    option=yamlrocks.OPT_ROUND_TRIP,
+)
+
+doc["production"] = doc["staging"].to_dict()
+doc["production"]["host"] = "example.com"
+
+print(doc.to_yaml().decode())
+# staging:
+#   host: test.local
+#   ports: [80]
+# production:
+#   host: example.com
+#   ports:
+#   - 80
+```
+
+:::caution[One document, one writer at a time]
+A round-trip document is not locked for concurrent use. Python code that runs
+while a key or value is converted (its `__eq__`, `__index__`, or `__float__`)
+may read the document freely. If that code changes the document, its own edit
+stands, and the call it ran inside raises `RuntimeError` and changes nothing,
+since what it was about to do may no longer fit. A write that overlaps another
+call on the same document, from another thread for example, is a conflict:
+either side can raise `RuntimeError`. Any number of threads can read at the same
+time. Guard a document that threads share and write to with a lock, or give
+each thread its own.
+:::
+
 ## Deleting keys
 
 `del` removes a mapping key or a sequence item. The deleted entry takes its own

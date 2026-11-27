@@ -413,40 +413,50 @@ pub(crate) fn node_to_python_key(
 /// instead of overflowing the native stack. Mirrors the encoder's limit.
 const MAX_ASSIGN_DEPTH: u32 = 1000;
 
-/// Build a fresh AST node from a plain Python value (for assignment).
+/// How a document reads its scalars, and so how a freshly assigned scalar must
+/// be written to read back as the value it was given.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ScalarTarget {
+    /// The document's quote preference: when a string must be quoted, double
+    /// or single quotes, to match the style the document re-emits in.
+    pub double_quotes: bool,
+    /// The schema the document reads its scalars under.
+    pub schema: Schema,
+    /// Whether the document reads a plain timestamp as a `date`/`datetime`.
+    pub resolve_timestamps: bool,
+}
+
+/// Build a fresh AST node from a plain Python value (for assignment) into a
+/// document read the way `target` describes.
 ///
-/// `double_quotes` is the document's quote preference: when a freshly assigned
-/// string must be quoted, it picks double or single quotes to match the style the
-/// document re-emits in.
+/// A round-trip object (a document, view, or node cursor) is not plain data
+/// and is refused (see [`round_trip_object_error`]).
 pub(crate) fn python_to_node(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
-    double_quotes: bool,
-    schema: Schema,
+    target: ScalarTarget,
 ) -> PyResult<YamlNode> {
-    python_to_node_depth(py, obj, double_quotes, schema, 0)
+    python_to_node_depth(py, obj, target, 0)
 }
 
 #[allow(clippy::only_used_in_recursion)]
 fn python_to_node_depth(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
-    double_quotes: bool,
-    schema: Schema,
+    target: ScalarTarget,
     depth: u32,
 ) -> PyResult<YamlNode> {
     // Grow the native stack on demand so assigning a deeply nested object
     // (bounded by `MAX_ASSIGN_DEPTH`) cannot overflow a small thread stack; the
     // recursion re-enters here per level. See [`crate::stack`].
-    crate::stack::guard(|| python_to_node_depth_inner(py, obj, double_quotes, schema, depth))
+    crate::stack::guard(|| python_to_node_depth_inner(py, obj, target, depth))
 }
 
 #[allow(clippy::only_used_in_recursion)]
 fn python_to_node_depth_inner(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
-    double_quotes: bool,
-    schema: Schema,
+    target: ScalarTarget,
     depth: u32,
 ) -> PyResult<YamlNode> {
     use crate::scanner::Span;
@@ -459,44 +469,26 @@ fn python_to_node_depth_inner(
     }
 
     if obj.is_none() {
-        let mut node = YamlNode::new(YamlNodeKind::Null, span);
-        // Mark it synthetic so re-emission applies the document's null style
-        // without disturbing loaded (untouched) nulls.
-        node.synthetic = true;
-        return Ok(node);
+        return Ok(assigned_null());
     }
     if let Ok(b) = obj.extract::<bool>() {
-        let s = if b { "true" } else { "false" };
-        return Ok(YamlNode::new(
-            YamlNodeKind::Scalar(s.to_owned(), ScalarStyle::Plain),
-            span,
-        ));
+        return Ok(assigned_scalar(ResolvedValue::Bool(b), target));
     }
     if let Ok(i) = obj.extract::<i64>() {
-        return Ok(YamlNode::new(
-            YamlNodeKind::Scalar(i.to_string(), ScalarStyle::Plain),
-            span,
-        ));
+        return Ok(assigned_scalar(ResolvedValue::Int(i), target));
     }
     // A Python int too large for i64 is still an integer (arbitrary precision):
     // store its exact decimal text as a plain scalar so it round-trips as an int
     // rather than being lossily coerced to a float below.
     if obj.cast::<pyo3::types::PyInt>().is_ok() {
-        return Ok(YamlNode::new(
-            YamlNodeKind::Scalar(obj.str()?.to_string(), ScalarStyle::Plain),
-            span,
-        ));
+        let digits = obj.str()?.to_string();
+        return Ok(assigned_scalar(ResolvedValue::BigInt(digits), target));
     }
     if let Ok(f) = obj.extract::<f64>() {
-        let s = crate::emit_util::canonical_float(f);
-        return Ok(YamlNode::new(
-            YamlNodeKind::Scalar(s, ScalarStyle::Plain),
-            span,
-        ));
+        return Ok(assigned_scalar(ResolvedValue::Float(f), target));
     }
     if let Ok(s) = obj.extract::<String>() {
-        let style = assigned_string_style(&s, double_quotes, schema);
-        return Ok(YamlNode::new(YamlNodeKind::Scalar(s, style), span));
+        return Ok(assigned_scalar(ResolvedValue::String(s), target));
     }
     if let Ok(list) = obj.cast::<PyList>() {
         // Snapshot the elements before converting any: conversion runs arbitrary
@@ -505,13 +497,7 @@ fn python_to_node_depth_inner(
         let snapshot: Vec<Bound<'_, PyAny>> = list.iter().collect();
         let mut items = Vec::with_capacity(snapshot.len());
         for item in &snapshot {
-            items.push(python_to_node_depth(
-                py,
-                item,
-                double_quotes,
-                schema,
-                depth + 1,
-            )?);
+            items.push(python_to_node_depth(py, item, target, depth + 1)?);
         }
         return Ok(YamlNode::new(YamlNodeKind::Sequence(items), span));
     }
@@ -524,17 +510,90 @@ fn python_to_node_depth_inner(
         let mut pairs = Vec::with_capacity(snapshot.len());
         for (k, v) in &snapshot {
             pairs.push((
-                python_to_node_depth(py, k, double_quotes, schema, depth + 1)?,
-                python_to_node_depth(py, v, double_quotes, schema, depth + 1)?,
+                python_to_node_depth(py, k, target, depth + 1)?,
+                python_to_node_depth(py, v, target, depth + 1)?,
             ));
         }
         return Ok(YamlNode::new(YamlNodeKind::Mapping(pairs), span));
+    }
+    if let Some(error) = round_trip_object_error(obj) {
+        return Err(error);
     }
 
     let repr = obj.repr()?.to_string();
     Err(pyo3::exceptions::PyTypeError::new_err(format!(
         "cannot convert {repr} to a YAML node"
     )))
+}
+
+/// The error for assigning a round-trip object, or `None` for anything else.
+///
+/// A document, view, or node cursor is a live handle onto a document, not data,
+/// so it cannot be assigned as a value; its plain data can. The message names
+/// the type alone: a handle's `repr()` reads its document, and the error must
+/// not depend on that document being readable.
+fn round_trip_object_error(obj: &Bound<'_, PyAny>) -> Option<PyErr> {
+    use crate::roundtrip::document::{YAMLRocksDocument, YAMLRocksDocumentView, YAMLRocksNode};
+
+    let (name, plain_data) = if obj.is_instance_of::<YAMLRocksDocumentView>() {
+        ("YAMLRocksDocumentView", "view.to_dict()")
+    } else if obj.is_instance_of::<YAMLRocksNode>() {
+        ("YAMLRocksNode", "node.value")
+    } else if obj.is_instance_of::<YAMLRocksDocument>() {
+        ("YAMLRocksDocument", "doc.to_dict()")
+    } else {
+        return None;
+    };
+    Some(pyo3::exceptions::PyTypeError::new_err(format!(
+        "cannot convert a {name} to a YAML node; assign its plain data instead, \
+         such as {plain_data}"
+    )))
+}
+
+/// A freshly assigned null. It is marked synthetic so re-emission applies the
+/// document's null style without disturbing loaded (untouched) nulls.
+pub(crate) fn assigned_null() -> YamlNode {
+    let mut node = YamlNode::new(YamlNodeKind::Null, crate::scanner::Span::default());
+    node.synthetic = true;
+    node
+}
+
+/// A freshly assigned scalar holding `value`, written so it reads back as that
+/// same value in a document read the way `target` describes: a number or
+/// boolean in its plain canonical spelling, and a string quoted where the
+/// document would otherwise read it as something else.
+pub(crate) fn assigned_scalar(value: ResolvedValue, target: ScalarTarget) -> YamlNode {
+    let (text, style) = match value {
+        ResolvedValue::Null => return assigned_null(),
+        ResolvedValue::Bool(b) => (
+            if b { "true" } else { "false" }.to_owned(),
+            ScalarStyle::Plain,
+        ),
+        ResolvedValue::Int(i) => (i.to_string(), ScalarStyle::Plain),
+        ResolvedValue::BigInt(digits) => (digits, ScalarStyle::Plain),
+        ResolvedValue::Float(f) => (crate::emit_util::canonical_float(f), ScalarStyle::Plain),
+        ResolvedValue::String(s) => {
+            let style = assigned_string_style(&s, target.double_quotes, target.schema);
+            // The quoting rules are the fast encoder's, which know the schema but
+            // not whether this document reads timestamps. Under `OPT_TIMESTAMPS`
+            // a plain date-shaped string would read back as a `date`.
+            let reads_as_date = style == ScalarStyle::Plain
+                && target.resolve_timestamps
+                && crate::resolver::timestamp::parse(&s).is_some();
+            let style = if !reads_as_date {
+                style
+            } else if crate::emit_util::single_quotable(&s, target.double_quotes) {
+                ScalarStyle::SingleQuoted
+            } else {
+                ScalarStyle::DoubleQuoted
+            };
+            (s, style)
+        }
+    };
+    YamlNode::new(
+        YamlNodeKind::Scalar(text, style),
+        crate::scanner::Span::default(),
+    )
 }
 
 /// Choose the scalar style for a freshly assigned string. Unquoted when it can be
@@ -561,5 +620,30 @@ pub(crate) fn assigned_string_style(
         // quoted, so double-quote it (where it can be escaped), matching the
         // fast encoder.
         ScalarStyle::DoubleQuoted
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{assigned_scalar, ScalarTarget};
+    use crate::resolver::{ResolvedValue, Schema};
+    use crate::roundtrip::ast::YamlNodeKind;
+    use crate::scanner::ScalarStyle;
+
+    #[test]
+    fn a_date_shaped_string_is_quoted_only_where_timestamps_are_read() {
+        let style_for = |resolve_timestamps| {
+            let target = ScalarTarget {
+                double_quotes: true,
+                schema: Schema::Yaml12,
+                resolve_timestamps,
+            };
+            match assigned_scalar(ResolvedValue::String("2024-01-02".to_owned()), target).kind {
+                YamlNodeKind::Scalar(_, style) => Some(style),
+                _ => None,
+            }
+        };
+        assert_eq!(style_for(false), Some(ScalarStyle::Plain));
+        assert_eq!(style_for(true), Some(ScalarStyle::DoubleQuoted));
     }
 }

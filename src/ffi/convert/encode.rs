@@ -185,17 +185,14 @@ pub(crate) fn validate_tag(tag: &str) -> PyResult<()> {
 }
 
 /// Convert a [`YAMLRocksTag`] into a [`Value::Tagged`], serializing its inner
-/// value with the normal rules. The tag and value are read out first so the
-/// borrow is released before the (Python-running) recursive conversion.
+/// value with the normal rules.
 fn tagged_to_value(
     py: Python<'_>,
     tag_obj: &Bound<'_, YAMLRocksTag>,
     ctx: EncodeCtx<'_>,
 ) -> PyResult<Value<'static>> {
-    let (tag, value) = {
-        let borrowed = tag_obj.borrow();
-        (borrowed.tag.clone(), borrowed.value.clone_ref(py))
-    };
+    let tagged = tag_obj.get();
+    let (tag, value) = (tagged.tag.clone(), tagged.value.clone_ref(py));
     validate_tag(&tag)?;
     let inner = python_to_value(py, value.bind(py), ctx)?;
     attach_tag(tag, inner)

@@ -637,10 +637,8 @@ impl Lower<'_, '_, '_> {
         // is untracked by `tagged_node`), so a repeated wrapper aliases: the
         // same tag either way, losslessly.
         if let Ok(tag_obj) = obj.cast::<YAMLRocksTag>() {
-            let (tag, inner) = {
-                let borrowed = tag_obj.borrow();
-                (borrowed.tag.clone(), borrowed.value.clone_ref(self.py))
-            };
+            let tagged = tag_obj.get();
+            let (tag, inner) = (tagged.tag.clone(), tagged.value.clone_ref(self.py));
             return self.tagged_node(tag, inner.bind(self.py), depth, in_flow, in_key);
         }
         // A `serializers` entry for this exact type: a custom `!tag value`. The
@@ -750,7 +748,7 @@ impl Lower<'_, '_, '_> {
         in_key: bool,
     ) -> PyResult<YamlNode> {
         if let Ok(scalar) = described.cast::<YAMLRocksScalar>() {
-            let scalar = scalar.borrow();
+            let scalar = scalar.get();
             let node = scalar_node(
                 scalar.value.clone(),
                 scalar.style,
@@ -768,7 +766,7 @@ impl Lower<'_, '_, '_> {
             );
         }
         if let Ok(seq) = described.cast::<YAMLRocksSequence>() {
-            let seq = seq.borrow();
+            let seq = seq.get();
             let items: Vec<Bound<'_, PyAny>> = seq
                 .items
                 .bind(self.py)
@@ -785,7 +783,7 @@ impl Lower<'_, '_, '_> {
             );
         }
         if let Ok(map) = described.cast::<YAMLRocksMapping>() {
-            let map = map.borrow();
+            let map = map.get();
             let mut entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = Vec::new();
             for pair in map.pairs.bind(self.py).try_iter()? {
                 let pair = pair?;
@@ -977,10 +975,8 @@ impl Lower<'_, '_, '_> {
         in_key: bool,
     ) -> PyResult<YamlNode> {
         if let Ok(tag_obj) = result.cast::<YAMLRocksTag>() {
-            let (tag, inner) = {
-                let borrowed = tag_obj.borrow();
-                (borrowed.tag.clone(), borrowed.value.clone_ref(self.py))
-            };
+            let tagged = tag_obj.get();
+            let (tag, inner) = (tagged.tag.clone(), tagged.value.clone_ref(self.py));
             return self.tagged_node(tag, inner.bind(self.py), depth, in_flow, in_key);
         }
         if let Ok(tuple) = result.cast::<PyTuple>() {

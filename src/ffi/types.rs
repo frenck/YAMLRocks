@@ -27,7 +27,9 @@ type AnnotationState = (
 /// accepted by `dumps` to emit a `!tag value` back out.
 ///
 /// Holds the original tag (e.g. `!mytag`) and the resolved inner `value`.
-#[pyclass(name = "YAMLRocksTag")]
+/// Neither changes after construction, so the class is frozen and reading it
+/// never needs a borrow that could conflict.
+#[pyclass(name = "YAMLRocksTag", frozen)]
 #[derive(Debug, Clone)]
 pub struct YAMLRocksTag {
     #[pyo3(get)]
@@ -155,7 +157,7 @@ impl YAMLRocksAnnotatedDict {
     fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
         let py = slf.py();
         let state = {
-            let me = slf.borrow();
+            let me = slf.try_borrow()?;
             (
                 me.__line__,
                 me.__column__,
@@ -274,7 +276,7 @@ impl YAMLRocksAnnotatedList {
     fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
         let py = slf.py();
         let state = {
-            let me = slf.borrow();
+            let me = slf.try_borrow()?;
             (
                 me.__line__,
                 me.__column__,

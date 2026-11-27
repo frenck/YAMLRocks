@@ -24,7 +24,8 @@ use super::emit;
 use super::emit::{emit_roundtrip_all_with, emit_roundtrip_with};
 use super::value::{
     assigned_null, assigned_scalar, is_ast_merge_key, node_to_python_key, node_to_python_with,
-    python_to_node, too_deeply_nested, ObjectCache, MAX_ASSIGN_DEPTH,
+    python_to_node, read_scalar, too_deeply_nested, ObjectCache, ScalarRead, ScalarTarget,
+    MAX_ASSIGN_DEPTH,
 };
 use crate::encode::NullStyle;
 use crate::resolver::{ResolvedValue, ScalarKind, Schema};
@@ -217,30 +218,7 @@ impl YAMLRocksDocument {
     }
 
     fn __getitem__(slf: &Bound<'_, Self>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-        let py = slf.py();
-        if read_document(slf)?.nodes.len() == 1 {
-            return get_child(py, slf, &[], key, stale_view);
-        }
-
-        // The index is converted with no borrow held: an `__index__` method is
-        // free to read this document.
-        let idx: usize = key.extract().map_err(|_| {
-            pyo3::exceptions::PyKeyError::new_err("multi-document access requires an integer index")
-        })?;
-        let this = read_document(slf)?;
-        let node = this.nodes.get(idx).ok_or_else(index_out_of_range)?;
-        // Anchors do not cross document boundaries, so a document's
-        // aliases resolve against its own anchors only.
-        let anchors = build_anchor_map(std::slice::from_ref(node));
-        wrap_node(
-            py,
-            slf,
-            document_prefix(this.nodes.len(), idx),
-            node,
-            &anchors,
-            this.schema,
-            this.resolve_timestamps,
-        )
+        Ok(lookup_item(slf, key)?)
     }
 
     fn __setitem__(
@@ -249,14 +227,9 @@ impl YAMLRocksDocument {
         value: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let py = slf.py();
-        let (documents, revision, double_quotes, schema) = {
+        let (documents, revision, target) = {
             let this = read_document(slf)?;
-            (
-                this.nodes.len(),
-                this.revision,
-                this.double_quotes,
-                this.schema,
-            )
+            (this.nodes.len(), this.revision, this.scalar_target())
         };
         if documents == 1 {
             return set_child(py, slf, &[], key, value, stale_view);
@@ -269,7 +242,7 @@ impl YAMLRocksDocument {
         if idx >= documents {
             return Err(index_out_of_range());
         }
-        let mut new_root = python_to_node(py, value, double_quotes, schema)?;
+        let mut new_root = python_to_node(py, value, target)?;
 
         let mut this = write_unchanged(slf, revision)?;
         let node = this.nodes.get_mut(idx).ok_or_else(index_out_of_range)?;
@@ -316,11 +289,7 @@ impl YAMLRocksDocument {
         key: &Bound<'_, PyAny>,
         default: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        let py = slf.py();
-        match Self::__getitem__(slf, key) {
-            Ok(val) => Ok(val),
-            Err(err) => missing_or_raise(py, err, default),
-        }
+        lookup_item(slf, key).or_else(|failure| failure.or_default(slf.py(), default))
     }
 
     fn keys(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -686,6 +655,16 @@ impl YAMLRocksDocument {
         path
     }
 
+    /// How this document reads scalars, and so how a freshly assigned one must
+    /// be written into it.
+    fn scalar_target(&self) -> ScalarTarget {
+        ScalarTarget {
+            double_quotes: self.double_quotes,
+            schema: self.schema,
+            resolve_timestamps: self.resolve_timestamps,
+        }
+    }
+
     /// Re-emit the document from the AST (used when modified or sourceless).
     /// Always as a stream, even for one root: the empty documents around it
     /// are part of the stream, not of the root.
@@ -797,7 +776,13 @@ impl YAMLRocksDocumentView {
     }
 
     fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-        get_child(py, self.root.bind(py), &self.path, key, stale_view)
+        Ok(get_child(
+            py,
+            self.root.bind(py),
+            &self.path,
+            key,
+            stale_view,
+        )?)
     }
 
     fn __setitem__(
@@ -825,10 +810,8 @@ impl YAMLRocksDocumentView {
         key: &Bound<'_, PyAny>,
         default: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        match self.__getitem__(py, key) {
-            Ok(val) => Ok(val),
-            Err(err) => missing_or_raise(py, err, default),
-        }
+        get_child(py, self.root.bind(py), &self.path, key, stale_view)
+            .or_else(|failure| failure.or_default(py, default))
     }
 
     fn keys(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -973,15 +956,15 @@ impl YAMLRocksNode {
     #[setter]
     fn set_value(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let root = self.root.bind(py);
-        let (revision, double_quotes, schema) = {
+        let (revision, target) = {
             let doc = read_document(root)?;
             resolve_path(&doc.nodes, &self.path).ok_or_else(stale_node)?;
-            (doc.revision, doc.double_quotes, doc.schema)
+            (doc.revision, doc.scalar_target())
         };
         // Converting the value runs its own Python code, which may read this
         // document (or copy it, when the value is a view of it), so it happens
         // with no borrow held.
-        let new_val = python_to_node(py, value, double_quotes, schema)?;
+        let new_val = python_to_node(py, value, target)?;
 
         let mut doc = write_unchanged(root, revision)?;
         let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
@@ -1902,9 +1885,10 @@ pub(crate) fn scalar_eq(key: &YamlNode, name: &str) -> bool {
 // A mapping key is matched by the value it *reads as* under the schema, so
 // `doc[True]` reaches a `yes:` entry under YAML 1.1 (and `doc['yes']` does not),
 // consistent with `keys()`/`to_dict()` and with Python dict semantics (`True ==
-// 1`). Only scalar keys are addressable this way; a collection key is not. On a
-// duplicate key the last occurrence wins (see [`child_ref`]), the entry
-// `loads()` keeps.
+// 1`). Scalar and null keys are matched this way; a collection key is not. A
+// null key can be replaced and deleted, but not read, since a path step names a
+// key by its text. On a duplicate key the last occurrence wins (see
+// [`child_ref`]), the entry `loads()` keeps.
 
 /// How a key is matched against the keys of one mapping.
 enum KeyLookup<'k> {
@@ -1912,9 +1896,11 @@ enum KeyLookup<'k> {
     /// exactly when that key reads as this same string, which is decided in
     /// Rust with no Python code running (see [`key_reads_as`]).
     Text(&'k str),
-    /// Any other key, compared with Python `==` against each scalar key as it
-    /// reads. Holds each scalar key's position and value, taken under the
-    /// borrow so the comparisons can run after it is released.
+    /// Any other key, compared with Python `==` against each scalar or null
+    /// key as it reads. Holds each such key's position and value, taken under
+    /// the borrow so the comparisons can run after it is released. Building
+    /// this costs one Python object per key on every call, which only keys
+    /// that are not an exact `str` pay.
     Object(Vec<(usize, Py<PyAny>)>),
 }
 
@@ -1936,7 +1922,11 @@ impl<'k> KeyLookup<'k> {
         let keys = pairs
             .iter()
             .enumerate()
-            .filter(|(_, (key_node, _))| matches!(key_node.kind, YamlNodeKind::Scalar(..)))
+            // A null key (`~: x`, or the key `doc[None] = x` adds) is matched
+            // too, so assigning or deleting it again finds the pair it made.
+            .filter(|(_, (key_node, _))| {
+                matches!(key_node.kind, YamlNodeKind::Scalar(..) | YamlNodeKind::Null)
+            })
             .map(|(position, (key_node, _))| {
                 let value =
                     node_to_python_with(py, key_node, schema, resolve_timestamps, &no_anchors);
@@ -1986,25 +1976,37 @@ fn key_reads_as(key_node: &YamlNode, text: &str, schema: Schema, resolve_timesta
     }
 }
 
-/// The position of the last scalar key in `keys` that `== key`, running each
-/// comparison once, last key first, until one matches.
+/// The position of the last key in `keys` that `== key`, running each
+/// comparison once, last key first, until one matches. A comparison that
+/// raises is raised: treating it as "no match" would let a write add a second
+/// copy of a key that is already there.
 fn last_equal(
     py: Python<'_>,
     keys: &[(usize, Py<PyAny>)],
     key: &Bound<'_, PyAny>,
-) -> Option<usize> {
-    keys.iter()
-        .rev()
-        .find(|(_, candidate)| candidate.bind(py).eq(key).unwrap_or(false))
-        .map(|(position, _)| *position)
+) -> PyResult<Option<usize>> {
+    for (position, candidate) in keys.iter().rev() {
+        if candidate.bind(py).eq(key)? {
+            return Ok(Some(*position));
+        }
+    }
+    Ok(None)
 }
 
-/// The positions of every scalar key in `keys` that `== key`.
-fn all_equal(py: Python<'_>, keys: &[(usize, Py<PyAny>)], key: &Bound<'_, PyAny>) -> Vec<usize> {
-    keys.iter()
-        .filter(|(_, candidate)| candidate.bind(py).eq(key).unwrap_or(false))
-        .map(|(position, _)| *position)
-        .collect()
+/// The positions of every key in `keys` that `== key`, in order. A comparison
+/// that raises is raised, before anything is removed.
+fn all_equal(
+    py: Python<'_>,
+    keys: &[(usize, Py<PyAny>)],
+    key: &Bound<'_, PyAny>,
+) -> PyResult<Vec<usize>> {
+    let mut positions = Vec::new();
+    for (position, candidate) in keys {
+        if candidate.bind(py).eq(key)? {
+            positions.push(*position);
+        }
+    }
+    Ok(positions)
 }
 
 /// The step from a mapping to the value of its pair at `position`.
@@ -2012,6 +2014,42 @@ fn key_step(pairs: &[(YamlNode, YamlNode)], position: usize) -> Option<PathSeg> 
     match &pairs.get(position)?.0.kind {
         YamlNodeKind::Scalar(lexeme, _) => Some(PathSeg::Key(lexeme.clone())),
         _ => None,
+    }
+}
+
+/// Why a lookup returned nothing.
+enum LookupFailure {
+    /// The key is not there, or cannot be a key at all. `get()` returns its
+    /// default for this, as `dict.get` does.
+    Missing(PyErr),
+    /// The lookup itself failed: comparing the key raised, or the document was
+    /// in use or changed meanwhile. `get()` raises this too, since a default
+    /// would pass off "could not look" as "not there".
+    Failed(PyErr),
+}
+
+impl From<PyErr> for LookupFailure {
+    fn from(err: PyErr) -> Self {
+        Self::Failed(err)
+    }
+}
+
+impl From<LookupFailure> for PyErr {
+    fn from(failure: LookupFailure) -> Self {
+        match failure {
+            LookupFailure::Missing(err) | LookupFailure::Failed(err) => err,
+        }
+    }
+}
+
+impl LookupFailure {
+    /// What `get()` returns for this failure: `default` for a missing key, the
+    /// error itself for a lookup that failed.
+    fn or_default(self, py: Python<'_>, default: Option<Py<PyAny>>) -> PyResult<Py<PyAny>> {
+        match self {
+            Self::Missing(_) => Ok(default.unwrap_or_else(|| py.None())),
+            Self::Failed(err) => Err(err),
+        }
     }
 }
 
@@ -2024,9 +2062,10 @@ fn get_child(
     path: &[PathSeg],
     key: &Bound<'_, PyAny>,
     stale: fn() -> PyErr,
-) -> PyResult<Py<PyAny>> {
+) -> Result<Py<PyAny>, LookupFailure> {
+    let missing = LookupFailure::Missing;
     let doc = read_document(root)?;
-    let node = resolve_path(&doc.nodes, path).ok_or_else(stale)?;
+    let node = resolve_path(&doc.nodes, path).ok_or_else(|| missing(stale()))?;
 
     let (doc, step) = match &node.kind {
         YamlNodeKind::Mapping(pairs) => {
@@ -2041,7 +2080,7 @@ fn get_child(
                 KeyLookup::Object(keys) => {
                     let revision = doc.revision;
                     drop(doc);
-                    let position = last_equal(py, &keys, key);
+                    let position = last_equal(py, &keys, key)?;
                     // The position is only meaningful in the tree it was found in.
                     let doc = read_unchanged(root, revision)?;
                     let step =
@@ -2054,30 +2093,30 @@ fn get_child(
             }
         }
         _ if converts_without_python(key) => {
-            let step = seg_from_key(key)?;
+            let step = seg_from_key(key).map_err(missing)?;
             (doc, Some(step))
         }
         _ => {
             // The key's `__index__` runs with no borrow held. A position is
             // looked up afresh afterwards, like any read.
             drop(doc);
-            let step = seg_from_key(key)?;
+            let step = seg_from_key(key).map_err(missing)?;
             (read_document(root)?, Some(step))
         }
     };
 
-    let (document, node) = resolve_in_document(&doc.nodes, path).ok_or_else(stale)?;
+    let (document, node) = resolve_in_document(&doc.nodes, path).ok_or_else(|| missing(stale()))?;
     let found = step.and_then(|step| Some((child_ref(node, &step)?, step)));
     let Some((child, step)) = found else {
         let in_sequence = matches!(node.kind, YamlNodeKind::Sequence(_));
         drop(doc);
-        return Err(missing_child(in_sequence, key));
+        return Err(missing(missing_child(in_sequence, key)));
     };
 
     let anchors = build_anchor_map(document);
     let mut child_path = path.to_vec();
     child_path.push(step);
-    wrap_node(
+    Ok(wrap_node(
         py,
         root,
         child_path,
@@ -2085,7 +2124,7 @@ fn get_child(
         &anchors,
         doc.schema,
         doc.resolve_timestamps,
-    )
+    )?)
 }
 
 /// Wrap a node for return to Python: scalars as plain values, containers as
@@ -2127,8 +2166,7 @@ fn wrap_node(
 /// borrow: the document's settings and revision, and what the container is.
 struct Inspection<'k> {
     revision: u64,
-    double_quotes: bool,
-    schema: Schema,
+    target: ScalarTarget,
     container: Container<'k>,
 }
 
@@ -2166,8 +2204,7 @@ fn inspect<'k>(
     };
     Ok(Inspection {
         revision: doc.revision,
-        double_quotes: doc.double_quotes,
-        schema: doc.schema,
+        target: doc.scalar_target(),
         container,
     })
 }
@@ -2210,29 +2247,25 @@ fn set_child(
 ) -> PyResult<()> {
     let Inspection {
         revision,
-        double_quotes,
-        schema,
+        target,
         container,
     } = inspect(py, root, path, key, stale)?;
 
     match container {
         Container::Mapping(lookup) => {
-            let new_val = python_to_node(py, value, double_quotes, schema)?;
+            let new_val = python_to_node(py, value, target)?;
             let slot = match lookup {
                 KeyLookup::Text(text) => MappingSlot::Text(text),
-                KeyLookup::Object(keys) => match last_equal(py, &keys, key) {
+                KeyLookup::Object(keys) => match last_equal(py, &keys, key)? {
                     Some(position) => MappingSlot::Replace(position),
                     // No key matched: add one, building the key node from the
                     // Python key so a non-string key (`doc[True] = ...`) emits
                     // correctly.
-                    None => {
-                        MappingSlot::Add(Box::new(python_to_node(py, key, double_quotes, schema)?))
-                    }
+                    None => MappingSlot::Add(Box::new(python_to_node(py, key, target)?)),
                 },
             };
 
             let mut doc = write_unchanged(root, revision)?;
-            let resolve_timestamps = doc.resolve_timestamps;
             let pairs = match resolve_path_mut(&mut doc.nodes, path).map(|node| &mut node.kind) {
                 Some(YamlNodeKind::Mapping(pairs)) => pairs,
                 _ => return Err(stale()),
@@ -2244,17 +2277,14 @@ fn set_child(
                     Ok(())
                 }
                 MappingSlot::Text(text) => match pairs.iter().rposition(|(key_node, _)| {
-                    key_reads_as(key_node, text, schema, resolve_timestamps)
+                    key_reads_as(key_node, text, target.schema, target.resolve_timestamps)
                 }) {
                     Some(position) => replace_entry(pairs, position, new_val, stale),
                     None => {
                         // A string that needs quoting under the schema is
                         // quoted, so the key reads back as the string it is.
-                        let new_key = assigned_scalar(
-                            ResolvedValue::String(text.to_owned()),
-                            double_quotes,
-                            schema,
-                        );
+                        let new_key =
+                            assigned_scalar(ResolvedValue::String(text.to_owned()), target);
                         pairs.push((marked_modified(new_key), marked_modified(new_val)));
                         Ok(())
                     }
@@ -2266,14 +2296,14 @@ fn set_child(
             if index >= len {
                 return Err(index_out_of_range());
             }
-            let new_val = python_to_node(py, value, double_quotes, schema)?;
+            let new_val = python_to_node(py, value, target)?;
 
             let mut doc = write_unchanged(root, revision)?;
-            let target = match resolve_path_mut(&mut doc.nodes, path).map(|node| &mut node.kind) {
+            let item = match resolve_path_mut(&mut doc.nodes, path).map(|node| &mut node.kind) {
                 Some(YamlNodeKind::Sequence(items)) => items.get_mut(index),
                 _ => None,
             };
-            replace_keeping_metadata(target.ok_or_else(stale)?, new_val);
+            replace_keeping_metadata(item.ok_or_else(stale)?, new_val);
             Ok(())
         }
         Container::Leaf => Err(not_a_container()),
@@ -2328,70 +2358,74 @@ fn index_out_of_range() -> PyErr {
 /// or the content of a [`YAMLRocksDocument`] (a sequence of its documents, for a
 /// stream). `None` for any other object.
 ///
-/// The copy is the data as its own document reads it, written into the target
-/// the way any freshly assigned value is, so it reads back the same there (a
-/// string is quoted where the target's schema needs it). Aliases are expanded,
-/// and a merge key stays a merge key. Comments, anchors, tags, and source
-/// layout belong to where the data was written and are not copied: an anchor
-/// would clash with the target's own, and a block scalar's or flow collection's
-/// layout does not hold at a different indentation. Two things a plain Python
-/// value cannot express do carry over: a mapping key that is a collection
-/// (`? [a, b]`), and a timestamp, which keeps its own text.
+/// The copy reads back, through the target document, as the same values the
+/// source reads as: every scalar keeps its own text, quoting, and tag where the
+/// target reads them the same way, and is rewritten from its value where it
+/// does not (see [`DataCopy::scalar`]). Aliases are expanded, and a merge key
+/// stays a merge key. Comments, anchors, and source layout belong to where the
+/// data was written and are not copied: an anchor would clash with the
+/// target's own, and a block scalar's or flow collection's layout does not hold
+/// at a different indentation.
 ///
 /// The source is read under a shared borrow, which is why every write converts
 /// its value before it borrows its own document.
+///
+/// Expanding aliases can multiply a small document many times over (an alias
+/// bomb loads fine as shared nodes), so every node the copy creates is taken
+/// from `budget`, which the caller shares across the whole value being
+/// assigned. Running out raises and nothing is written: a copy is either
+/// complete or not made.
 pub(crate) fn round_trip_data_copy(
     obj: &Bound<'_, PyAny>,
-    double_quotes: bool,
-    schema: Schema,
+    target: ScalarTarget,
     depth: u32,
+    budget: &mut usize,
 ) -> Option<PyResult<YamlNode>> {
     let py = obj.py();
-    let (root, path, stale): (&Py<YAMLRocksDocument>, &[PathSeg], fn() -> PyErr) = if let Ok(view) =
-        obj.cast::<YAMLRocksDocumentView>()
-    {
-        let view = view.get();
-        (&view.root, view.path.as_slice(), stale_view)
-    } else if let Ok(cursor) = obj.cast::<YAMLRocksNode>() {
-        let cursor = cursor.get();
-        (&cursor.root, cursor.path.as_slice(), stale_node)
-    } else if let Ok(document) = obj.cast::<YAMLRocksDocument>() {
-        return Some(
-            read_document(document)
-                .and_then(|source| copy_document_content(&source, double_quotes, schema, depth)),
-        );
-    } else {
-        return None;
-    };
+    let (root, path, stale): (&Py<YAMLRocksDocument>, &[PathSeg], fn() -> PyErr) =
+        if let Ok(view) = obj.cast::<YAMLRocksDocumentView>() {
+            let view = view.get();
+            (&view.root, view.path.as_slice(), stale_view)
+        } else if let Ok(cursor) = obj.cast::<YAMLRocksNode>() {
+            let cursor = cursor.get();
+            (&cursor.root, cursor.path.as_slice(), stale_node)
+        } else if let Ok(document) = obj.cast::<YAMLRocksDocument>() {
+            return Some(
+                read_document(document)
+                    .and_then(|source| copy_document_content(&source, target, depth, budget)),
+            );
+        } else {
+            return None;
+        };
 
     Some(read_document(root.bind(py)).and_then(|source| {
         let (document, node) = resolve_in_document(&source.nodes, path).ok_or_else(stale)?;
-        let anchors = build_anchor_map(document);
-        DataCopy::new(&source, &anchors, double_quotes, schema).copy(node, depth)
+        DataCopy::new(&source, document, target, budget).copy(node, depth)
     }))
 }
 
 /// The content of a whole round-trip object as one node: its only document,
-/// a sequence of them for a stream, or null when it holds none.
+/// a sequence of them for a stream, or null when it holds none. All documents
+/// draw from the same `budget`.
 fn copy_document_content(
     source: &YAMLRocksDocument,
-    double_quotes: bool,
-    schema: Schema,
+    target: ScalarTarget,
     depth: u32,
+    budget: &mut usize,
 ) -> PyResult<YamlNode> {
-    let copy_root = |root: &YamlNode, depth: u32| {
-        // Each document resolves its aliases against its own anchors.
-        let anchors = build_anchor_map(std::slice::from_ref(root));
-        DataCopy::new(source, &anchors, double_quotes, schema).copy(root, depth)
-    };
     match source.nodes.as_slice() {
         [] => Ok(assigned_null()),
-        [only] => copy_root(only, depth),
+        [only] => {
+            DataCopy::new(source, std::slice::from_ref(only), target, budget).copy(only, depth)
+        }
         roots => {
-            let items = roots
-                .iter()
-                .map(|root| copy_root(root, depth + 1))
-                .collect::<PyResult<Vec<_>>>()?;
+            let mut items = Vec::with_capacity(roots.len());
+            for root in roots {
+                // Each document resolves its aliases against its own anchors.
+                let document = std::slice::from_ref(root);
+                let mut copy = DataCopy::new(source, document, target, budget);
+                items.push(copy.copy(root, depth + 1)?);
+            }
             Ok(YamlNode::new(
                 YamlNodeKind::Sequence(items),
                 crate::scanner::Span::default(),
@@ -2401,102 +2435,161 @@ fn copy_document_content(
 }
 
 /// Copies nodes of one source document as plain data for another document.
-struct DataCopy<'a> {
-    /// The anchors of the source document, for expanding its aliases.
-    anchors: &'a HashMap<String, YamlNode>,
+struct DataCopy<'a, 'b> {
+    /// The anchored nodes of the source document, as written, for expanding its
+    /// aliases. Deliberately not [`build_anchor_map`]: that map expands every
+    /// anchor up front under a budget of its own and puts a null where it runs
+    /// out, which a copy would then store as if it were the data.
+    refs: HashMap<String, &'a YamlNode>,
+    /// How many more nodes this copy, and the rest of the value it belongs to,
+    /// may create.
+    budget: &'b mut usize,
     /// How the source document reads its scalars.
     source_schema: Schema,
     source_timestamps: bool,
-    /// How the target document writes a freshly assigned scalar.
-    double_quotes: bool,
-    target_schema: Schema,
+    /// How the target document reads and writes them.
+    target: ScalarTarget,
 }
 
-impl<'a> DataCopy<'a> {
+impl<'a, 'b> DataCopy<'a, 'b> {
     fn new(
         source: &YAMLRocksDocument,
-        anchors: &'a HashMap<String, YamlNode>,
-        double_quotes: bool,
-        target_schema: Schema,
+        document: &'a [YamlNode],
+        target: ScalarTarget,
+        budget: &'b mut usize,
     ) -> Self {
+        let mut refs = HashMap::new();
+        for root in document {
+            collect_anchor_refs(root, &mut refs);
+        }
         Self {
-            anchors,
+            refs,
+            budget,
             source_schema: source.schema,
             source_timestamps: source.resolve_timestamps,
-            double_quotes,
-            target_schema,
+            target,
         }
     }
 
-    fn copy(&self, node: &YamlNode, depth: u32) -> PyResult<YamlNode> {
+    /// Copy `node`, `depth` levels into the value being assigned. Every alias
+    /// followed counts as a level too.
+    fn copy(&mut self, node: &'a YamlNode, depth: u32) -> PyResult<YamlNode> {
         // Grow the native stack on demand: a copy recurses once per level, like
         // assigning the equivalent Python value. See [`crate::stack`].
         crate::stack::guard(|| self.copy_inner(node, depth))
     }
 
-    fn copy_inner(&self, node: &YamlNode, depth: u32) -> PyResult<YamlNode> {
+    fn copy_inner(&mut self, node: &'a YamlNode, depth: u32) -> PyResult<YamlNode> {
         if depth >= MAX_ASSIGN_DEPTH {
             return Err(too_deeply_nested());
         }
 
-        let kind = match &node.kind {
+        let items = match &node.kind {
             YamlNodeKind::Alias(name) => {
                 // An alias whose anchor is missing reads as null.
-                return match self.anchors.get(name) {
-                    Some(target) => self.copy(target, depth),
-                    None => Ok(assigned_null()),
+                let Some(&target) = self.refs.get(name) else {
+                    self.take_node()?;
+                    return Ok(assigned_null());
                 };
+                // The composer only accepts an alias to an earlier anchor, so a
+                // cycle cannot load. Counting the hop as a level keeps a copy
+                // finite regardless, without capping a long but legitimate
+                // chain of aliases at the hundred hops `MAX_ALIAS_DEPTH` allows.
+                return self.copy(target, depth + 1);
             }
-            // An empty node can carry a tag that gives it a value (`!!str` is "").
             YamlNodeKind::Null => {
+                self.take_node()?;
+                // An empty node can carry a tag that gives it a value (`!!str` is "").
                 return Ok(match node.tag.as_deref() {
                     Some(tag) => self.scalar("", ScalarStyle::Plain, Some(tag)),
                     None => assigned_null(),
                 });
             }
             YamlNodeKind::Scalar(text, style) => {
+                self.take_node()?;
                 return Ok(self.scalar(text, *style, node.tag.as_deref()));
             }
-            YamlNodeKind::Sequence(items) => YamlNodeKind::Sequence(
-                items
-                    .iter()
-                    .map(|item| self.copy(item, depth + 1))
-                    .collect::<PyResult<_>>()?,
-            ),
-            YamlNodeKind::Mapping(pairs) => YamlNodeKind::Mapping(
-                pairs
-                    .iter()
-                    .map(|(key, value)| {
-                        Ok((self.key(key, depth + 1)?, self.copy(value, depth + 1)?))
-                    })
-                    .collect::<PyResult<_>>()?,
-            ),
+            YamlNodeKind::Sequence(items) => items,
+            YamlNodeKind::Mapping(pairs) => {
+                self.take_node()?;
+                let mut copied = Vec::with_capacity(pairs.len());
+                for (key, value) in pairs {
+                    let key = self.key(key, depth + 1)?;
+                    copied.push((key, self.copy(value, depth + 1)?));
+                }
+                return Ok(YamlNode::new(
+                    YamlNodeKind::Mapping(copied),
+                    crate::scanner::Span::default(),
+                ));
+            }
         };
-        Ok(YamlNode::new(kind, crate::scanner::Span::default()))
+
+        self.take_node()?;
+        let mut copied = Vec::with_capacity(items.len());
+        for item in items {
+            copied.push(self.copy(item, depth + 1)?);
+        }
+        Ok(YamlNode::new(
+            YamlNodeKind::Sequence(copied),
+            crate::scanner::Span::default(),
+        ))
     }
 
-    /// A scalar of the source, as the value it reads as there.
-    fn scalar(&self, text: &str, style: ScalarStyle, tag: Option<&str>) -> YamlNode {
-        let plain_untagged = style == ScalarStyle::Plain && tag.is_none();
-        if self.source_timestamps
-            && plain_untagged
-            && crate::resolver::timestamp::parse(text).is_some()
-        {
-            // A timestamp has no plain value to rewrite it from. Its own plain
-            // text reads back as the same timestamp wherever timestamps are read.
-            return YamlNode::new(
-                YamlNodeKind::Scalar(text.to_owned(), ScalarStyle::Plain),
-                crate::scanner::Span::default(),
-            );
+    /// Take one node from the shared budget, raising once it is spent.
+    fn take_node(&mut self) -> PyResult<()> {
+        if *self.budget == 0 {
+            return Err(too_many_nodes());
         }
-        let value = self.source_schema.resolve(text, style, tag);
-        assigned_scalar(value, self.double_quotes, self.target_schema)
+        *self.budget -= 1;
+        Ok(())
+    }
+
+    /// A scalar of the source, written so the target reads it as the source
+    /// does.
+    ///
+    /// The scalar keeps its own text, quoting, and tag when the target reads
+    /// those exactly as the source does, which is always the case within one
+    /// document. That keeps what told keys apart in the source (`TRUE` and
+    /// `'true'` stay two different keys) and the author's spelling (`0x1F`
+    /// stays hex). Only where the two documents read the same text differently
+    /// (another schema, or another timestamp setting) is the scalar rewritten
+    /// from its value, the way a freshly assigned value of that type is.
+    fn scalar(&self, text: &str, style: ScalarStyle, tag: Option<&str>) -> YamlNode {
+        let source_read = read_scalar(text, style, tag, self.source_schema, self.source_timestamps);
+        if keeps_its_text(text, style, tag) {
+            let target_read = read_scalar(
+                text,
+                style,
+                tag,
+                self.target.schema,
+                self.target.resolve_timestamps,
+            );
+            if target_read.same_as(&source_read) {
+                let mut kept = YamlNode::new(
+                    YamlNodeKind::Scalar(text.to_owned(), style),
+                    crate::scanner::Span::default(),
+                );
+                kept.tag = tag.map(str::to_owned);
+                return kept;
+            }
+        }
+
+        match source_read {
+            // A date or datetime read by the source, going into a target that
+            // reads timestamps as text: its own text is the only faithful form
+            // the target has, and it is a string there.
+            ScalarRead::Timestamp(_) => {
+                assigned_scalar(ResolvedValue::String(text.to_owned()), self.target)
+            }
+            ScalarRead::Value(value) => assigned_scalar(value, self.target),
+        }
     }
 
     /// A mapping key of the source. A merge key stays a plain `<<`, which a
     /// string `"<<"` would not be.
-    fn key(&self, key: &YamlNode, depth: u32) -> PyResult<YamlNode> {
+    fn key(&mut self, key: &'a YamlNode, depth: u32) -> PyResult<YamlNode> {
         if is_ast_merge_key(key) {
+            self.take_node()?;
             return Ok(YamlNode::new(
                 YamlNodeKind::Scalar("<<".to_owned(), ScalarStyle::Plain),
                 crate::scanner::Span::default(),
@@ -2513,6 +2606,47 @@ impl<'a> DataCopy<'a> {
         }
         Ok(copy)
     }
+}
+
+/// Whether a copied scalar can be written with its source text, quoting, and
+/// tag. Such a node has no `raw` source slice, so the emitter writes it from its
+/// text, which only stays faithful for a single-line plain or quoted scalar:
+///
+/// - A block scalar (`|`, `>`) is rewritten, as a quoted string.
+/// - A plain scalar must not hold a line break, and not a flow indicator
+///   (`,[]{}`) either: it may have come from block context and land inside a
+///   flow collection, where those would end it.
+/// - A single-quoted scalar must not hold a line break, which single quotes
+///   cannot escape. A double-quoted one escapes anything.
+/// - A tag written with a named handle (`!e!thing`) depends on a `%TAG`
+///   directive of the source document, which the target may not have.
+fn keeps_its_text(text: &str, style: ScalarStyle, tag: Option<&str>) -> bool {
+    let tag_travels = tag.is_none_or(|tag| {
+        tag.starts_with("!!")
+            || tag.starts_with("!<")
+            || tag
+                .strip_prefix('!')
+                .is_some_and(|name| !name.contains('!'))
+    });
+    let text_travels = match style {
+        ScalarStyle::Plain => {
+            !text.is_empty() && !text.contains(['\n', '\r', ',', '[', ']', '{', '}'])
+        }
+        ScalarStyle::SingleQuoted => crate::emit_util::single_capable(text),
+        ScalarStyle::DoubleQuoted => true,
+        _ => false,
+    };
+    tag_travels && text_travels
+}
+
+/// The error for a copy that would create more than
+/// [`MAX_ALIAS_NODES`](super::anchors::MAX_ALIAS_NODES) nodes.
+/// A `ValueError`, like the depth limit on the same path: the value cannot be
+/// assigned as it is.
+fn too_many_nodes() -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(
+        "value expands to too many nodes to assign (possible alias bomb)",
+    )
 }
 
 /// Collect every `*alias` name referenced anywhere in a node subtree.
@@ -2599,22 +2733,20 @@ fn del_child(
 ) -> PyResult<()> {
     let Inspection {
         revision,
-        schema,
+        target,
         container,
-        ..
     } = inspect(py, root, path, key, stale)?;
     // Removing a key removes it from the logical mapping, so every duplicate
     // occurrence goes (otherwise a shadowed one would re-surface as the new
     // effective value).
     let removal = match container {
         Container::Mapping(KeyLookup::Text(text)) => Removal::Text(text),
-        Container::Mapping(KeyLookup::Object(keys)) => Removal::Pairs(all_equal(py, &keys, key)),
+        Container::Mapping(KeyLookup::Object(keys)) => Removal::Pairs(all_equal(py, &keys, key)?),
         Container::Sequence { .. } => Removal::Item(key.extract()?),
         Container::Leaf => return Err(not_a_container()),
     };
 
     let mut doc = write_unchanged(root, revision)?;
-    let resolve_timestamps = doc.resolve_timestamps;
     let (document_root, inner) = split_document_mut(&mut doc.nodes, path).ok_or_else(stale)?;
     // Guard against orphaning an alias: if the document has aliases, snapshot
     // the tree and the aliases already dangling, delete, then roll back if the
@@ -2628,7 +2760,9 @@ fn del_child(
     match (&mut node.kind, removal) {
         (YamlNodeKind::Mapping(pairs), Removal::Text(text)) => {
             let before = pairs.len();
-            pairs.retain(|(key_node, _)| !key_reads_as(key_node, text, schema, resolve_timestamps));
+            pairs.retain(|(key_node, _)| {
+                !key_reads_as(key_node, text, target.schema, target.resolve_timestamps)
+            });
             if pairs.len() == before {
                 return Err(pyo3::exceptions::PyKeyError::new_err(key.clone().unbind()));
             }
@@ -2637,11 +2771,16 @@ fn del_child(
             if positions.is_empty() {
                 return Err(pyo3::exceptions::PyKeyError::new_err(key.clone().unbind()));
             }
-            // The removed pairs carry their own comments away; the surrounding
-            // pairs keep theirs.
-            for position in positions.into_iter().rev() {
-                pairs.remove(position);
-            }
+            // One pass over the pairs, however many duplicates go. The removed
+            // pairs carry their own comments away; the surrounding pairs keep
+            // theirs.
+            let mut doomed = positions.into_iter().peekable();
+            let mut position = 0;
+            pairs.retain(|_| {
+                let removed = doomed.next_if_eq(&position).is_some();
+                position += 1;
+                !removed
+            });
         }
         (YamlNodeKind::Sequence(items), Removal::Item(index)) => {
             if index >= items.len() {
@@ -2774,18 +2913,41 @@ fn missing_child(in_sequence: bool, key: &Bound<'_, PyAny>) -> PyErr {
     }
 }
 
-/// What `get()` returns for a failed lookup: `default` when the key is not
-/// there (or cannot be a key at all), as `dict.get` does. A document that is in
-/// use, or that changed during the lookup, is raised instead: a default would
-/// pass off "not readable right now" as "not there".
-fn missing_or_raise(py: Python<'_>, err: PyErr, default: Option<Py<PyAny>>) -> PyResult<Py<PyAny>> {
-    if err
-        .get_type(py)
-        .is(py.get_type::<pyo3::exceptions::PyRuntimeError>())
-    {
-        return Err(err);
+/// `doc[key]` on a whole round-trip object: a child of its only document, or
+/// one of the documents of a stream.
+fn lookup_item(
+    slf: &Bound<'_, YAMLRocksDocument>,
+    key: &Bound<'_, PyAny>,
+) -> Result<Py<PyAny>, LookupFailure> {
+    let py = slf.py();
+    if read_document(slf)?.nodes.len() == 1 {
+        return get_child(py, slf, &[], key, stale_view);
     }
-    Ok(default.unwrap_or_else(|| py.None()))
+
+    // The index is converted with no borrow held: an `__index__` method is
+    // free to read this document.
+    let idx: usize = key.extract().map_err(|_| {
+        LookupFailure::Missing(pyo3::exceptions::PyKeyError::new_err(
+            "multi-document access requires an integer index",
+        ))
+    })?;
+    let this = read_document(slf)?;
+    let node = this
+        .nodes
+        .get(idx)
+        .ok_or_else(|| LookupFailure::Missing(index_out_of_range()))?;
+    // Anchors do not cross document boundaries, so a document's
+    // aliases resolve against its own anchors only.
+    let anchors = build_anchor_map(std::slice::from_ref(node));
+    Ok(wrap_node(
+        py,
+        slf,
+        document_prefix(this.nodes.len(), idx),
+        node,
+        &anchors,
+        this.schema,
+        this.resolve_timestamps,
+    )?)
 }
 
 /// Write `bytes` to `path`, surfacing IO errors as Python `OSError`.

@@ -178,19 +178,23 @@ print(doc.to_yaml().decode())
 #   - 80
 ```
 
-The copy carries data only. Comments, anchors, tags, and the source layout stay
-where they were written, and aliases are expanded. Scalars are written the way a
-freshly assigned value is, quoted where the target document's YAML version needs
-it. A mapping key that is itself a collection (`? [a, b]`) and a timestamp read
-with `OPT_TIMESTAMPS` survive the copy, though neither could be assigned as a
-plain Python value.
+The copy carries data, and reads back in the target as the same values the
+source reads as, type included. Each scalar keeps its own spelling and quoting
+where the target reads it the same way, and is rewritten from its value where
+the target's YAML version or timestamp setting would read it differently. A
+date copied into a document loaded without `OPT_TIMESTAMPS` becomes its text,
+since that document has no dates to read it back as. Comments, anchors, and the
+source layout stay where they were written, and aliases are expanded. A copy
+whose aliases would expand past the library's node limit raises `ValueError`
+and is not written.
 
 :::caution[One document, one writer at a time]
-A round-trip document is not locked for concurrent use. When two threads use the
-same document at once, or a key's or value's own Python code changes the
-document in the middle of an assignment, the call raises `RuntimeError` instead
-of writing to a document that moved under it. Give each thread its own document,
-or serialize access to a shared one with a lock.
+A round-trip document is not locked for concurrent use. Any number of threads
+can read it at the same time, but a write that overlaps another call on the
+same document, from another thread or from a key's or value's own Python code
+in the middle of an assignment, raises `RuntimeError` instead of writing to a
+document that moved under it. Guard a document that threads share and write to
+with a lock, or give each thread its own.
 :::
 
 ## Deleting keys

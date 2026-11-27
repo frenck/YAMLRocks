@@ -151,25 +151,25 @@ inspect a sub-tree, and assign through it to edit in place. When you want a
 detached, formatting-free copy instead, call `unwrap()` or `to_dict()`.
 :::
 
-### Assigning a view copies its data
+### Assigning plain data, not views
 
-A view, a node cursor, or a whole document can itself be assigned as a value,
-into the same document or another one. What gets stored is a copy of the data it
-holds at that moment, so later edits to either side do not show up in the other:
+A view or node cursor is a live handle onto its document, not data, so it
+cannot be assigned as a value; doing so raises `TypeError`. Assign its plain
+data instead: `to_dict()` of a view, or `.value` of a cursor.
 
 ```python
 import yamlrocks
 
 doc = yamlrocks.loads(
-    b"staging:  # the test box\n  host: test.local\n  ports: [80]\n",
+    b"staging:\n  host: test.local\n  ports: [80]\n",
     option=yamlrocks.OPT_ROUND_TRIP,
 )
 
-doc["production"] = doc["staging"]
+doc["production"] = doc["staging"].to_dict()
 doc["production"]["host"] = "example.com"
 
 print(doc.to_yaml().decode())
-# staging:  # the test box
+# staging:
 #   host: test.local
 #   ports: [80]
 # production:
@@ -177,16 +177,6 @@ print(doc.to_yaml().decode())
 #   ports:
 #   - 80
 ```
-
-The copy carries data, and reads back in the target as the same values the
-source reads as, type included. Each scalar keeps its own spelling and quoting
-where the target reads it the same way, and is rewritten from its value where
-the target's YAML version or timestamp setting would read it differently. A
-date copied into a document loaded without `OPT_TIMESTAMPS` becomes its text,
-since that document has no dates to read it back as. Comments, anchors, and the
-source layout stay where they were written, and aliases are expanded. A copy
-whose aliases would expand past the library's node limit raises `ValueError`
-and is not written.
 
 :::caution[One document, one writer at a time]
 A round-trip document is not locked for concurrent use. Any number of threads

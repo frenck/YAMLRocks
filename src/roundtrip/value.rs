@@ -10,9 +10,7 @@ use std::collections::HashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFloat, PyList, PyString, PyTuple};
 
-use crate::resolver::timestamp::Timestamp;
 use crate::resolver::{ResolvedValue, Schema};
-use crate::roundtrip::anchors::MAX_ALIAS_NODES;
 use crate::roundtrip::ast::{YamlNode, YamlNodeKind};
 use crate::scanner::ScalarStyle;
 
@@ -413,14 +411,7 @@ pub(crate) fn node_to_python_key(
 /// Maximum object nesting depth when building an AST node from a Python value.
 /// Bounds recursion so a deeply nested or cyclic (self-referential) value raises
 /// instead of overflowing the native stack. Mirrors the encoder's limit.
-pub(crate) const MAX_ASSIGN_DEPTH: u32 = 1000;
-
-/// The error for a value nested deeper than [`MAX_ASSIGN_DEPTH`].
-pub(crate) fn too_deeply_nested() -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(
-        "value is too deeply nested to assign (possible self-reference)",
-    )
-}
+const MAX_ASSIGN_DEPTH: u32 = 1000;
 
 /// How a document reads its scalars, and so how a freshly assigned scalar must
 /// be written to read back as the value it was given.
@@ -435,70 +426,17 @@ pub(crate) struct ScalarTarget {
     pub resolve_timestamps: bool,
 }
 
-/// What a scalar reads as in a document: the Rust counterpart of the Python
-/// value [`scalar_to_py`] builds, for comparing two readings without Python.
-#[derive(Debug)]
-pub(crate) enum ScalarRead {
-    Timestamp(Timestamp),
-    Value(ResolvedValue),
-}
-
-impl ScalarRead {
-    /// Whether two readings are the same Python value of the same type. Unlike
-    /// `==` on the values, a NaN reads the same as a NaN, and a big integer is
-    /// compared by its number rather than its spelling.
-    pub(crate) fn same_as(&self, other: &ScalarRead) -> bool {
-        match (self, other) {
-            (ScalarRead::Timestamp(a), ScalarRead::Timestamp(b)) => a == b,
-            (
-                ScalarRead::Value(ResolvedValue::Float(a)),
-                ScalarRead::Value(ResolvedValue::Float(b)),
-            ) => a == b || (a.is_nan() && b.is_nan()),
-            (
-                ScalarRead::Value(ResolvedValue::BigInt(a)),
-                ScalarRead::Value(ResolvedValue::BigInt(b)),
-            ) => canonical_decimal(a) == canonical_decimal(b),
-            (ScalarRead::Value(a), ScalarRead::Value(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-/// What the scalar `text`, written in `style` with `tag`, reads as in a document
-/// read the way `target` describes. Mirrors [`scalar_to_py`]; the timestamp
-/// parser only accepts what `datetime` can represent, so a parsed timestamp is
-/// always the `date`/`datetime` that function returns.
-pub(crate) fn read_scalar(
-    text: &str,
-    style: ScalarStyle,
-    tag: Option<&str>,
-    schema: Schema,
-    resolve_timestamps: bool,
-) -> ScalarRead {
-    if resolve_timestamps && style == ScalarStyle::Plain && tag.is_none() {
-        if let Some(timestamp) = crate::resolver::timestamp::parse(text) {
-            return ScalarRead::Timestamp(timestamp);
-        }
-    }
-    ScalarRead::Value(schema.resolve(text, style, tag))
-}
-
 /// Build a fresh AST node from a plain Python value (for assignment) into a
 /// document read the way `target` describes.
 ///
-/// A view, node cursor, or document of a round-trip object becomes a copy of
-/// the data it currently holds (see
-/// [`round_trip_data_copy`](crate::roundtrip::document::round_trip_data_copy)).
-/// Expanding the aliases of such a copy can multiply its size, so every copy
-/// made for one value draws from one shared node budget, the same
-/// [`MAX_ALIAS_NODES`] that bounds the anchor map.
+/// A round-trip object (a document, view, or node cursor) is not plain data
+/// and is refused (see [`round_trip_object_error`]).
 pub(crate) fn python_to_node(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     target: ScalarTarget,
 ) -> PyResult<YamlNode> {
-    let mut copy_budget = MAX_ALIAS_NODES;
-    python_to_node_depth(py, obj, target, 0, &mut copy_budget)
+    python_to_node_depth(py, obj, target, 0)
 }
 
 #[allow(clippy::only_used_in_recursion)]
@@ -507,12 +445,11 @@ fn python_to_node_depth(
     obj: &Bound<'_, PyAny>,
     target: ScalarTarget,
     depth: u32,
-    copy_budget: &mut usize,
 ) -> PyResult<YamlNode> {
     // Grow the native stack on demand so assigning a deeply nested object
     // (bounded by `MAX_ASSIGN_DEPTH`) cannot overflow a small thread stack; the
     // recursion re-enters here per level. See [`crate::stack`].
-    crate::stack::guard(|| python_to_node_depth_inner(py, obj, target, depth, copy_budget))
+    crate::stack::guard(|| python_to_node_depth_inner(py, obj, target, depth))
 }
 
 #[allow(clippy::only_used_in_recursion)]
@@ -521,13 +458,14 @@ fn python_to_node_depth_inner(
     obj: &Bound<'_, PyAny>,
     target: ScalarTarget,
     depth: u32,
-    copy_budget: &mut usize,
 ) -> PyResult<YamlNode> {
     use crate::scanner::Span;
     let span = Span::default();
 
     if depth >= MAX_ASSIGN_DEPTH {
-        return Err(too_deeply_nested());
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "value is too deeply nested to assign (possible self-reference)",
+        ));
     }
 
     if obj.is_none() {
@@ -559,13 +497,7 @@ fn python_to_node_depth_inner(
         let snapshot: Vec<Bound<'_, PyAny>> = list.iter().collect();
         let mut items = Vec::with_capacity(snapshot.len());
         for item in &snapshot {
-            items.push(python_to_node_depth(
-                py,
-                item,
-                target,
-                depth + 1,
-                copy_budget,
-            )?);
+            items.push(python_to_node_depth(py, item, target, depth + 1)?);
         }
         return Ok(YamlNode::new(YamlNodeKind::Sequence(items), span));
     }
@@ -578,21 +510,43 @@ fn python_to_node_depth_inner(
         let mut pairs = Vec::with_capacity(snapshot.len());
         for (k, v) in &snapshot {
             pairs.push((
-                python_to_node_depth(py, k, target, depth + 1, copy_budget)?,
-                python_to_node_depth(py, v, target, depth + 1, copy_budget)?,
+                python_to_node_depth(py, k, target, depth + 1)?,
+                python_to_node_depth(py, v, target, depth + 1)?,
             ));
         }
         return Ok(YamlNode::new(YamlNodeKind::Mapping(pairs), span));
     }
-    if let Some(copy) =
-        crate::roundtrip::document::round_trip_data_copy(obj, target, depth, copy_budget)
-    {
-        return copy;
+    if let Some(error) = round_trip_object_error(obj) {
+        return Err(error);
     }
 
     let repr = obj.repr()?.to_string();
     Err(pyo3::exceptions::PyTypeError::new_err(format!(
         "cannot convert {repr} to a YAML node"
+    )))
+}
+
+/// The error for assigning a round-trip object, or `None` for anything else.
+///
+/// A document, view, or node cursor is a live handle onto a document, not data,
+/// so it cannot be assigned as a value; its plain data can. The message names
+/// the type alone: a handle's `repr()` reads its document, and the error must
+/// not depend on that document being readable.
+fn round_trip_object_error(obj: &Bound<'_, PyAny>) -> Option<PyErr> {
+    use crate::roundtrip::document::{YAMLRocksDocument, YAMLRocksDocumentView, YAMLRocksNode};
+
+    let (name, plain_data) = if obj.is_instance_of::<YAMLRocksDocumentView>() {
+        ("YAMLRocksDocumentView", "view.to_dict()")
+    } else if obj.is_instance_of::<YAMLRocksNode>() {
+        ("YAMLRocksNode", "node.value")
+    } else if obj.is_instance_of::<YAMLRocksDocument>() {
+        ("YAMLRocksDocument", "doc.to_dict()")
+    } else {
+        return None;
+    };
+    Some(pyo3::exceptions::PyTypeError::new_err(format!(
+        "cannot convert a {name} to a YAML node; assign its plain data instead, \
+         such as {plain_data}"
     )))
 }
 
@@ -606,8 +560,8 @@ pub(crate) fn assigned_null() -> YamlNode {
 
 /// A freshly assigned scalar holding `value`, written so it reads back as that
 /// same value in a document read the way `target` describes: a number or
-/// boolean in its plain canonical spelling, and a string plain only where it
-/// reads back as that very string.
+/// boolean in its plain canonical spelling, and a string quoted where the
+/// document would otherwise read it as something else.
 pub(crate) fn assigned_scalar(value: ResolvedValue, target: ScalarTarget) -> YamlNode {
     let (text, style) = match value {
         ResolvedValue::Null => return assigned_null(),
@@ -616,23 +570,17 @@ pub(crate) fn assigned_scalar(value: ResolvedValue, target: ScalarTarget) -> Yam
             ScalarStyle::Plain,
         ),
         ResolvedValue::Int(i) => (i.to_string(), ScalarStyle::Plain),
-        // A big integer's resolved text keeps the source spelling's sign and
-        // separators (`+9_223_372_036_854_775_808`), which a YAML 1.2 reader
-        // does not take as an integer. Plain decimal digits read as one anywhere.
-        ResolvedValue::BigInt(digits) => (canonical_decimal(&digits), ScalarStyle::Plain),
+        ResolvedValue::BigInt(digits) => (digits, ScalarStyle::Plain),
         ResolvedValue::Float(f) => (crate::emit_util::canonical_float(f), ScalarStyle::Plain),
         ResolvedValue::String(s) => {
             let style = assigned_string_style(&s, target.double_quotes, target.schema);
             // The quoting rules are the fast encoder's, which know the schema but
-            // not whether this document reads timestamps. Checking the plain form
-            // against the document's own reading catches what they cannot, such
-            // as a date-shaped string under `OPT_TIMESTAMPS`.
-            let reads_back = style != ScalarStyle::Plain
-                || matches!(
-                    read_scalar(&s, ScalarStyle::Plain, None, target.schema, target.resolve_timestamps),
-                    ScalarRead::Value(ResolvedValue::String(ref read)) if *read == s
-                );
-            let style = if reads_back {
+            // not whether this document reads timestamps. Under `OPT_TIMESTAMPS`
+            // a plain date-shaped string would read back as a `date`.
+            let reads_as_date = style == ScalarStyle::Plain
+                && target.resolve_timestamps
+                && crate::resolver::timestamp::parse(&s).is_some();
+            let style = if !reads_as_date {
                 style
             } else if crate::emit_util::single_quotable(&s, target.double_quotes) {
                 ScalarStyle::SingleQuoted
@@ -646,22 +594,6 @@ pub(crate) fn assigned_scalar(value: ResolvedValue, target: ScalarTarget) -> Yam
         YamlNodeKind::Scalar(text, style),
         crate::scanner::Span::default(),
     )
-}
-
-/// The plain decimal spelling of an integer's digits: no `+` sign, no `_`
-/// separators, and no leading zeros. Every schema reads it as that integer.
-fn canonical_decimal(digits: &str) -> String {
-    let (negative, magnitude) = match digits.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, digits.strip_prefix('+').unwrap_or(digits)),
-    };
-    let magnitude: String = magnitude.chars().filter(|&c| c != '_').collect();
-    let magnitude = magnitude.trim_start_matches('0');
-    match (negative, magnitude) {
-        (_, "") => "0".to_owned(),
-        (true, magnitude) => format!("-{magnitude}"),
-        (false, magnitude) => magnitude.to_owned(),
-    }
 }
 
 /// Choose the scalar style for a freshly assigned string. Unquoted when it can be
@@ -693,24 +625,10 @@ pub(crate) fn assigned_string_style(
 
 #[cfg(test)]
 mod tests {
-    use super::{assigned_scalar, canonical_decimal, read_scalar, ScalarRead, ScalarTarget};
+    use super::{assigned_scalar, ScalarTarget};
     use crate::resolver::{ResolvedValue, Schema};
     use crate::roundtrip::ast::YamlNodeKind;
     use crate::scanner::ScalarStyle;
-
-    #[test]
-    fn a_big_integer_is_written_as_plain_decimal_digits() {
-        assert_eq!(
-            canonical_decimal("9_223_372_036_854_775_808"),
-            "9223372036854775808"
-        );
-        assert_eq!(
-            canonical_decimal("+0009223372036854775808"),
-            "9223372036854775808"
-        );
-        assert_eq!(canonical_decimal("-0_1"), "-1");
-        assert_eq!(canonical_decimal("-000"), "0");
-    }
 
     #[test]
     fn a_date_shaped_string_is_quoted_only_where_timestamps_are_read() {
@@ -727,17 +645,5 @@ mod tests {
         };
         assert_eq!(style_for(false), Some(ScalarStyle::Plain));
         assert_eq!(style_for(true), Some(ScalarStyle::DoubleQuoted));
-    }
-
-    #[test]
-    fn readings_compare_by_value_and_type() {
-        let read = |text, schema| read_scalar(text, ScalarStyle::Plain, None, schema, false);
-        assert!(read(".nan", Schema::Yaml12).same_as(&read(".NaN", Schema::Yaml12)));
-        assert!(!read("1", Schema::Yaml12).same_as(&read("1.0", Schema::Yaml12)));
-        assert!(!read("yes", Schema::Yaml12).same_as(&read("yes", Schema::Yaml11)));
-        assert!(matches!(
-            read_scalar("2024-01-02", ScalarStyle::Plain, None, Schema::Yaml12, true),
-            ScalarRead::Timestamp(_)
-        ));
     }
 }

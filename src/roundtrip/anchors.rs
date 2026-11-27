@@ -240,7 +240,7 @@ const MAX_ALIAS_DEPTH: usize = 100;
 /// spread over many anchors cannot multiply past it. Set far above any real
 /// round-trip document (config-sized, not bulk data) and below the fast path's
 /// `MAX_NODES`, because a round-trip `YamlNode` is much heavier than a `Value`.
-pub(crate) const MAX_ALIAS_NODES: usize = 1_000_000;
+const MAX_ALIAS_NODES: usize = 1_000_000;
 
 /// Collect every `&anchor` in `nodes` to an alias-free clone of its node, so
 /// `*alias` access resolves to the value it refers to (instead of `None`).

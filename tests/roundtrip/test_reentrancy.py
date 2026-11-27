@@ -6,7 +6,6 @@ being edited. Every such sequence either works or raises an ordinary exception;
 none may escape as a ``PanicException``, which ``except Exception`` cannot catch.
 """
 
-import datetime
 import threading
 
 import pytest
@@ -92,130 +91,105 @@ class CountingIndex:
 
 
 # -- Assigning views, cursors and documents ------------------------------------
+#
+# A view, cursor, or document is a live handle, not data, so it cannot be
+# assigned; its plain data can. The refusal raises before the document is
+# written, wherever the handle comes from and however deep it sits in the value.
+
+STREAM = b"a: 0\n---\nb: [1]\n"
 
 
-def test_assigning_a_view_of_the_same_document_copies_it():
-    """Assigning a view of the document into it stores a copy of its data."""
+def refused(target, key, value, plain_data):
+    """Assign `value` to `target[key]`, expecting the round-trip `TypeError`."""
+    with pytest.raises(
+        TypeError, match=f"assign its plain data instead, such as {plain_data}"
+    ):
+        target[key] = value
+
+
+def test_assigning_a_view_of_the_same_document_raises():
+    """`doc["c"] = doc["b"]` raises `TypeError` and writes nothing."""
     doc = load()
-    doc["c"] = doc["b"]
-    assert reread(doc) == {"a": [1], "b": {"x": 1}, "c": {"x": 1}}
+    refused(doc, "c", doc["b"], r"view\.to_dict\(\)")
+    assert doc.to_yaml() == SOURCE
 
 
-def test_assigning_the_root_cursor_copies_the_document_as_it_was():
-    """Assigning the root cursor stores the document's data from before the write."""
+def test_assigning_a_view_of_another_document_raises():
+    """A view of an unrelated document is refused the same way."""
+    other = load(b"settings: {debug: true}\n")
     doc = load()
-    doc["c"] = doc.node
-    assert reread(doc) == {"a": [1], "b": {"x": 1}, "c": {"a": [1], "b": {"x": 1}}}
+    refused(doc, "c", other["settings"], r"view\.to_dict\(\)")
+    assert doc.to_yaml() == SOURCE
 
 
-def test_setting_a_cursor_value_to_a_view_copies_it():
-    """`node.value = view` replaces the node with a copy of the view's data."""
+def test_assigning_a_view_nested_in_a_list_or_dict_raises():
+    """A view inside an assigned list or dict is refused, and nothing is written."""
     doc = load()
-    doc.node["a"].value = doc["b"]
-    assert reread(doc) == {"a": {"x": 1}, "b": {"x": 1}}
+    refused(doc, "c", [1, doc["b"]], r"view\.to_dict\(\)")
+    refused(doc, "c", {"inner": {"deeper": doc["b"]}}, r"view\.to_dict\(\)")
+    refused(doc["a"], 0, [doc["b"]], r"view\.to_dict\(\)")
+    assert doc.to_yaml() == SOURCE
 
 
-def test_a_view_nested_in_a_list_is_copied():
-    """A view inside an assigned list is copied like a top-level one."""
+def test_assigning_a_cursor_raises():
+    """A node cursor, as an item value or as `node.value`, is refused."""
     doc = load()
-    doc["c"] = [doc["b"]]
-    assert reread(doc) == {"a": [1], "b": {"x": 1}, "c": [{"x": 1}]}
+    refused(doc, "c", doc.node, r"node\.value")
+    refused(doc, "c", doc.node["a"][0], r"node\.value")
+    with pytest.raises(TypeError, match=r"such as view\.to_dict\(\)"):
+        doc.node["a"].value = doc["b"]
+    assert doc.to_yaml() == SOURCE
 
 
-def test_one_document_of_a_stream_can_be_assigned_into_another():
-    """A view of one document of a stream can be assigned into another."""
-    stream = load(b"a: 0\n---\nb: [1]\n")
-    stream[1]["copy"] = stream[0]
-    assert yamlrocks.loads_all(stream.to_yaml()) == [
-        {"a": 0},
-        {"b": [1], "copy": {"a": 0}},
-    ]
-
-
-def test_assigning_a_view_into_its_own_child_does_not_loop():
-    """A view assigned below itself is copied once, not nested forever."""
+def test_assigning_a_whole_document_raises():
+    """A whole round-trip document, of one document or a stream, is refused."""
     doc = load()
-    doc["b"]["self"] = doc["b"]
-    assert reread(doc)["b"] == {"x": 1, "self": {"x": 1}}
+    refused(doc, "c", load(), r"doc\.to_dict\(\)")
+    refused(doc, "c", load(STREAM), r"doc\.to_dict\(\)")
+    refused(doc, "c", doc, r"doc\.to_dict\(\)")
+    assert doc.to_yaml() == SOURCE
 
 
-def test_assigning_a_view_of_another_document_copies_it():
-    """A view of an unrelated document is copied into the target."""
-    source = load(b"settings: {debug: true, level: 3}\n")
-    target = load(b"app: {}\n")
-    target["app"]["settings"] = source["settings"]
-    assert reread(target) == {"app": {"settings": {"debug": True, "level": 3}}}
+def test_assigning_a_view_into_its_own_child_raises():
+    """A view assigned below itself is refused rather than nested."""
+    doc = load()
+    refused(doc["b"], "self", doc["b"], r"view\.to_dict\(\)")
+    assert doc.to_yaml() == SOURCE
 
 
-def test_assigning_a_scalar_cursor_copies_its_value():
-    """A cursor on a scalar copies as that scalar."""
-    doc = load(b"a: 'quoted'\nb: 0\n")
-    doc["b"] = doc.node["a"]
-    assert reread(doc) == {"a": "quoted", "b": "quoted"}
+def test_assigning_into_a_stream_raises():
+    """Views of a stream's documents are refused within it and as a whole document."""
+    stream = load(STREAM)
+    refused(stream[1], "copy", stream[0], r"view\.to_dict\(\)")
+    refused(stream, 0, stream[1], r"view\.to_dict\(\)")
+    assert stream.to_yaml() == STREAM
 
 
-def test_assigning_a_whole_stream_copies_its_documents_as_a_list():
-    """A multi-document object as a value copies as the list of its documents."""
-    stream = load(b"a: 1\n---\n- 2\n")
-    target = load(b"x: 0\n")
-    target["x"] = stream
-    assert reread(target) == {"x": [{"a": 1}, [2]]}
+def test_the_document_stays_usable_and_plain_data_assigns():
+    """After a refused assignment the document reads, writes, and emits normally."""
+    doc = load()
+    refused(doc, "c", doc["b"], r"view\.to_dict\(\)")
+    doc["c"] = doc["b"].to_dict()
+    doc["d"] = doc.node["a"][0].value
+    assert reread(doc) == {"a": [1], "b": {"x": 1}, "c": {"x": 1}, "d": 1}
 
 
-def test_a_copy_drops_comments_and_anchors_and_expands_aliases():
-    """A copy carries data only: comments and anchors stay behind, aliases expand."""
-    doc = load(b"base: &b {v: 1}  # shared\nref: *b\nsrc:\n  # note\n  k: *b\n")
-    doc["dst"] = doc["src"]
-    out = doc.to_yaml()
-    assert out.count(b"&b") == 1
-    assert out.count(b"# note") == 1
-    assert yamlrocks.loads(out)["dst"] == {"k": {"v": 1}}
+def test_a_refused_assignment_is_an_ordinary_exception():
+    """The refusal is caught by `except Exception`, never a `BaseException`."""
+    doc = load()
+    try:
+        doc["c"] = [doc["b"], doc.node, doc]
+    except Exception as error:
+        caught = error
+    assert isinstance(caught, TypeError)
 
 
-def test_a_copy_keeps_a_merge_key_a_merge_key():
-    """A copied `<<` still merges in the target."""
-    doc = load(b"base: &b {v: 1}\nsrc:\n  <<: *b\n  w: 2\n")
-    doc["dst"] = doc["src"]
-    assert reread(doc)["dst"] == {"v": 1, "w": 2}
-
-
-def test_a_copy_is_quoted_for_the_target_schema():
-    """A string copied into a YAML 1.1 document is quoted where 1.1 would retype it."""
-    source = load(b"flag: yes\n")
-    target = load(b"x: 0\n", option=RT | yamlrocks.OPT_YAML_1_1)
-    target["x"] = source.node["flag"]
-    assert yamlrocks.loads(target.to_yaml(), option=yamlrocks.OPT_YAML_1_1) == {
-        "x": "yes"
-    }
-
-
-def test_a_copy_round_trips_a_collection_key():
-    """A mapping key that is a sequence survives being copied through a view."""
-    doc = load(b"src:\n  ? [a, b]\n  : 1\n")
-    doc["dst"] = doc["src"]
-    assert reread(doc)["dst"] == {("a", "b"): 1}
-    assert load(doc.to_yaml()).to_dict()["dst"] == {("a", "b"): 1}
-
-
-def test_a_copy_round_trips_a_timestamp():
-    """A date read under OPT_TIMESTAMPS survives being copied through a view."""
-    option = RT | yamlrocks.OPT_TIMESTAMPS
-    doc = load(b"src: {when: 2024-01-02, at: 2024-01-02 03:04:05+01:00}\n", option)
-    doc["dst"] = doc["src"]
-    copied = load(doc.to_yaml(), option).to_dict()["dst"]
-    assert copied["when"] == datetime.date(2024, 1, 2)
-    assert copied["at"] == datetime.datetime(
-        2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(hours=1))
-    )
-
-
-def test_assigning_a_stale_view_raises_key_error():
-    """A view whose node is gone cannot be copied."""
+def test_assigning_a_stale_view_raises_type_error():
+    """A view whose node is gone is refused like any other view."""
     doc = load()
     view = doc["b"]
     del doc["b"]
-    with pytest.raises(KeyError, match="stale view"):
-        doc["c"] = view
+    refused(doc, "c", view, r"view\.to_dict\(\)")
     assert reread(doc) == {"a": [1]}
 
 
@@ -492,6 +466,80 @@ def test_a_new_mapping_key_is_converted_once():
     doc["m"][key] = "seven"
     assert (key.calls, IntKey.eq_calls) == (1, 1)
     assert reread(doc)["m"] == {"k": 1, 7: "seven"}
+
+
+# -- Key comparisons, null keys and removal --------------------------------------
+
+
+class FailingKey(str):
+    """A `str` subclass whose comparison raises."""
+
+    def __eq__(self, other):
+        raise ValueError("comparison failed")
+
+    __hash__ = str.__hash__
+
+
+@pytest.mark.parametrize("operation", ["set", "get", "get with default", "delete"])
+def test_a_key_comparison_that_raises_is_raised_and_changes_nothing(operation):
+    """A key whose `__eq__` raises propagates the error from every operation, with no edit made."""
+    doc = load(b"x: 1\ny: 2\n")
+    before = doc.to_yaml()
+    key = FailingKey("x")
+    with pytest.raises(ValueError, match="comparison failed"):
+        if operation == "set":
+            doc[key] = 5
+        elif operation == "get":
+            doc[key]
+        elif operation == "get with default":
+            doc.get(key, "default")
+        else:
+            del doc[key]
+    assert doc.to_yaml() == before
+
+
+def test_get_still_returns_the_default_for_a_missing_key():
+    """`get()` returns its default when the key is simply not there."""
+    doc = load(b"x: 1\n")
+    assert doc.get("missing", "default") == "default"
+    assert doc.get(7, "default") == "default"
+    assert doc.get(["a", "list"], "default") == "default"
+
+
+def test_a_null_key_is_replaced_and_removed_rather_than_duplicated():
+    """Assigning `doc[None]` twice keeps one null key, and `del doc[None]` removes it."""
+    doc = load(b"a: 1\n")
+    doc[None] = 1
+    doc[None] = 2
+    assert doc.to_dict() == {"a": 1, None: 2}
+    del doc[None]
+    assert doc.to_dict() == {"a": 1}
+
+
+def test_deleting_a_key_removes_every_duplicate_and_nothing_else():
+    """`del doc[1]` removes all interleaved duplicates of the key in one pass."""
+    doc = load(
+        "".join(f"1: a{item}\nk{item}: b{item}\n" for item in range(2000)).encode()
+    )
+    del doc[1]
+    assert doc.to_dict() == {f"k{item}": f"b{item}" for item in range(2000)}
+
+
+def test_a_date_shaped_string_stays_a_string_under_timestamps():
+    """A `str` that looks like a date is quoted when the document reads timestamps."""
+    option = RT | yamlrocks.OPT_TIMESTAMPS
+    doc = load(b"x: 0\n", option)
+    doc["x"] = {"day": "2024-01-02", "moment": "2024-01-02 03:04:05"}
+    assert load(doc.to_yaml(), option).to_dict() == {
+        "x": {"day": "2024-01-02", "moment": "2024-01-02 03:04:05"}
+    }
+
+
+def test_a_date_shaped_string_stays_plain_without_timestamps():
+    """Without OPT_TIMESTAMPS a date-shaped string is written plain, as before."""
+    doc = load(b"x: 0\n")
+    doc["x"] = "2024-01-02"
+    assert doc.to_yaml() == b"x: 2024-01-02\n"
 
 
 # -- No panic escapes ----------------------------------------------------------

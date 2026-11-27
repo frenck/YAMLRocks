@@ -752,7 +752,8 @@ impl RoundTripEmitter {
     /// A plain scalar's last line ending in a lone `?`, `-`, or `:` is not
     /// replayed either. In the source a flow indicator followed it (`?}`), but
     /// the emitter may write a line break there instead, and a lone indicator
-    /// at the end of a line opens a key, an entry, or a value.
+    /// at the end of a line opens a key, an entry, or a value. Tabs separate
+    /// it from the line start just as spaces do.
     fn raw_replay_fits(&self, raw: &str, value: &str, style: ScalarStyle) -> bool {
         match style {
             ScalarStyle::Literal | ScalarStyle::Folded => true,
@@ -761,7 +762,7 @@ impl RoundTripEmitter {
             ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => false,
             ScalarStyle::Plain
                 if raw.rsplit(['\n', '\r']).next().is_some_and(|last| {
-                    matches!(last.trim_start_matches(' '), "?" | "-" | ":")
+                    matches!(last.trim_start_matches([' ', '\t']), "?" | "-" | ":")
                 }) =>
             {
                 false
@@ -1456,6 +1457,11 @@ mod tests {
         let out = reemit(lone_indicator);
         assert!(!out.contains("\n  ?\n"), "lone `?` replayed:\n{out}");
         assert!(same_value(lone_indicator, &out));
+
+        // The same with a tab in front of the indicator, which is white space
+        // before it just as a space is.
+        let after_a_tab = "{k: 1, # c\n b: x\n \t?}\n";
+        assert!(same_value(after_a_tab, &reemit(after_a_tab)));
     }
 
     /// An edited plain or single-quoted value holding a line break is never

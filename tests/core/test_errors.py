@@ -183,3 +183,32 @@ def test_invalid_block_scalar_header_is_rejected(src):
 def test_valid_block_scalar_header_still_parses(src, expected):
     """Every well-formed chomping/indent header combination still loads."""
     assert yamlrocks.loads(src) == {"x": expected}
+
+
+# -- Node properties at a mapping's own indent --
+#
+# A mapping value's anchor or tag must be indented past its key. A property at
+# the key's own column therefore belongs to the next implicit key on its line
+# (`key:\n&a next: 1`, valid, see test_loads), or to nothing at all.
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        pytest.param(b"seq:\n&anchor\n- a\n- b\n", id="G9HC-anchor-before-sequence"),
+        pytest.param(b"key: &x\n!!map\n  a: b\n", id="H7J7-tag-before-mapping"),
+        pytest.param(b"k:\n&a\n", id="anchor-alone-at-end"),
+        pytest.param(b"k:\n&a\nc: 3\n", id="anchor-alone-on-its-line"),
+        pytest.param(b"k:\n!!str\n", id="tag-alone-at-end"),
+        pytest.param(b"k:\n&a c\n", id="anchored-scalar-without-colon"),
+        pytest.param(b"k:\n&a |\n x\n", id="anchored-block-scalar"),
+        pytest.param(b"a:\n  b:\n  &x\n  - c\n", id="nested-anchor-before-sequence"),
+    ],
+)
+def test_property_that_starts_no_key_is_rejected(src):
+    """Reject a property at a mapping's indent that does not start the next key."""
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="node property"):
+        yamlrocks.loads(src)
+
+    with pytest.raises(yamlrocks.YAMLRocksDecodeError, match="node property"):
+        yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP)

@@ -39,6 +39,15 @@ pub(crate) enum PathSeg {
     /// key, `&a foo: bar`); indexed access from Python never does, so a key
     /// node is reachable for discovery but not addressed by `doc["foo"]`.
     KeyNode(String),
+    /// The document at `index` of an object holding `documents` documents with
+    /// content. Only ever the first step of a path, and only into an object
+    /// holding several documents: a single-document object *is* its document,
+    /// so its paths start inside it (see [`document_index`]).
+    ///
+    /// The count pins the path to the stream it was taken from. Deleting a
+    /// document changes the count, so a handle taken before that resolves to
+    /// nothing, instead of to whichever document moved into its position.
+    Document { index: usize, documents: usize },
 }
 
 fn seg_from_key(key: &Bound<'_, PyAny>) -> PyResult<PathSeg> {
@@ -128,9 +137,9 @@ impl YAMLRocksDocument {
     fn __getitem__(slf: &Bound<'_, Self>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         let py = slf.py();
         let this = slf.borrow();
-        let anchors = build_anchor_map(&this.nodes);
         let schema = this.schema;
         if this.nodes.len() == 1 {
+            let anchors = build_anchor_map(&this.nodes);
             access_child(
                 py,
                 slf,
@@ -151,10 +160,13 @@ impl YAMLRocksDocument {
                 .nodes
                 .get(idx)
                 .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
+            // Anchors do not cross document boundaries, so a document's
+            // aliases resolve against its own anchors only.
+            let anchors = build_anchor_map(std::slice::from_ref(node));
             wrap_node(
                 py,
                 slf,
-                vec![PathSeg::Index(idx)],
+                document_prefix(this.nodes.len(), idx),
                 node,
                 &anchors,
                 schema,
@@ -359,14 +371,18 @@ impl YAMLRocksDocument {
     /// Unlike item access, indexing a `YAMLRocksNode` always yields another `YAMLRocksNode`, so
     /// comments, source location, style, anchor, and tag stay reachable down to
     /// individual scalars.
+    ///
+    /// In a stream of several documents this is the first document's root, as
+    /// with `locate` and `anchors`; `doc[n].node` reaches any other.
     #[getter]
     fn node(slf: &Bound<'_, Self>) -> PyResult<Py<YAMLRocksNode>> {
         let py = slf.py();
+        let path = slf.borrow().first_document_path(Vec::new());
         Py::new(
             py,
             YAMLRocksNode {
                 root: slf.clone().unbind(),
-                path: Vec::new(),
+                path,
             },
         )
     }
@@ -377,8 +393,9 @@ impl YAMLRocksDocument {
     #[getter]
     fn anchors(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
         let py = slf.py();
+        let this = slf.borrow();
         let mut found: Vec<(String, Vec<PathSeg>)> = Vec::new();
-        if let Some(root) = slf.borrow().nodes.first() {
+        if let Some(root) = this.nodes.first() {
             collect_anchor_paths(root, &mut Vec::new(), &mut found);
         }
         let dict = PyDict::new(py);
@@ -387,7 +404,7 @@ impl YAMLRocksDocument {
                 py,
                 YAMLRocksNode {
                     root: slf.clone().unbind(),
-                    path,
+                    path: this.first_document_path(path),
                 },
             )?;
             dict.set_item(name, node)?;
@@ -411,8 +428,8 @@ impl YAMLRocksDocument {
 
     /// Return the document as plain Python objects (a resolved snapshot).
     fn to_dict(&self, py: Python<'_>) -> Py<PyAny> {
-        let anchors = build_anchor_map(&self.nodes);
         if self.nodes.len() == 1 {
+            let anchors = build_anchor_map(&self.nodes);
             node_to_python_with(
                 py,
                 &self.nodes[0],
@@ -423,6 +440,8 @@ impl YAMLRocksDocument {
         } else {
             let list = PyList::empty(py);
             for node in &self.nodes {
+                // Each document resolves its aliases against its own anchors.
+                let anchors = build_anchor_map(std::slice::from_ref(node));
                 let _ = list.append(node_to_python_with(
                     py,
                     node,
@@ -449,8 +468,8 @@ impl YAMLRocksDocument {
     /// ```
     fn walk(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let mut out: Vec<(Vec<Py<PyAny>>, Py<PyAny>)> = Vec::new();
-        let anchors = build_anchor_map(&self.nodes);
         if let Some(root) = self.nodes.first() {
+            let anchors = build_anchor_map(std::slice::from_ref(root));
             collect_leaves(
                 py,
                 root,
@@ -498,7 +517,9 @@ impl YAMLRocksDocument {
         for item in path.try_iter()? {
             segments.push(seg_from_key(&item?)?);
         }
-        let resolved = resolve_path(&slf.borrow().nodes, &segments).is_some();
+        let this = slf.borrow();
+        let segments = this.first_document_path(segments);
+        let resolved = resolve_path(&this.nodes, &segments).is_some();
         if !resolved {
             return Ok(None);
         }
@@ -599,6 +620,15 @@ impl YAMLRocksDocument {
             stamp_yaml_1_2(&mut bytes);
         }
         bytes
+    }
+
+    /// The full path to a node at `inner` steps below the first document's
+    /// root, which the document-wide accessors (`node`, `locate`, `anchors`)
+    /// address.
+    fn first_document_path(&self, inner: Vec<PathSeg>) -> Vec<PathSeg> {
+        let mut path = document_prefix(self.nodes.len(), 0);
+        path.extend(inner);
+        path
     }
 
     /// Re-emit the document from the AST (used when modified or sourceless).
@@ -702,9 +732,9 @@ pub struct YAMLRocksDocumentView {
 impl YAMLRocksDocumentView {
     fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        let anchors = build_anchor_map(&doc.nodes);
+        let (document, node) =
+            resolve_in_document(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let anchors = build_anchor_map(document);
         container_len(py, node, doc.schema, &anchors, doc.resolve_timestamps)
     }
 
@@ -713,9 +743,9 @@ impl YAMLRocksDocumentView {
         let this = slf.borrow();
         let root = this.root.clone_ref(py);
         let doc = root.borrow(py);
-        let node = resolve_path(&doc.nodes, &this.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        let anchors = build_anchor_map(&doc.nodes);
+        let (document, node) =
+            resolve_in_document(&doc.nodes, &this.path).ok_or_else(stale_view)?;
+        let anchors = build_anchor_map(document);
         let root_bound = root.bind(py);
         access_child(
             py,
@@ -739,9 +769,8 @@ impl YAMLRocksDocumentView {
         let double_quotes = doc.double_quotes;
         let schema = doc.schema;
         let resolve_timestamps = doc.resolve_timestamps;
-        let anchors = build_anchor_map(&doc.nodes);
-        let node = resolve_path_mut(&mut doc.nodes, &self.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
+        let anchors = document_anchors(&doc.nodes, &self.path);
+        let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_view)?;
         set_child(
             py,
             node,
@@ -758,20 +787,24 @@ impl YAMLRocksDocumentView {
         let mut doc = self.root.borrow_mut(py);
         let schema = doc.schema;
         let resolve_timestamps = doc.resolve_timestamps;
-        let anchors = build_anchor_map(&doc.nodes);
+        let anchors = document_anchors(&doc.nodes, &self.path);
+        let (root, inner) =
+            split_document_mut(&mut doc.nodes, &self.path).ok_or_else(stale_view)?;
         // Guard against orphaning an alias elsewhere in the document (see the
         // top-level `__delitem__`): snapshot the tree and the already-dangling
-        // aliases, roll back only if the delete newly orphans one.
-        let snapshot = document_has_aliases(&doc.nodes)
-            .then(|| (doc.nodes.clone(), dangling_alias_names(&doc.nodes)));
-        let node = resolve_path_mut(&mut doc.nodes, &self.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
+        // aliases, roll back only if the delete newly orphans one. Aliases never
+        // reach across documents, so this document is the whole of what to check.
+        let snapshot = document_has_aliases(std::slice::from_ref(root)).then(|| {
+            let before = dangling_alias_names(std::slice::from_ref(root));
+            (root.clone(), before)
+        });
+        let node = descend_mut(root, inner).ok_or_else(stale_view)?;
         del_child(py, node, key, schema, &anchors, resolve_timestamps)?;
         if let Some((snapshot, before)) = snapshot {
-            let after = dangling_alias_names(&doc.nodes);
+            let after = dangling_alias_names(std::slice::from_ref(root));
             if let Some(name) = after.difference(&before).next() {
                 let name = name.clone();
-                doc.nodes = snapshot;
+                *root = snapshot;
                 return Err(dangling_alias_error(&name));
             }
         }
@@ -780,8 +813,7 @@ impl YAMLRocksDocumentView {
 
     fn __contains__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<bool> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
+        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_view)?;
         Ok(node_contains(node, key))
     }
 
@@ -799,9 +831,9 @@ impl YAMLRocksDocumentView {
 
     fn keys(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        let anchors = build_anchor_map(&doc.nodes);
+        let (document, node) =
+            resolve_in_document(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let anchors = build_anchor_map(document);
         node_keys(py, node, &anchors, doc.schema, doc.resolve_timestamps)
     }
 
@@ -821,9 +853,9 @@ impl YAMLRocksDocumentView {
     /// The resolved plain-Python value of this node (dict/list/scalar).
     fn unwrap(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        let anchors = build_anchor_map(&doc.nodes);
+        let (document, node) =
+            resolve_in_document(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let anchors = build_anchor_map(document);
         Ok(node_to_python_with(
             py,
             node,
@@ -842,8 +874,7 @@ impl YAMLRocksDocumentView {
     /// end_col)`.
     fn range(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
+        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_view)?;
         Ok(node_range(py, node))
     }
 
@@ -851,9 +882,9 @@ impl YAMLRocksDocumentView {
     /// relative to this node.
     fn walk(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
-        let anchors = build_anchor_map(&doc.nodes);
+        let (document, node) =
+            resolve_in_document(&doc.nodes, &self.path).ok_or_else(stale_view)?;
+        let anchors = build_anchor_map(document);
         let mut out: Vec<(Vec<Py<PyAny>>, Py<PyAny>)> = Vec::new();
         collect_leaves(
             py,
@@ -870,8 +901,7 @@ impl YAMLRocksDocumentView {
     /// Serialize just this nested node back to YAML bytes.
     fn to_yaml(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path)
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("stale view"))?;
+        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_view)?;
         Ok(PyBytes::new(py, &emit_roundtrip_with(node, doc.null_style))
             .into_any()
             .unbind())
@@ -912,8 +942,9 @@ impl YAMLRocksNode {
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_node)?;
-        let anchors = build_anchor_map(&doc.nodes);
+        let (document, node) =
+            resolve_in_document(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+        let anchors = build_anchor_map(document);
         Ok(node_to_python_with(
             py,
             node,
@@ -1120,10 +1151,13 @@ impl YAMLRocksNode {
     #[setter]
     fn set_comment_after(&self, py: Python<'_>, text: Option<String>) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);
-        let node = resolve_path_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
-        // The root (an empty path) renders a foot for any node kind; elsewhere
-        // only a non-empty block mapping or sequence does.
-        if text.is_some() && !self.path.is_empty() && !renders_foot(node) {
+        let (root, inner) =
+            split_document_mut(&mut doc.nodes, &self.path).ok_or_else(stale_node)?;
+        let is_document_root = inner.is_empty();
+        let node = descend_mut(root, inner).ok_or_else(stale_node)?;
+        // A document root renders a foot for any node kind; elsewhere only a
+        // non-empty block mapping or sequence does.
+        if text.is_some() && !is_document_root && !renders_foot(node) {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "comment_after is only supported on a block mapping, a block \
                  sequence, or the document root",
@@ -1174,8 +1208,11 @@ impl YAMLRocksNode {
                      or flow indicators (found {bad:?})"
                 )));
             }
-            if let Some(existing) = find_anchor_path(&doc.nodes, name) {
-                if existing != self.path {
+            // Anchor names are scoped to their document: another document of
+            // the stream may define the same name.
+            let split = split_document(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+            if let Some(existing) = find_anchor_path(split.document, name) {
+                if existing != split.inner {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
                         "anchor name '{name}' is already used by another node"
                     )));
@@ -1195,7 +1232,9 @@ impl YAMLRocksNode {
     /// with `anchor = "name"`.
     fn make_alias(&self, py: Python<'_>, name: String) -> PyResult<()> {
         let mut doc = self.root.borrow_mut(py);
-        let anchor_path = find_anchor_path(&doc.nodes, &name).ok_or_else(|| {
+        // An alias can only refer to an anchor of its own document.
+        let split = split_document(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+        let anchor_path = find_anchor_path(split.document, &name).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "no anchor '&{name}' is defined in this document"
             ))
@@ -1204,12 +1243,12 @@ impl YAMLRocksNode {
         // node contains the alias, so expanding it would re-insert that container
         // forever. `path_precedes` treats an ancestor as preceding its
         // descendant, so this case must be rejected explicitly.
-        if self.path.starts_with(&anchor_path) {
+        if split.inner.starts_with(&anchor_path) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "anchor '&{name}' contains the alias that would reference it, which is a cycle"
             )));
         }
-        if !path_precedes(&doc.nodes, &anchor_path, &self.path) {
+        if !path_precedes(split.document, &anchor_path, split.inner) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "anchor '&{name}' must be defined before the alias that references it"
             )));
@@ -1286,14 +1325,15 @@ impl YAMLRocksNode {
     #[getter]
     fn target(&self, py: Python<'_>) -> PyResult<Option<Py<YAMLRocksNode>>> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+        let split = split_document(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+        let node = split.node().ok_or_else(stale_node)?;
         if let YamlNodeKind::Alias(name) = &node.kind {
-            if let Some(path) = find_anchor_path(&doc.nodes, name) {
+            if let Some(inner) = find_anchor_path(split.document, name) {
                 return Ok(Some(Py::new(
                     py,
                     YAMLRocksNode {
                         root: self.root.clone_ref(py),
-                        path,
+                        path: split.path_to(inner),
                     },
                 )?));
             }
@@ -1306,21 +1346,20 @@ impl YAMLRocksNode {
     #[getter]
     fn aliases(&self, py: Python<'_>) -> PyResult<Vec<Py<YAMLRocksNode>>> {
         let doc = self.root.borrow(py);
-        let node = resolve_path(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+        let split = split_document(&doc.nodes, &self.path).ok_or_else(stale_node)?;
+        let node = split.node().ok_or_else(stale_node)?;
         let mut paths: Vec<Vec<PathSeg>> = Vec::new();
-        if let Some(name) = node.anchor.clone() {
-            if let Some(root) = doc.nodes.first() {
-                collect_alias_paths(root, &name, &mut Vec::new(), &mut paths);
-            }
+        if let (Some(name), Some(root)) = (&node.anchor, split.document.first()) {
+            collect_alias_paths(root, name, &mut Vec::new(), &mut paths);
         }
         paths
             .into_iter()
-            .map(|path| {
+            .map(|inner| {
                 Py::new(
                     py,
                     YAMLRocksNode {
                         root: self.root.clone_ref(py),
-                        path,
+                        path: split.path_to(inner),
                     },
                 )
             })
@@ -1336,10 +1375,9 @@ impl YAMLRocksNode {
         let py = slf.py();
         let this = slf.borrow();
         let mut doc = this.root.borrow_mut(py);
-        let name = match &resolve_path(&doc.nodes, &this.path)
-            .ok_or_else(stale_node)?
-            .kind
-        {
+        let (document, node) =
+            resolve_in_document(&doc.nodes, &this.path).ok_or_else(stale_node)?;
+        let name = match &node.kind {
             YamlNodeKind::Alias(name) => name.clone(),
             _ => {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
@@ -1347,9 +1385,10 @@ impl YAMLRocksNode {
                 ));
             }
         };
+        // The alias refers to an anchor of its own document.
         let mut refs: HashMap<String, &YamlNode> = HashMap::new();
-        for node in &doc.nodes {
-            collect_anchor_refs(node, &mut refs);
+        for root in document {
+            collect_anchor_refs(root, &mut refs);
         }
         let target = refs.get(&name).ok_or_else(|| {
             pyo3::exceptions::PyKeyError::new_err(format!("alias *{name} has no anchor to detach"))
@@ -1375,7 +1414,7 @@ impl YAMLRocksNode {
         let py = slf.py();
         let this = slf.borrow();
         let doc = this.root.borrow(py);
-        let base = alias_target_path(&doc.nodes, &this.path).unwrap_or_else(|| this.path.clone());
+        let base = alias_followed_path(&doc.nodes, &this.path);
         let node = resolve_path(&doc.nodes, &base).ok_or_else(stale_node)?;
         let seg = seg_from_key(key)?;
         child_ref(node, &seg).ok_or_else(|| key_error(node, key))?;
@@ -1392,7 +1431,7 @@ impl YAMLRocksNode {
 
     fn __contains__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<bool> {
         let doc = self.root.borrow(py);
-        let base = alias_target_path(&doc.nodes, &self.path).unwrap_or_else(|| self.path.clone());
+        let base = alias_followed_path(&doc.nodes, &self.path);
         let node = resolve_path(&doc.nodes, &base).ok_or_else(stale_node)?;
         Ok(node_contains(node, key))
     }
@@ -1406,9 +1445,33 @@ impl YAMLRocksNode {
     }
 }
 
-/// Error for a `YAMLRocksNode`/`YAMLRocksDocumentView` whose target no longer exists.
+/// Error for a `YAMLRocksNode` whose target no longer exists.
 fn stale_node() -> PyErr {
     pyo3::exceptions::PyKeyError::new_err("stale node")
+}
+
+/// Error for a `YAMLRocksDocumentView` whose target no longer exists.
+fn stale_view() -> PyErr {
+    pyo3::exceptions::PyKeyError::new_err("stale view")
+}
+
+/// The path to index below for a cursor at `path`: the anchor an alias there
+/// points at, looked up in the alias's own document, or `path` itself for
+/// anything that is not an alias with a defined anchor.
+fn alias_followed_path(roots: &[YamlNode], path: &[PathSeg]) -> Vec<PathSeg> {
+    split_document(roots, path)
+        .and_then(|split| {
+            let inner = alias_target_path(split.document, split.inner)?;
+            Some(split.path_to(inner))
+        })
+        .unwrap_or_else(|| path.to_vec())
+}
+
+/// The anchors of the document a path addresses, which are the only ones its
+/// aliases can refer to. Empty when the path no longer addresses a document;
+/// resolving the node itself then reports the stale handle.
+fn document_anchors(roots: &[YamlNode], path: &[PathSeg]) -> HashMap<String, YamlNode> {
+    split_document(roots, path).map_or_else(HashMap::new, |split| build_anchor_map(split.document))
 }
 
 /// The presentation-style name reported by `YAMLRocksNode.style`.
@@ -1550,10 +1613,12 @@ pub(crate) enum HeadScope {
 /// second copy of this walk, and the two then disagree about which node a path
 /// reached.
 fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<(&'a YamlNode, HeadScope)> {
-    match path.split_last() {
-        None => roots.first().map(|node| (node, HeadScope::All)),
+    let split = split_document(roots, path)?;
+    let root = split.document.first()?;
+    match split.inner.split_last() {
+        None => Some((root, HeadScope::All)),
         Some((PathSeg::Key(k), parent)) => {
-            let parent_node = resolve_path(roots, parent)?;
+            let parent_node = descend(root, parent)?;
             let YamlNodeKind::Mapping(pairs) = &parent_node.kind else {
                 return None;
             };
@@ -1570,11 +1635,13 @@ fn resolve_head<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<(&'a Yaml
         // A sequence element holds its own head comment, and owns the block
         // above its dash; a key node holds its own with nothing to divide.
         Some((PathSeg::Index(_), _)) => {
-            resolve_path(roots, path).map(|node| (node, head_scope_of_item(node)))
+            descend(root, split.inner).map(|node| (node, head_scope_of_item(node)))
         }
         Some((PathSeg::KeyNode(_), _)) => {
-            resolve_path(roots, path).map(|node| (node, HeadScope::All))
+            descend(root, split.inner).map(|node| (node, HeadScope::All))
         }
+        // A document is only ever selected by the first step, never below it.
+        Some((PathSeg::Document { .. }, _)) => None,
     }
 }
 
@@ -1615,10 +1682,11 @@ fn resolve_head_mut<'a>(
     roots: &'a mut [YamlNode],
     path: &[PathSeg],
 ) -> Option<(&'a mut YamlNode, HeadScope)> {
-    match path.split_last() {
-        None => roots.first_mut().map(|node| (node, HeadScope::All)),
+    let (root, inner) = split_document_mut(roots, path)?;
+    match inner.split_last() {
+        None => Some((root, HeadScope::All)),
         Some((PathSeg::Key(k), parent)) => {
-            let parent_node = resolve_path_mut(roots, parent)?;
+            let parent_node = descend_mut(root, parent)?;
             // Mirror [`resolve_head`]: the last occurrence is the effective key,
             // and the first pair's head comment lives on the mapping node.
             let idx = match &parent_node.kind {
@@ -1636,30 +1704,124 @@ fn resolve_head_mut<'a>(
                 None
             }
         }
-        Some((PathSeg::Index(_), _)) => resolve_path_mut(roots, path).map(|node| {
+        Some((PathSeg::Index(_), _)) => descend_mut(root, inner).map(|node| {
             let scope = head_scope_of_item(node);
             (node, scope)
         }),
         Some((PathSeg::KeyNode(_), _)) => {
-            resolve_path_mut(roots, path).map(|node| (node, HeadScope::All))
+            descend_mut(root, inner).map(|node| (node, HeadScope::All))
         }
+        Some((PathSeg::Document { .. }, _)) => None,
     }
+}
+
+/// Which of `documents` roots a path addresses, and how many of its leading
+/// steps select that root.
+///
+/// This is the one place that decides how a path starts. A single-document
+/// object is that document, so its paths start inside it. An object holding
+/// several documents is a list of them, so its paths start with the
+/// [`PathSeg::Document`] that picks one, taken while the object held exactly
+/// that many. A path of any other shape was taken before a document was
+/// deleted; it addresses nothing, because the steps after it would now be
+/// read inside a different document.
+fn document_index(documents: usize, path: &[PathSeg]) -> Option<(usize, usize)> {
+    match path.first() {
+        Some(&PathSeg::Document {
+            index,
+            documents: taken_from,
+        }) => (documents > 1 && taken_from == documents && index < documents).then_some((index, 1)),
+        _ => (documents == 1).then_some((0, 0)),
+    }
+}
+
+/// The leading steps of a path into the document at `index` of an object
+/// holding `documents` roots: nothing for a single document, otherwise the
+/// [`PathSeg::Document`] step that selects it. The inverse of [`document_index`].
+fn document_prefix(documents: usize, index: usize) -> Vec<PathSeg> {
+    if documents > 1 {
+        vec![PathSeg::Document { index, documents }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// A path split at the document it addresses.
+struct DocumentPath<'a, 'p> {
+    /// The addressed document's root, as the one-root slice that the anchor
+    /// helpers take: anchors and aliases never cross a document boundary.
+    document: &'a [YamlNode],
+    /// The steps that select the document (empty for a single document).
+    prefix: &'p [PathSeg],
+    /// The steps below the document's root.
+    inner: &'p [PathSeg],
+}
+
+impl<'a> DocumentPath<'a, '_> {
+    /// The full path to a node at `inner` steps below this document's root.
+    fn path_to(&self, inner: Vec<PathSeg>) -> Vec<PathSeg> {
+        let mut path = self.prefix.to_vec();
+        path.extend(inner);
+        path
+    }
+
+    /// The node this path addresses, if it still exists.
+    fn node(&self) -> Option<&'a YamlNode> {
+        descend(self.document.first()?, self.inner)
+    }
+}
+
+/// Split `path` at the document of `roots` it addresses (see [`document_index`]).
+fn split_document<'a, 'p>(
+    roots: &'a [YamlNode],
+    path: &'p [PathSeg],
+) -> Option<DocumentPath<'a, 'p>> {
+    let (index, selecting) = document_index(roots.len(), path)?;
+    let (prefix, inner) = path.split_at(selecting);
+    Some(DocumentPath {
+        document: std::slice::from_ref(roots.get(index)?),
+        prefix,
+        inner,
+    })
+}
+
+/// Mutable counterpart to [`split_document`]: the addressed document's root and
+/// the steps below it.
+fn split_document_mut<'a, 'p>(
+    roots: &'a mut [YamlNode],
+    path: &'p [PathSeg],
+) -> Option<(&'a mut YamlNode, &'p [PathSeg])> {
+    let (index, selecting) = document_index(roots.len(), path)?;
+    Some((roots.get_mut(index)?, &path[selecting..]))
+}
+
+/// The node a path addresses, together with the one-root slice of the document
+/// it sits in (for the anchor map that resolves its aliases).
+fn resolve_in_document<'a>(
+    roots: &'a [YamlNode],
+    path: &[PathSeg],
+) -> Option<(&'a [YamlNode], &'a YamlNode)> {
+    let split = split_document(roots, path)?;
+    Some((split.document, split.node()?))
 }
 
 pub(crate) fn resolve_path<'a>(roots: &'a [YamlNode], path: &[PathSeg]) -> Option<&'a YamlNode> {
-    let mut node = roots.first()?;
-    for seg in path {
-        node = child_ref(node, seg)?;
-    }
-    Some(node)
+    resolve_in_document(roots, path).map(|(_, node)| node)
 }
 
 fn resolve_path_mut<'a>(roots: &'a mut [YamlNode], path: &[PathSeg]) -> Option<&'a mut YamlNode> {
-    let mut node = roots.get_mut(0)?;
-    for seg in path {
-        node = child_ref_mut(node, seg)?;
-    }
-    Some(node)
+    let (root, inner) = split_document_mut(roots, path)?;
+    descend_mut(root, inner)
+}
+
+/// Follow `steps` down from `node`.
+fn descend<'a>(node: &'a YamlNode, steps: &[PathSeg]) -> Option<&'a YamlNode> {
+    steps.iter().try_fold(node, child_ref)
+}
+
+/// Mutable counterpart to [`descend`].
+fn descend_mut<'a>(node: &'a mut YamlNode, steps: &[PathSeg]) -> Option<&'a mut YamlNode> {
+    steps.iter().try_fold(node, child_ref_mut)
 }
 
 /// Resolve a single path segment to the child node it addresses: a mapping value
@@ -2215,8 +2377,12 @@ fn leaves_to_list(py: Python<'_>, leaves: Vec<(Vec<Py<PyAny>>, Py<PyAny>)>) -> P
 
 #[cfg(test)]
 mod tests {
-    use super::{keep_empty_documents, stamp_yaml_1_2};
+    use super::{
+        document_index, document_prefix, keep_empty_documents, resolve_head, resolve_head_mut,
+        resolve_path, resolve_path_mut, stamp_yaml_1_2, HeadScope, PathSeg,
+    };
     use crate::encode::NullStyle;
+    use crate::roundtrip::ast::{YamlNode, YamlNodeKind};
     use crate::roundtrip::composer::compose;
     use crate::roundtrip::emit::emit_roundtrip_all_with;
 
@@ -2341,5 +2507,110 @@ mod tests {
         let mut expected = bom.to_vec();
         expected.extend_from_slice(b"%YAML 1.2\n---\na: 1\n");
         assert_eq!(stamp(&input), expected);
+    }
+
+    fn key(name: &str) -> PathSeg {
+        PathSeg::Key(name.to_owned())
+    }
+
+    /// The text of the scalar a path resolves to, if it resolves to one.
+    fn scalar_at(roots: &[YamlNode], path: &[PathSeg]) -> Option<String> {
+        match &resolve_path(roots, path)?.kind {
+            YamlNodeKind::Scalar(text, _) => Some(text.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_single_document_path_starts_inside_the_document() {
+        assert_eq!(document_index(1, &[]), Some((0, 0)));
+        assert_eq!(document_index(1, &[key("a")]), Some((0, 0)));
+        assert_eq!(document_index(1, &[PathSeg::Index(3)]), Some((0, 0)));
+    }
+
+    #[test]
+    fn a_stream_path_starts_with_the_document_it_selects() {
+        let second = PathSeg::Document {
+            index: 1,
+            documents: 2,
+        };
+        assert_eq!(document_index(2, &[second.clone(), key("b")]), Some((1, 1)));
+        assert_eq!(document_prefix(2, 1), vec![second]);
+        assert_eq!(document_prefix(1, 0), Vec::<PathSeg>::new());
+    }
+
+    #[test]
+    fn a_stream_path_without_a_document_step_addresses_nothing() {
+        assert_eq!(document_index(2, &[]), None);
+        assert_eq!(document_index(2, &[PathSeg::Index(1)]), None);
+        assert_eq!(document_index(0, &[]), None);
+    }
+
+    #[test]
+    fn a_path_taken_before_a_document_was_deleted_addresses_nothing() {
+        let taken_from_three = PathSeg::Document {
+            index: 0,
+            documents: 3,
+        };
+        // Two documents left: index 0 now holds what was the second one.
+        assert_eq!(
+            document_index(2, std::slice::from_ref(&taken_from_three)),
+            None
+        );
+        // One document left: the steps would otherwise be read inside it.
+        assert_eq!(document_index(1, &[taken_from_three]), None);
+        let out_of_range = PathSeg::Document {
+            index: 2,
+            documents: 2,
+        };
+        assert_eq!(document_index(2, &[out_of_range]), None);
+    }
+
+    #[test]
+    fn resolves_a_path_inside_the_selected_document() {
+        let roots = compose("a: 1\n---\nb: [x, y]\n").unwrap();
+        let second = document_prefix(roots.len(), 1);
+        let mut path = second.clone();
+        path.extend([key("b"), PathSeg::Index(1)]);
+        assert_eq!(scalar_at(&roots, &path).as_deref(), Some("y"));
+        let mut first = document_prefix(roots.len(), 0);
+        first.push(key("a"));
+        assert_eq!(scalar_at(&roots, &first).as_deref(), Some("1"));
+        // `b` exists only in the second document.
+        let mut wrong_document = document_prefix(roots.len(), 0);
+        wrong_document.push(key("b"));
+        assert!(resolve_path(&roots, &wrong_document).is_none());
+        assert!(std::ptr::eq(
+            resolve_path(&roots, &second).unwrap(),
+            &roots[1]
+        ));
+    }
+
+    #[test]
+    fn a_stream_path_goes_stale_once_a_document_is_deleted() {
+        let mut roots = compose("- a\n- b\n---\n- p\n- q\n").unwrap();
+        let mut path = document_prefix(roots.len(), 1);
+        path.push(PathSeg::Index(1));
+        assert_eq!(scalar_at(&roots, &path).as_deref(), Some("q"));
+        roots.remove(0);
+        // Without the count, `[1]` would now read `b` inside the survivor.
+        assert!(resolve_path(&roots, &path).is_none());
+        assert!(resolve_path_mut(&mut roots, &path).is_none());
+    }
+
+    #[test]
+    fn resolves_the_head_comment_of_a_stream_document() {
+        let mut roots = compose("a: 1\n---\n# above b\nb: 2\nc: 3\n").unwrap();
+        let second = document_prefix(roots.len(), 1);
+        let (root, scope) = resolve_head(&roots, &second).unwrap();
+        assert!(std::ptr::eq(root, &roots[1]));
+        assert!(scope == HeadScope::All);
+        let mut first_key = second.clone();
+        first_key.push(key("b"));
+        let (holder, _) = resolve_head(&roots, &first_key).unwrap();
+        assert!(std::ptr::eq(holder, &roots[1]));
+        let mut later_key = second;
+        later_key.push(key("c"));
+        assert!(resolve_head_mut(&mut roots, &later_key).is_some());
     }
 }

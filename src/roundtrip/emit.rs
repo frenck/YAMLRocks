@@ -48,6 +48,10 @@ fn run_emitter(
         return emitter.finish();
     }
 
+    // Release the first attempt's output before writing the stream again, so
+    // a large document does not hold two copies of it.
+    drop(emitter);
+
     let mut emitter = RoundTripEmitter::new(null_style, dump);
     emitter.replay_unterminated_keep = false;
     write(&mut emitter);

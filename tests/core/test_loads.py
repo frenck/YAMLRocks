@@ -87,6 +87,50 @@ def test_block_mapping_empty_key_is_null():
     assert yamlrocks.loads(b": 1", option=yamlrocks.OPT_ANNOTATED) == {None: 1}
 
 
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        pytest.param(b"k:\n&a c: 3\n", {"k": None, "c": 3}, id="anchored-key"),
+        pytest.param(b"k:\n!!str c: 3\n", {"k": None, "c": 3}, id="tagged-key"),
+        pytest.param(b'k:\n&a "c": 3\n', {"k": None, "c": 3}, id="anchored-quoted-key"),
+        pytest.param(
+            b"k:\n&a !!str c: 3\n", {"k": None, "c": 3}, id="anchored-tagged-key"
+        ),
+        pytest.param(b"k:\n&a : 3\n", {"k": None, None: 3}, id="anchored-empty-key"),
+        pytest.param(
+            b"foo: !!str\n!!str : bar\n", {"foo": "", "": "bar"}, id="WZ62-out"
+        ),
+        pytest.param(
+            b"a: 1\nb:\n&anchor c: 3\n", {"a": 1, "b": None, "c": 3}, id="ZWK4-out"
+        ),
+        pytest.param(
+            b"a: 1\n? b\n&anchor c: 3\n",
+            {"a": 1, "b": None, "c": 3},
+            id="ZWK4-explicit",
+        ),
+        pytest.param(
+            b"a:\n  b:\n  &x c: 1\n", {"a": {"b": None, "c": 1}}, id="nested-key"
+        ),
+        pytest.param(
+            b"a:\n  b:\n&x c: 1\n", {"a": {"b": None}, "c": 1}, id="dedented-key"
+        ),
+        pytest.param(
+            b"- &d :\n  &c x: 1\n", [{None: None, "x": 1}], id="sequence-item"
+        ),
+    ],
+)
+def test_property_at_key_indent_starts_the_next_key(src, expected):
+    """A property at a mapping's indent after an empty value starts the next key.
+
+    It cannot belong to the empty value, whose properties must be indented past
+    its key, so it is the next implicit key's. The YAML test suite writes this
+    form itself, in the expected output of its cases WZ62 and ZWK4.
+    """
+    assert yamlrocks.loads(src) == expected
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_ANNOTATED) == expected
+    assert yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_yaml() == src
+
+
 def test_flow_sequence_single_pair_empty_key_round_trips():
     """An empty-key flow single pair (`[: v]`) survives the round-trip path.
 

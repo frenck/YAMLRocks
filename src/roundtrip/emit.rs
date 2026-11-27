@@ -20,11 +20,37 @@ const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 /// Emit a single document AST to YAML bytes, rendering synthetic (edited-in)
 /// nulls in `null_style`.
 pub fn emit_roundtrip_with(node: &YamlNode, null_style: NullStyle) -> Vec<u8> {
-    let mut emitter = RoundTripEmitter::new(null_style);
-    if node.leading_bom {
-        emitter.buf.extend_from_slice(BOM);
+    run_emitter(null_style, DumpConfig::default(), |emitter| {
+        if node.leading_bom {
+            emitter.buf.extend_from_slice(BOM);
+        }
+        emitter.emit_document(node);
+    })
+}
+
+/// Run `write` on a fresh emitter and return what it wrote.
+///
+/// A keep-chomped block scalar (`|+`) that ended the input without a line
+/// break is replayed from its source, and the emitter drops the line break it
+/// closes that line with again in [`finish`](RoundTripEmitter::finish). When
+/// anything follows it in the output, though (a `:` for an explicit key, a key
+/// added after it), that line break stays and keep chomping adds it to the
+/// value. That is only known once the output is written, so the stream is
+/// then written once more with that scalar rebuilt from its value.
+fn run_emitter(
+    null_style: NullStyle,
+    dump: DumpConfig,
+    write: impl Fn(&mut RoundTripEmitter),
+) -> Vec<u8> {
+    let mut emitter = RoundTripEmitter::new(null_style, dump);
+    write(&mut emitter);
+    if !emitter.unterminated_keep_followed() {
+        return emitter.finish();
     }
-    emitter.emit_document(node);
+
+    let mut emitter = RoundTripEmitter::new(null_style, dump);
+    emitter.replay_unterminated_keep = false;
+    write(&mut emitter);
     emitter.finish()
 }
 
@@ -36,7 +62,13 @@ pub fn emit_roundtrip_with(node: &YamlNode, null_style: NullStyle) -> Vec<u8> {
 ///
 /// [`EmptyDocuments`]: super::ast::EmptyDocuments
 pub fn emit_roundtrip_all_with(nodes: &[YamlNode], null_style: NullStyle) -> Vec<u8> {
-    let mut emitter = RoundTripEmitter::new(null_style);
+    run_emitter(null_style, DumpConfig::default(), |emitter| {
+        write_stream(emitter, nodes);
+    })
+}
+
+/// Write `nodes` as a stream of documents, with the empty documents they carry.
+fn write_stream(emitter: &mut RoundTripEmitter, nodes: &[YamlNode]) {
     if nodes.first().is_some_and(|n| n.leading_bom) {
         emitter.buf.extend_from_slice(BOM);
     }
@@ -70,8 +102,6 @@ pub fn emit_roundtrip_all_with(nodes: &[YamlNode], null_style: NullStyle) -> Vec
             stream_end = emitter.emit_empty_document(document, stream_end);
         }
     }
-
-    emitter.finish()
 }
 
 /// How the stream emitted so far ends, which decides what separator the next
@@ -132,16 +162,15 @@ pub struct DumpConfig {
 /// by the `represent` emitter path, which builds edited-in nodes and wants a
 /// PyYAML-style dump rather than round-trip fidelity.
 pub fn emit_roundtrip_dump(node: &YamlNode, null_style: NullStyle, dump: DumpConfig) -> Vec<u8> {
-    let mut emitter = RoundTripEmitter::new(null_style);
-    emitter.dump = dump;
-    if node.leading_bom {
-        emitter.buf.extend_from_slice(BOM);
-    }
-    emitter.emit_document(node);
-    if dump.explicit_end {
-        emitter.buf.extend_from_slice(b"...\n");
-    }
-    emitter.finish()
+    run_emitter(null_style, dump, |emitter| {
+        if node.leading_bom {
+            emitter.buf.extend_from_slice(BOM);
+        }
+        emitter.emit_document(node);
+        if dump.explicit_end {
+            emitter.buf.extend_from_slice(b"...\n");
+        }
+    })
 }
 
 struct RoundTripEmitter {
@@ -160,6 +189,12 @@ struct RoundTripEmitter {
     /// that reaches here as a bare plain scalar.
     flow_depth: usize,
     emitting_key: bool,
+    /// The key being written right before its `:` (see
+    /// [`emit_inline_key`](Self::emit_inline_key)), compared by address. The
+    /// `:` that follows changes how its text reads: a lone `-` or `?` there is
+    /// a plain scalar (`-: v`), where anywhere else it would open an entry or
+    /// a key. Only that key itself, not the content of a flow collection key.
+    key_before_colon: Option<*const YamlNode>,
     /// The comments of the node whose inline comment was written last. A block
     /// scalar's inline comment can be written in two places: on the `key:` line
     /// when the scalar starts below it, or on the scalar's own header line. Both
@@ -172,6 +207,14 @@ struct RoundTripEmitter {
     /// line break is dropped again in [`finish`](Self::finish): under keep
     /// chomping (`|+`) it would otherwise become part of the scalar's value.
     unterminated_raw_end: Option<usize>,
+    /// Whether the block scalar at [`unterminated_raw_end`](Self::unterminated_raw_end)
+    /// is keep-chomped (`|+`), so a line break written after it would change
+    /// its value.
+    unterminated_raw_keeps: bool,
+    /// Whether a keep-chomped block scalar that ended the input without a line
+    /// break may be replayed from its source. Cleared for the second pass of
+    /// [`run_emitter`], which rebuilds it from its value instead.
+    replay_unterminated_keep: bool,
     /// The lowest column a continuation line of a multi-line plain or quoted
     /// scalar may start at in the block position being written: one past the
     /// column of the mapping key or sequence dash that holds it, zero at the
@@ -184,17 +227,30 @@ struct RoundTripEmitter {
 }
 
 impl RoundTripEmitter {
-    fn new(null_style: NullStyle) -> Self {
+    fn new(null_style: NullStyle, dump: DumpConfig) -> Self {
         Self {
             buf: Vec::with_capacity(256),
-            dump: DumpConfig::default(),
+            dump,
             null_style,
             flow_depth: 0,
             emitting_key: false,
+            key_before_colon: None,
             inline_comment_written: None,
             unterminated_raw_end: None,
+            unterminated_raw_keeps: false,
+            replay_unterminated_keep: true,
             continuation_floor: 0,
         }
+    }
+
+    /// Whether a keep-chomped block scalar replayed without its final line
+    /// break has output after it, which the line break closing its line then
+    /// joins (see [`run_emitter`]).
+    fn unterminated_keep_followed(&self) -> bool {
+        self.unterminated_raw_keeps
+            && self
+                .unterminated_raw_end
+                .is_some_and(|end| self.buf.len() > end + 1)
     }
 
     /// Spaces per nesting level for mappings and block scalars under a key: the
@@ -384,13 +440,11 @@ impl RoundTripEmitter {
             self.emit_blank_before(&key.comments);
             self.emit_head(&key.comments, indent);
             self.write_indent(indent);
-            if key_needs_explicit(key) || synthetic_key_needs_explicit(key, i == 0) {
+            if key_needs_explicit(key, i == 0) {
                 self.emit_explicit_key_pair(key, val, indent);
                 continue;
             }
-            self.emit_anchor_tag(key);
-            self.emit_key(key, indent);
-            self.end_inline_key(key);
+            self.emit_inline_key(key, indent);
             self.emit_value_after_colon(val, indent);
         }
     }
@@ -407,22 +461,32 @@ impl RoundTripEmitter {
                 self.emit_head(&key.comments, indent);
                 self.write_indent(indent);
             }
-            if key_needs_explicit(key) || synthetic_key_needs_explicit(key, i == 0) {
+            if key_needs_explicit(key, i == 0) {
                 self.emit_explicit_key_pair(key, val, indent);
                 continue;
             }
-            self.emit_anchor_tag(key);
-            self.emit_key(key, indent);
-            self.end_inline_key(key);
+            self.emit_inline_key(key, indent);
             self.emit_value_after_colon(val, indent);
         }
     }
 
-    /// Write the `:` that closes an inline mapping key. An alias key needs a
-    /// space before it: anchor and alias names may contain `:` (the scanner is
-    /// spec-strict here, per the YAML test suite's W5VH), so a glued `*id001:`
-    /// would scan as the alias "id001:" and the document could not reload.
-    fn end_inline_key(&mut self, key: &YamlNode) {
+    /// Write a mapping key that shares its line with the `:` after it, with
+    /// its properties and that `:` (`!t &a key:`): an implicit key in a block
+    /// or flow mapping, or a flow key after its `? `. A key that was empty in
+    /// its source is written empty again (`: value`, `!t : value`).
+    ///
+    /// An alias key needs a space before the `:`: anchor and alias names may
+    /// contain `:` (the scanner is spec-strict here, per the YAML test suite's
+    /// W5VH), so a glued `*id001:` would scan as the alias "id001:" and the
+    /// document could not reload.
+    fn emit_inline_key(&mut self, key: &YamlNode, indent: usize) {
+        self.emit_anchor_tag(key);
+        if !is_loaded_empty_key(key) {
+            let outer = self.key_before_colon.replace(key as *const YamlNode);
+            self.emit_key(key, indent);
+            self.key_before_colon = outer;
+        }
+
         if matches!(key.kind, YamlNodeKind::Alias(_)) {
             self.buf.push(b' ');
         }
@@ -449,9 +513,15 @@ impl RoundTripEmitter {
                 self.buf.push(b'\n');
                 self.emit_block_sequence(s, child);
             }
+            // A key empty in its source stays empty: a bare `?`, or its
+            // properties alone (`? !t`), with no space left at the line end.
+            _ if is_loaded_empty_key(key) => {
+                self.emit_anchor_tag_compact(key);
+                self.buf.push(b'\n');
+            }
             // A block scalar (literal/folded) key, plus any other inline content
-            // routed here defensively. The block scalar opens on the `? ` line and
-            // indents its body under the key.
+            // (a flow collection, a scalar the author wrote as `? key`). A block
+            // scalar opens on the `? ` line and indents its body under the key.
             _ => {
                 self.buf.push(b' ');
                 self.emit_anchor_tag(key);
@@ -805,6 +875,7 @@ impl RoundTripEmitter {
                         let block = matches!(style, ScalarStyle::Literal | ScalarStyle::Folded);
                         if block && !raw.ends_with(['\n', '\r']) {
                             self.unterminated_raw_end = Some(self.buf.len());
+                            self.unterminated_raw_keeps = block_header_keeps(raw);
                         }
                         return;
                     }
@@ -813,7 +884,10 @@ impl RoundTripEmitter {
                     ScalarStyle::Literal | ScalarStyle::Folded if self.flow_depth == 0 => {
                         self.emit_block_scalar(node, value, *style, indent);
                     }
-                    _ => self.emit_scalar(value, *style),
+                    _ => {
+                        let before_colon = self.key_before_colon == Some(node as *const YamlNode);
+                        self.emit_scalar(value, *style, before_colon);
+                    }
                 }
             }
             YamlNodeKind::Alias(name) => {
@@ -841,7 +915,8 @@ impl RoundTripEmitter {
     /// reads the same as long as its first line with content still starts at
     /// or past the floor. Otherwise the source is read back as if it sat
     /// here, one column left of the floor, and replayed only when that gives
-    /// the same value.
+    /// the same value. A keep-chomped one that ended the input without a line
+    /// break is rebuilt instead when something follows it (see [`run_emitter`]).
     ///
     /// A plain scalar's last line ending in a lone `?`, `-`, or `:` is not
     /// replayed either. In the source a flow indicator followed it (`?}`), but
@@ -851,6 +926,13 @@ impl RoundTripEmitter {
     fn raw_replay_fits(&self, raw: &str, value: &str, style: ScalarStyle) -> bool {
         match style {
             ScalarStyle::Literal | ScalarStyle::Folded if self.flow_depth > 0 => false,
+            ScalarStyle::Literal | ScalarStyle::Folded
+                if !self.replay_unterminated_keep
+                    && !raw.ends_with(['\n', '\r'])
+                    && block_header_keeps(raw) =>
+            {
+                false
+            }
             ScalarStyle::Literal | ScalarStyle::Folded => match detected_block_indent(raw) {
                 Some(column) => column >= self.continuation_floor,
                 None => crate::scanner::reread_block_scalar(raw, self.parent_indent())
@@ -877,7 +959,10 @@ impl RoundTripEmitter {
         self.emitting_key = was_key;
     }
 
-    fn emit_scalar(&mut self, value: &str, style: ScalarStyle) {
+    /// Write a scalar from its value in its own style. `before_colon` says the
+    /// scalar is a key written right before its `:` (see
+    /// [`plain_reads_back`]).
+    fn emit_scalar(&mut self, value: &str, style: ScalarStyle, before_colon: bool) {
         match style {
             // A plain scalar whose first character is U+FEFF cannot be emitted
             // verbatim: if it lands at the start of the stream, the scanner
@@ -906,6 +991,13 @@ impl RoundTripEmitter {
             // not replayed (the value was edited, or they no longer fit where it
             // is written), so rebuild it on one line, with the break escaped.
             ScalarStyle::Plain if value.contains(['\n', '\r']) => {
+                self.push_quoted(value);
+            }
+            // A plain scalar the scanner read only thanks to what followed it in
+            // the source (`-` and `?` before a `:` that the parser took as the
+            // next entry's, a value folded from lines ending in a lone `:`) is
+            // quoted once that neighbour is gone. See [`plain_reads_back`].
+            ScalarStyle::Plain if !plain_reads_back(value, before_colon) => {
                 self.push_quoted(value);
             }
             ScalarStyle::Plain
@@ -1063,15 +1155,22 @@ impl RoundTripEmitter {
             if i > 0 {
                 self.emit_flow_separator(indent);
             }
-            self.emit_anchor_tag(key);
-            self.emit_key(key, indent);
-            self.end_inline_key(key);
+            self.emit_flow_key(key, indent);
             self.buf.push(b' ');
             self.emit_anchor_tag(val);
             self.emit_inline_content(val, indent);
         }
         self.flow_depth -= 1;
         self.buf.push(b'}');
+    }
+
+    /// Write a flow mapping key and its `:`. A key the author wrote with `?`
+    /// keeps it (`{? a: b}`); that also holds an empty key in place (`{? : b}`).
+    fn emit_flow_key(&mut self, key: &YamlNode, indent: usize) {
+        if key.explicit_key {
+            self.buf.extend_from_slice(b"? ");
+        }
+        self.emit_inline_key(key, indent);
     }
 
     /// A flow sequence whose items carry comments, one item per line so each
@@ -1109,9 +1208,7 @@ impl RoundTripEmitter {
             self.emit_head(&key.comments, child_indent);
             self.emit_head(&value.comments, child_indent);
             self.write_indent(child_indent);
-            self.emit_anchor_tag(key);
-            self.emit_key(key, child_indent);
-            self.end_inline_key(key);
+            self.emit_flow_key(key, child_indent);
             self.buf.push(b' ');
             self.emit_anchor_tag(value);
             self.emit_inline_content(value, child_indent);
@@ -1380,38 +1477,92 @@ fn plain_unsafe_in_flow(value: &str) -> bool {
         || value.ends_with(':')
 }
 
-/// Whether a mapping key cannot be written as an inline implicit key and must
-/// use the explicit `?`/`:` block form. A non-empty block collection and a block
-/// scalar (literal/folded) have no valid single-line representation: flattening
-/// them inline would emit a block scalar inside a flow collection (illegal) or a
-/// multiline flow collection as an implicit key (rejected). Everything else
-/// (plain or quoted scalars, aliases, empty or single-line flow collections)
-/// stays inline. Found by the `roundtrip` fuzz target.
-fn key_needs_explicit(key: &YamlNode) -> bool {
-    // The author wrote an explicit `?`: preserve it on re-emit (fidelity), as
-    // long as the key can still open with a `? ` line. A block collection or a
-    // block scalar is emitted explicitly anyway, below.
-    if key.explicit_key && matches!(&key.kind, YamlNodeKind::Scalar(..) | YamlNodeKind::Alias(_)) {
-        return true;
+/// Whether a plain scalar's text, written as is, reads back as that same plain
+/// scalar in any position the emitter writes it. It does not when it is a lone
+/// `-`, `?` or `:`, or starts with one followed by a space (an entry, a key, a
+/// value), or holds `: ` (a value indicator) or ` #` (a comment). A trailing `:`
+/// makes a value read as a mapping key. Right before a key's own `:`
+/// (`before_colon`), a lone indicator and a trailing `:` are plain text: the
+/// `:` that follows keeps them from standing alone (`-: v`, `a:: v`).
+///
+/// The scanner never reads such a plain scalar on its own; one reaches the
+/// emitter when the source put it next to a character that kept it plain.
+fn plain_reads_back(value: &str, before_colon: bool) -> bool {
+    let holds_indicator = value.contains(": ")
+        || value.contains(" #")
+        || value.contains("\t#")
+        || ["- ", "? ", ": "]
+            .iter()
+            .any(|indicator| value.starts_with(indicator));
+    if holds_indicator {
+        return false;
     }
-    match &key.kind {
-        YamlNodeKind::Mapping(m) => key.style == NodeStyle::Block && !m.is_empty(),
-        YamlNodeKind::Sequence(s) => key.style == NodeStyle::Block && !s.is_empty(),
-        YamlNodeKind::Scalar(_, ScalarStyle::Literal | ScalarStyle::Folded) => true,
-        _ => false,
-    }
+
+    let stands_alone = matches!(value, "-" | "?" | ":") || value.ends_with(':');
+    before_colon || !stands_alone
 }
 
-/// Whether a synthetic (dump-path) key must switch to the explicit `? key` form
-/// because it is not the first entry and carries a tag or anchor. An inline
-/// `!tag key:` (or `&a key:`) after a previous entry has its property read as the
-/// preceding value's node property, which is a reparse error when that value was
-/// empty (`k:\n!tag key: v`) and a silent parity break otherwise. The explicit
-/// `?` indicator opens a fresh key the preceding value cannot absorb, matching
-/// the fast emitter. A loaded key is never synthetic, so its inline tag/anchor is
-/// left untouched for byte-for-byte fidelity.
-fn synthetic_key_needs_explicit(key: &YamlNode, is_first: bool) -> bool {
+/// Whether a block mapping key is written in the explicit `?`/`:` form rather
+/// than as an implicit `key:`. This is the one place that decides it; `is_first`
+/// says whether the key opens its mapping.
+///
+/// - The author wrote the `?`: it stays. Every key can open a `? ` line, an
+///   empty one included (a bare `?`).
+/// - The key cannot be written on one line, which an implicit key must be: a
+///   non-empty block collection, a block scalar (literal/folded), or a flow
+///   collection whose comments spread it over several lines. Found by the
+///   `roundtrip` fuzz target.
+/// - A synthetic (dump-path) key with a tag or anchor that does not open its
+///   mapping: the fast emitter writes it as `? !tag key`, and the `represent`
+///   output must match it byte for byte. A loaded key keeps its inline
+///   property (`!tag key:`), which its source already reads back as.
+///
+/// Everything else (plain or quoted scalars, aliases, empty keys, single-line
+/// flow collections) stays implicit.
+fn key_needs_explicit(key: &YamlNode, is_first: bool) -> bool {
+    if key.explicit_key {
+        return true;
+    }
+
+    let spans_lines = match &key.kind {
+        YamlNodeKind::Mapping(m) if key.style == NodeStyle::Block => !m.is_empty(),
+        YamlNodeKind::Sequence(s) if key.style == NodeStyle::Block => !s.is_empty(),
+        YamlNodeKind::Mapping(_) | YamlNodeKind::Sequence(_) => flow_holds_comments(key),
+        YamlNodeKind::Scalar(_, ScalarStyle::Literal | ScalarStyle::Folded) => true,
+        _ => false,
+    };
+    if spans_lines {
+        return true;
+    }
+
     !is_first && key.synthetic && (key.tag.is_some() || key.anchor.is_some())
+}
+
+/// Whether a flow collection, at any depth, holds a comment. The emitter gives
+/// each commented entry a line of its own, so such a collection is written over
+/// several lines.
+fn flow_holds_comments(node: &YamlNode) -> bool {
+    // Grow the native stack on demand: this recurses once per nesting level of
+    // a key, whose depth the input controls. See [`crate::stack`].
+    crate::stack::guard(|| match &node.kind {
+        YamlNodeKind::Mapping(pairs) => pairs.iter().any(|(key, value)| {
+            node_has_comments(key)
+                || node_has_comments(value)
+                || flow_holds_comments(key)
+                || flow_holds_comments(value)
+        }),
+        YamlNodeKind::Sequence(items) => items
+            .iter()
+            .any(|item| node_has_comments(item) || flow_holds_comments(item)),
+        _ => false,
+    })
+}
+
+/// Whether a mapping key was written empty in its source (`: value`, `? `, a
+/// key that is only its properties, `!t : value`), so it is written empty
+/// again. A synthetic null key follows the document's null style instead.
+fn is_loaded_empty_key(key: &YamlNode) -> bool {
+    matches!(key.kind, YamlNodeKind::Null) && !key.synthetic
 }
 
 /// Whether the continuation lines of a multi-line plain or quoted scalar's
@@ -1472,6 +1623,16 @@ fn detected_block_indent(raw: &str) -> Option<usize> {
         }
         rest = &rest[spaces..];
     }
+}
+
+/// Whether a block scalar's source (`raw`, from its `|`/`>` header on) has a
+/// keep chomping indicator (`|+`, `>2+`), so its trailing line breaks are part
+/// of its value.
+fn block_header_keeps(raw: &str) -> bool {
+    raw.bytes()
+        .skip(1)
+        .take_while(|&byte| !matches!(byte, b' ' | b'\t' | b'#' | b'\n' | b'\r'))
+        .any(|byte| byte == b'+')
 }
 
 fn node_has_comments(node: &YamlNode) -> bool {
@@ -1963,5 +2124,170 @@ mod tests {
         assert_eq!(doc(NullStyle::Empty), "k: !t\n");
         assert_eq!(doc(NullStyle::Tilde), "k: !t ~\n");
         assert_eq!(doc(NullStyle::Null), "k: !t null\n");
+    }
+
+    /// A key empty in its source comes back empty, in its own form, in every
+    /// position and under every null style.
+    #[test]
+    fn empty_keys_reemit_as_written() {
+        for input in [
+            ": v\n",
+            ":\n",
+            "a: 1\n: v\n",
+            "a:\n: v\n",
+            "- : v\n",
+            "?\n: v\n",
+            "? !t\n: v\n",
+            "? &a\n: v\n",
+            "f: {: v}\n",
+            "f: {a: 1, : v}\n",
+            "f: {? : v}\n",
+            "f: [{: v}]\n",
+        ] {
+            for style in [NullStyle::Empty, NullStyle::Tilde, NullStyle::Null] {
+                let nodes = crate::roundtrip::composer::compose(input).unwrap();
+                let out = super::emit_roundtrip_all_with(&nodes, style);
+                assert_eq!(std::str::from_utf8(&out).unwrap(), input, "{style:?}");
+            }
+        }
+    }
+
+    /// A synthetic null key (assigned through the API) is a `null` or `~`
+    /// token, as the fast encoder writes it, never an empty key.
+    #[test]
+    fn synthetic_null_key_follows_the_null_style() {
+        let doc = |style| {
+            let root = YamlNode::new(
+                YamlNodeKind::Mapping(vec![(synthetic_null(), scalar("v"))]),
+                Span::default(),
+            );
+            String::from_utf8(emit_roundtrip_with(&root, style)).unwrap()
+        };
+
+        assert_eq!(doc(NullStyle::Empty), "null: v\n");
+        assert_eq!(doc(NullStyle::Tilde), "~: v\n");
+        assert_eq!(doc(NullStyle::Null), "null: v\n");
+    }
+
+    /// Where a key's source form would not read back, the re-emit switches to
+    /// one that does and keeps the data.
+    #[test]
+    fn keys_whose_source_form_does_not_reload_are_rewritten() {
+        for (input, expected) in [
+            // An explicit key before an anchored key: the `:` the source left
+            // out keeps the anchor off the explicit key.
+            ("?\n&a : 1\n", "?\n:\n&a : 1\n"),
+            ("a: 1\n? b\n&x c: 3\n", "a: 1\n? b\n:\n&x c: 3\n"),
+            // A comment inside a flow key spreads it over several lines.
+            ("[Y]:\t#\n", "? [\n    Y   #\n  ]\n:\n"),
+            ("{a}: #\n", "? {\n    a: null     #\n  }\n:\n"),
+            // A lone indicator that only stayed plain thanks to the `:` after it.
+            ("{i: -:}\n", "{i: \"-\", : null}\n"),
+            ("{i: ?:}\n", "{i: \"?\", : null}\n"),
+            (": &a\n*a ?:\n", ": &a\n*a : \"?\"\n:\n"),
+            ("{}::\n", "{}: \":\"\n:\n"),
+            // A plain value folded from lines that end in a lone `:`.
+            ("-  e\n ::\n", "-  \"e :\"\n- :\n"),
+            // A keep-chomped block scalar that ended the input, now followed by
+            // the explicit key's `:`.
+            ("? |+\n x", "? |-\n  x\n:\n"),
+        ] {
+            let out = reemit(input);
+            assert_eq!(out, expected, "{input:?}");
+            assert!(
+                same_value(input, &out),
+                "data changed for {input:?}: {out:?}"
+            );
+        }
+    }
+
+    /// The one decision on the explicit key form: kept where the author wrote
+    /// it, needed where the key cannot sit on one line, and for a synthetic
+    /// key with properties after the first entry.
+    #[test]
+    fn key_needs_explicit_decides_the_key_form() {
+        // Whether the first key of the mapping `input` needs the explicit form.
+        let first_key_explicit = |input: &str, is_first: bool| {
+            let root = crate::roundtrip::composer::compose(input)
+                .unwrap()
+                .remove(0);
+            let YamlNodeKind::Mapping(mut pairs) = root.kind else {
+                panic!("not a mapping: {input:?}");
+            };
+            super::key_needs_explicit(&pairs.remove(0).0, is_first)
+        };
+
+        for input in [
+            "? a\n: 1\n",
+            "?\n: 1\n",
+            "? [a]\n: 1\n",
+            "? - a\n: 1\n",
+            "? |\n x\n: 1\n",
+            "[a]: # c\n",
+            "[[a]]: # c\n",
+        ] {
+            assert!(first_key_explicit(input, true), "{input:?}");
+        }
+
+        for input in ["a: 1\n", ": 1\n", "!t : 1\n", "[a]: 1\n"] {
+            assert!(!first_key_explicit(input, true), "{input:?}");
+            assert!(!first_key_explicit(input, false), "{input:?}");
+        }
+
+        let mut synthetic = scalar("k");
+        synthetic.synthetic = true;
+        synthetic.tag = Some("!t".to_owned());
+        assert!(super::key_needs_explicit(&synthetic, false));
+        assert!(!super::key_needs_explicit(&synthetic, true));
+    }
+
+    /// Which plain texts read back as themselves, and which only do right
+    /// before a key's `:`.
+    #[test]
+    fn plain_reads_back_where_the_scanner_reads_it_plain() {
+        for value in ["a", "a-b", "a:b", "http://x", "a#b", "-a", "?a", ":a"] {
+            assert!(super::plain_reads_back(value, false), "{value:?}");
+            assert!(super::plain_reads_back(value, true), "{value:?}");
+        }
+
+        for value in ["-", "?", ":", "a:", "e :"] {
+            assert!(!super::plain_reads_back(value, false), "{value:?}");
+            assert!(super::plain_reads_back(value, true), "{value:?}");
+        }
+
+        for value in ["a: b", "a #b", "a\t#b", "- a", "? a", ": a"] {
+            assert!(!super::plain_reads_back(value, false), "{value:?}");
+            assert!(!super::plain_reads_back(value, true), "{value:?}");
+        }
+    }
+
+    /// A keep chomping indicator is found wherever it sits in the header.
+    #[test]
+    fn block_header_keeps_reads_the_chomping_indicator() {
+        assert!(super::block_header_keeps("|+\n x"));
+        assert!(super::block_header_keeps(">2+\n  x"));
+        assert!(super::block_header_keeps("|+2 # c\n  x"));
+        assert!(!super::block_header_keeps("|\n x"));
+        assert!(!super::block_header_keeps("|- # a+b\n x"));
+        assert!(!super::block_header_keeps("|2\n  +"));
+    }
+
+    /// A keep-chomped block scalar that ended the input keeps its value when
+    /// output follows it, and its source form when nothing does.
+    #[test]
+    fn unterminated_keep_block_scalar_is_rebuilt_only_when_followed() {
+        assert_eq!(reemit("k: |+\n  x"), "k: |+\n  x");
+        assert_eq!(reemit("- |+\n x"), "- |+\n x");
+
+        let mut nodes = crate::roundtrip::composer::compose("k: |+\n  x").unwrap();
+        let YamlNodeKind::Mapping(pairs) = &mut nodes[0].kind else {
+            panic!("not a mapping");
+        };
+        pairs.push((scalar("b"), scalar("1")));
+        let out = super::emit_roundtrip_all_with(&nodes, NullStyle::Null);
+        let out = std::str::from_utf8(&out).unwrap();
+
+        assert_eq!(out, "k: |-\n  x\nb: 1\n");
+        assert!(same_value(out, "k: x\nb: 1\n"));
     }
 }

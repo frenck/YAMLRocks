@@ -128,10 +128,18 @@ pub struct Scanner<'input> {
     /// entry on that same line (`&a - x`) is invalid.
     property_line: u32,
     /// Whether a block mapping value is awaiting its node (a `:` was emitted
-    /// whose value has not yet been produced). A node property (anchor/tag) for
-    /// that value that lands at or before the mapping's own indent is malformed
-    /// (`seq:\n&anchor\n- a`, `key: &x\n!!map`).
+    /// whose value has not yet been produced). A node property (anchor/tag) at
+    /// or before the mapping's own indent cannot belong to that value; see
+    /// [`Self::unkeyed_property`].
     block_value_pending: bool,
+    /// A node property found at or before the indent of a mapping whose value
+    /// is still pending. The value's own properties must be indented past its
+    /// key, so such a property can only start the next implicit key on its line
+    /// (`key:\n&a next: 1`, the empty `key` followed by an anchored key). It is
+    /// held here until a `:` on that line confirms the key; if the possible key
+    /// is dropped instead (`seq:\n&anchor\n- a`, `key: &x\n!!map\n  a: b`), the
+    /// property is rejected. Block context only.
+    unkeyed_property: Option<Span>,
     /// Whether the previous block token was a sequence entry `-` with no
     /// content yet. A `-` that opens a deeper indent is valid only as such an
     /// empty entry's value; otherwise it is a mis-indented item
@@ -202,6 +210,7 @@ impl<'input> Scanner<'input> {
             value_indicator_line: u32::MAX,
             property_line: u32::MAX,
             block_value_pending: false,
+            unkeyed_property: None,
             after_block_entry: false,
             unwound_block_level: false,
             simple_key: None,
@@ -324,7 +333,7 @@ impl<'input> Scanner<'input> {
                 ));
             }
             // A simple key never completed (no `:`); its tokens stand as-is.
-            self.simple_key = None;
+            self.drop_simple_key()?;
             self.unwind_indents(-1);
             self.stream_ended = true;
             let span = self.reader.span();
@@ -582,7 +591,7 @@ impl<'input> Scanner<'input> {
                         .simple_key
                         .is_some_and(|(_, _, line, _)| line != self.reader.line())
                     {
-                        self.simple_key = None;
+                        self.drop_simple_key()?;
                     }
                     if self.flow_level == 0 {
                         self.simple_key_allowed = true;
@@ -997,6 +1006,9 @@ impl<'input> Scanner<'input> {
                 if key_had_tab {
                     return Err(tab_indent_error(span));
                 }
+                // The key this `:` confirms is what a property at the pending
+                // value's indent was waiting to start.
+                self.unkeyed_property = None;
                 // A property-prefixed key (`&a key:`) confirmed by this `:`.
                 // Insert the mapping-start and key marker retroactively at the
                 // key's own column, before its buffered tokens.
@@ -1041,22 +1053,38 @@ impl<'input> Scanner<'input> {
         Ok(())
     }
 
-    /// Reject a node property (anchor/tag) that introduces a pending block
-    /// mapping value but lands at or before the mapping's own indent. Such a
-    /// property must be indented past the key (`seq:\n&anchor\n- a`, and the
-    /// tag in `key: &x\n!!map`). An inline property (`key: &x value`) sits to
-    /// the right of the key, so its column exceeds the indent and it passes.
-    fn check_property_value_indent(&self, span: Span) -> Result<(), ScanError> {
-        if self.flow_level == 0
-            && self.block_value_pending
-            && (self.reader.column() as i32) <= self.current_indent
-        {
-            return Err(ScanError::new(
-                "a node property must be indented past its mapping key",
-                span,
-            ));
+    /// Check a node property (anchor/tag) that lands at or before the indent of
+    /// a mapping whose value is still pending. The value's own properties must
+    /// be indented past its key, so this one is valid only as the start of the
+    /// next implicit key on its line (`key:\n&a next: 1`, where `key` is empty).
+    /// Whether a `:` follows is not known yet, so the property is held in
+    /// [`Self::unkeyed_property`] as a possible simple key; a property that
+    /// cannot start one is rejected right away. An inline property
+    /// (`key: &x value`) sits to the right of the key and is never checked.
+    fn check_property_value_indent(&mut self, span: Span) -> Result<(), ScanError> {
+        let at_or_before_indent = (self.reader.column() as i32) <= self.current_indent;
+        if self.flow_level > 0 || !self.block_value_pending || !at_or_before_indent {
+            return Ok(());
         }
+
+        let starts_simple_key = self.simple_key_allowed && self.simple_key.is_none();
+        if !starts_simple_key {
+            return Err(unkeyed_property_error(span));
+        }
+
+        self.unkeyed_property = Some(span);
         Ok(())
+    }
+
+    /// Forget the pending possible simple key: the `:` that would confirm it
+    /// can no longer come. A property waiting on that key to give it a place
+    /// ([`Self::unkeyed_property`]) belongs to no node, so it is rejected here.
+    fn drop_simple_key(&mut self) -> Result<(), ScanError> {
+        self.simple_key = None;
+        match self.unkeyed_property.take() {
+            Some(span) => Err(unkeyed_property_error(span)),
+            None => Ok(()),
+        }
     }
 
     /// Record a possible block simple key at the current property token, so a
@@ -1338,7 +1366,7 @@ impl<'input> Scanner<'input> {
         // of its lines in one go, so the per-line clearing in `scan_to_next_token`
         // never runs to retract that note. Clear it here, or the stale entry
         // suppresses the next line's key detection (`- !t |-\n  x\n- !t k: v`).
-        self.simple_key = None;
+        self.drop_simple_key()?;
         // Record the block's source extent so the round-trip path can replay it
         // verbatim (folding a `>` block discards the original line breaks).
         let mut token = Token::new(TokenKind::Scalar(value, style), span);
@@ -1379,7 +1407,7 @@ impl<'input> Scanner<'input> {
                 .simple_key
                 .is_some_and(|(_, _, line, _)| line != self.reader.line())
         {
-            self.simple_key = None;
+            self.drop_simple_key()?;
         }
 
         // An explicit `?` flow key already emitted its `Key` marker; this scalar
@@ -1556,4 +1584,13 @@ fn reserved_indicator_error(ch: char, span: Span) -> ScanError {
 /// is invalid (a tab before a plain or flow scalar is valid separation, though).
 fn tab_indent_error(span: Span) -> ScanError {
     ScanError::new("a tab cannot be used for indentation", span)
+}
+
+/// A node property that is neither indented past its mapping key nor the
+/// start of the next key on its line, so it belongs to no node.
+fn unkeyed_property_error(span: Span) -> ScanError {
+    ScanError::new(
+        "a node property must be indented past its mapping key",
+        span,
+    )
 }

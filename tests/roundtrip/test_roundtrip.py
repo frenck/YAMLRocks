@@ -261,7 +261,7 @@ def test_empty_implicit_key_introduces_from_its_own_colon():
     doc = yamlrocks.loads(src, option=RT)
     assert doc.to_yaml() == src
     doc.node["a"].value = 2
-    assert doc.to_yaml() == b"a: 2\nnull: # note\n  child: v\n"
+    assert doc.to_yaml() == b"a: 2\n: # note\n  child: v\n"
 
 
 def test_quoting_styles_preserved():

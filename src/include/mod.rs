@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::parser::ParseOptions;
-use crate::roundtrip::ast::{IncludeSource, YamlNode, YamlNodeKind};
+use crate::roundtrip::ast::{EmptyDocuments, IncludeSource, YamlNode, YamlNodeKind};
 use crate::roundtrip::composer::compose_with_file_id;
 use crate::scanner::{ScalarStyle, Span};
 
@@ -232,8 +232,15 @@ impl IncludeResolver {
         })?;
 
         let mut resolved = Vec::new();
-        for node in nodes {
-            resolved.push(self.resolve_node(node, &[])?);
+        for mut node in nodes {
+            // Resolving a tag on a root (`!include`, `!secret`, `!env_var`)
+            // replaces the node with the resolved value. The empty documents
+            // around the root belong to this stream, not to the value, so they
+            // move over to whatever the root resolves to.
+            let empty_documents = node.empty_documents.take();
+            let mut root = self.resolve_node(node, &[])?;
+            root.empty_documents = empty_documents;
+            resolved.push(root);
         }
         Ok(resolved)
     }
@@ -325,7 +332,11 @@ impl IncludeResolver {
             });
         }
 
-        let (file_id, nodes) = self.read_and_compose(&include_path, &filename, stack)?;
+        let IncludedFile {
+            file_id,
+            nodes,
+            empty_documents: file_empty_documents,
+        } = self.read_and_compose(&include_path, &filename, stack)?;
 
         let mut new_stack = stack.to_vec();
         new_stack.push((include_path, node.span.line));
@@ -342,6 +353,9 @@ impl IncludeResolver {
             tag: "!include".to_owned(),
             target: filename,
             target_file_id: Some(file_id),
+            // The included file's own empty documents, replayed when that file
+            // is written back.
+            empty_documents: file_empty_documents,
         });
         Ok(resolved)
     }
@@ -359,7 +373,7 @@ impl IncludeResolver {
 
         if dir_path.is_dir() {
             for (stem, path) in self.collect_dir_files(&dir_path, node.span, stack)? {
-                let (file_id, nodes) =
+                let IncludedFile { file_id, nodes, .. } =
                     self.read_and_compose(&path, &path.to_string_lossy(), stack)?;
 
                 let mut new_stack = stack.to_vec();
@@ -388,6 +402,7 @@ impl IncludeResolver {
             tag: "!include_dir_named".to_owned(),
             target: dirname,
             target_file_id: None,
+            empty_documents: None,
         });
         Ok(result)
     }
@@ -405,7 +420,8 @@ impl IncludeResolver {
 
         if dir_path.is_dir() {
             for (_, path) in self.collect_dir_files(&dir_path, node.span, stack)? {
-                let (_, nodes) = self.read_and_compose(&path, &path.to_string_lossy(), stack)?;
+                let IncludedFile { nodes, .. } =
+                    self.read_and_compose(&path, &path.to_string_lossy(), stack)?;
 
                 let mut new_stack = stack.to_vec();
                 new_stack.push((path.clone(), node.span.line));
@@ -423,6 +439,7 @@ impl IncludeResolver {
             tag: "!include_dir_list".to_owned(),
             target: dirname,
             target_file_id: None,
+            empty_documents: None,
         });
         Ok(result)
     }
@@ -548,6 +565,7 @@ impl IncludeResolver {
             tag: "!include_dir_merge_named".to_owned(),
             target: dirname,
             target_file_id: None,
+            empty_documents: None,
         });
         Ok(merged_node)
     }
@@ -577,6 +595,7 @@ impl IncludeResolver {
             tag: "!include_dir_merge_list".to_owned(),
             target: dirname,
             target_file_id: None,
+            empty_documents: None,
         });
         Ok(merged_node)
     }
@@ -715,7 +734,7 @@ impl IncludeResolver {
         path: &Path,
         display: &str,
         stack: &[(PathBuf, u32)],
-    ) -> Result<(u32, Vec<YamlNode>), IncludeError> {
+    ) -> Result<IncludedFile, IncludeError> {
         // Bound the total number of file expansions, not just the chain depth: a
         // diamond lattice re-expands a shared subtree once per route and would
         // otherwise blow up as `2^depth` from a few tiny files (see
@@ -755,11 +774,20 @@ impl IncludeResolver {
             })?;
         // An included root becomes a value inside the including document, so the
         // empty documents of its own file's stream must not travel with it: the
-        // including stream would replay them as documents of its own.
+        // including stream would replay them as documents of its own. Those
+        // around the first root are handed back separately, for a single
+        // `!include` to replay when it writes the file back.
+        let empty_documents = nodes
+            .first_mut()
+            .and_then(|first| first.empty_documents.take());
         for node in &mut nodes {
             node.empty_documents = None;
         }
-        Ok((file_id, nodes))
+        Ok(IncludedFile {
+            file_id,
+            nodes,
+            empty_documents,
+        })
     }
 
     /// Extract the non-empty string argument of an include tag, or a structured
@@ -873,6 +901,17 @@ pub enum IncludeErrorKind {
     /// A malformed argument or other resolution failure. The catch-all.
     #[default]
     Invalid,
+}
+
+/// A file read for an include, composed to its document roots.
+struct IncludedFile {
+    /// The id the file was registered under, for write-back.
+    file_id: u32,
+    /// The file's document roots, without the empty documents of its stream.
+    nodes: Vec<YamlNode>,
+    /// The empty documents around the first root, which a single `!include`
+    /// replays when it writes the file back.
+    empty_documents: Option<Box<EmptyDocuments>>,
 }
 
 /// Error during include resolution.

@@ -88,10 +88,11 @@ enum StreamEnd {
     ClosedDocument,
 }
 
-/// Emit a single document with the default null style (`null` keyword). Used by
-/// include write-back, where there is no document-level style to thread.
+/// Emit a single document, with the empty documents it carries, in the default
+/// null style (`null` keyword). Used by include write-back, where there is no
+/// document-level style to thread.
 pub fn emit_roundtrip(node: &YamlNode) -> Vec<u8> {
-    emit_roundtrip_with(node, NullStyle::Null)
+    emit_roundtrip_all_with(std::slice::from_ref(node), NullStyle::Null)
 }
 
 /// Dump-shaping options for a *synthetic* tree emitted through the round-trip
@@ -1196,9 +1197,14 @@ impl RoundTripEmitter {
 
 /// Emit a resolved include node's *content* (ignoring its own boundary marker)
 /// as a standalone document, used to write the file the include points to.
+/// The empty documents around it are that file's own, kept on its include
+/// source; the ones on the node belong to the stream that includes it.
 fn emit_include_target(node: &YamlNode) -> Vec<u8> {
     let mut content = node.clone();
-    content.source = None;
+    content.empty_documents = content
+        .source
+        .take()
+        .and_then(|source| source.empty_documents);
     emit_roundtrip(&content)
 }
 

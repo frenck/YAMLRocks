@@ -358,6 +358,11 @@ pub struct IncludeSource {
     /// The `file_id` of the file the resolved content was loaded from. For
     /// directory includes (which span multiple files) this is `None`.
     pub target_file_id: Option<u32>,
+    /// The empty documents around the included file's root, in that file's
+    /// own stream. Kept here rather than on the node, whose
+    /// [`YamlNode::empty_documents`] belong to the stream the node sits in, so
+    /// they are replayed only when the included file itself is written back.
+    pub empty_documents: Option<Box<EmptyDocuments>>,
 }
 
 #[cfg(test)]

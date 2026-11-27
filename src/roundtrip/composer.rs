@@ -34,12 +34,26 @@ fn retain_node_comments(comments: &mut Vec<Comment>, empty_document_ranges: &[(u
         return;
     }
 
+    // Both lists are in source order, so one cursor walks the ranges alongside
+    // the comments: a range that ends at or before a comment ends before every
+    // later comment too.
+    let mut ranges = empty_document_ranges.iter().peekable();
     comments.retain(|comment| {
         let offset = comment.span.offset;
-        !empty_document_ranges
-            .iter()
-            .any(|&(start, end)| (start..end).contains(&offset))
+        while ranges.next_if(|&&(_, end)| end <= offset).is_some() {}
+
+        !ranges
+            .peek()
+            .is_some_and(|&&(start, end)| (start..end).contains(&offset))
     });
+}
+
+/// The byte offset where the source line holding `offset` begins: just past the
+/// last line break (`\n`, or a lone `\r`) before it, or the start of the input.
+fn line_start_of(input: &str, offset: usize) -> usize {
+    input[..offset]
+        .rfind(['\n', '\r'])
+        .map_or(0, |line_break| line_break + 1)
 }
 
 /// Record a stream-leading byte order mark on the first document root so the
@@ -997,7 +1011,13 @@ impl<'input> Composer<'input> {
                         if !node.directives.is_empty() {
                             node.explicit_start = true;
                         }
-                        self.attach_empty_run(&mut node, &mut empty_run, document_start);
+                        // A root without a `---` starts at its first event, which
+                        // can sit past the line's indentation, an anchor or tag,
+                        // or a key (`  &a key: v`). The root re-emits that whole
+                        // line itself, so the empty documents before it end at
+                        // the start of the line.
+                        let line_start = line_start_of(self.input, document_start);
+                        self.attach_empty_run(&mut node, &mut empty_run, line_start);
                         self.document_starts.push(if documents.is_empty() {
                             0
                         } else {
@@ -1814,6 +1834,39 @@ mod tests {
     fn a_stream_of_only_empty_documents_has_no_root() {
         // Nothing can carry them; the round-trip document replays its source.
         assert!(compose("---\n# only\n---\n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn empty_document_before_a_bare_root_ends_at_the_root_line() {
+        // The root's first event sits past indentation, properties, or a key;
+        // none of that line belongs to the empty document. A comment line
+        // between the `...` and the root stays with the empty document.
+        for (input, text) in [
+            ("---\n...\n  a: 1\n", "---\n...\n"),
+            ("---\n...\n&a key: value\n", "---\n...\n"),
+            ("---\n...\n!!map\na: 1\n", "---\n...\n"),
+            ("---\n...\n  plain\n", "---\n...\n"),
+            ("---\n...\n  [1, 2]\n", "---\n...\n"),
+            ("---\n...\n|\n  text\n", "---\n...\n"),
+            ("---\n...\n# between\na: 1\n", "---\n...\n# between\n"),
+            ("---\r\n...\r\n  a: 1\r\n", "---\r\n...\r\n"),
+            ("---\r...\r  a: 1\r", "---\r...\r"),
+        ] {
+            let nodes = compose(input).unwrap();
+            assert_eq!(empty_texts(&nodes[0]), (vec![text], vec![]), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn comment_filter_keeps_comments_outside_every_empty_document() {
+        let nodes =
+            compose("# a\n---\n# x\n---\nk: 1 # b\n---\n# y\n...\n# z\nm: 2 # c\n").unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].comments.head.len(), 0);
+        assert_eq!(get(&nodes[0], "k").comments.inline.as_deref(), Some("b"));
+        assert_eq!(get(&nodes[1], "m").comments.inline.as_deref(), Some("c"));
+        let texts = empty_texts(&nodes[1]).0;
+        assert_eq!(texts, vec!["---\n# y\n...\n# z\n"]);
     }
 
     #[test]

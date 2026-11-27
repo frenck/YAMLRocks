@@ -630,32 +630,31 @@ fn keep_empty_documents(nodes: &mut [YamlNode], idx: usize, removed: EmptyDocume
 /// byte order mark stays first; an existing `---` document-start marker is
 /// reused, otherwise one is added. Any `%YAML` directive among the leading
 /// directives is dropped (the canonical 1.2 declaration replaces it); a `%TAG`
-/// directive is kept in place, with `%YAML 1.2` inserted ahead of it.
+/// directive is kept in place, with `%YAML 1.2` inserted ahead of it. Comment
+/// and blank lines may sit before, between, or after those directives; the
+/// stamp goes ahead of all of them.
 fn stamp_yaml_1_2(buf: &mut Vec<u8>) {
     const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
     let at = if buf.starts_with(&BOM) { BOM.len() } else { 0 };
-    // Walk the leading directive lines. A `%YAML` line is dropped (the canonical
-    // 1.2 declaration below replaces it; this also keeps re-stamping idempotent);
-    // any other directive (a `%TAG` handle) is kept and skipped over so the
-    // marker is found past it, not before it. Inserting `%YAML 1.2\n---\n` ahead
-    // of a `%TAG` would strand the handle after a document start and fail to
-    // reload.
+    // Walk the leading lines up to the first document's marker or content. A
+    // `%YAML` line is dropped (the canonical 1.2 declaration below replaces it;
+    // this also keeps re-stamping idempotent); any other directive (a `%TAG`
+    // handle) is kept and skipped over so the marker is found past it, not
+    // before it. Inserting `%YAML 1.2\n---\n` ahead of a `%TAG` would strand the
+    // handle after a document start and fail to reload. Comment and blank lines
+    // are skipped too: a `---` after them is still the first document's marker,
+    // and adding another one ahead of them would add a document.
     let mut cursor = at;
     loop {
         let rest = &buf[cursor..];
-        let line_len = rest.iter().position(|&b| b == b'\n').map(|n| n + 1);
+        let line_len = line_length(rest);
         if rest.starts_with(b"%YAML") {
-            match line_len {
-                Some(len) => {
-                    buf.drain(cursor..cursor + len);
-                }
-                None => buf.truncate(cursor),
+            buf.drain(cursor..cursor + line_len);
+        } else if rest.starts_with(b"%") || is_comment_or_blank_line(&rest[..line_len]) {
+            if line_len == 0 {
+                break;
             }
-        } else if rest.starts_with(b"%") {
-            match line_len {
-                Some(len) => cursor += len,
-                None => break,
-            }
+            cursor += line_len;
         } else {
             break;
         }
@@ -664,7 +663,7 @@ fn stamp_yaml_1_2(buf: &mut Vec<u8>) {
     let has_marker = body.starts_with(b"---")
         && body
             .get(3)
-            .is_none_or(|&b| matches!(b, b'\n' | b'\r' | b' '));
+            .is_none_or(|&b| matches!(b, b'\n' | b'\r' | b' ' | b'\t'));
     let mut stamp: Vec<u8> = b"%YAML 1.2\n".to_vec();
     if !has_marker {
         // No directives precede us here (a directive always carries its own
@@ -672,6 +671,24 @@ fn stamp_yaml_1_2(buf: &mut Vec<u8>) {
         stamp.extend_from_slice(b"---\n");
     }
     buf.splice(at..at, stamp);
+}
+
+/// The length of the first line of `text`, its line break included (`\n`,
+/// `\r\n`, or a lone `\r`), or all of `text` when it has no line break.
+fn line_length(text: &[u8]) -> usize {
+    match text.iter().position(|&b| b == b'\n' || b == b'\r') {
+        Some(at) if text[at] == b'\r' && text.get(at + 1) == Some(&b'\n') => at + 2,
+        Some(at) => at + 1,
+        None => text.len(),
+    }
+}
+
+/// Whether `line` holds nothing but whitespace, optionally ending in a comment.
+fn is_comment_or_blank_line(line: &[u8]) -> bool {
+    let content = line
+        .iter()
+        .position(|&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
+    content.is_none_or(|at| line[at] == b'#')
 }
 
 /// A live proxy onto a nested node of a [`YAMLRocksDocument`], addressed by path.
@@ -2275,6 +2292,44 @@ mod tests {
         assert_eq!(
             stamp(b"%YAML 1.1\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n"),
             b"%YAML 1.2\n%TAG !e! tag:x:\n---\nv: !e!foo 1\n",
+        );
+    }
+
+    #[test]
+    fn finds_the_marker_past_leading_comments() {
+        assert_eq!(
+            stamp(b"# head\n\n---\n---\na: 1\n"),
+            b"%YAML 1.2\n# head\n\n---\n---\na: 1\n"
+        );
+        assert_eq!(stamp(b"# head\na: 1\n"), b"%YAML 1.2\n---\n# head\na: 1\n");
+    }
+
+    #[test]
+    fn finds_directives_past_leading_comments() {
+        assert_eq!(
+            stamp(b"# head\n%TAG !e! tag:x:\n---\na: 1\n"),
+            b"%YAML 1.2\n# head\n%TAG !e! tag:x:\n---\na: 1\n"
+        );
+        assert_eq!(
+            stamp(b"%TAG !e! tag:x:\n# head\n---\na: 1\n"),
+            b"%YAML 1.2\n%TAG !e! tag:x:\n# head\n---\na: 1\n"
+        );
+        assert_eq!(
+            stamp(b"# head\n%YAML 1.1\n---\na: 1\n"),
+            b"%YAML 1.2\n# head\n---\na: 1\n"
+        );
+        assert_eq!(
+            stamp(b"# head\r\n%YAML 1.2\r\n---\r\na: 1\r\n"),
+            b"%YAML 1.2\n# head\r\n---\r\na: 1\r\n"
+        );
+    }
+
+    #[test]
+    fn does_not_skip_past_a_lone_carriage_return() {
+        // A lone `\r` ends the comment line; the `---` after it is the marker.
+        assert_eq!(
+            stamp(b"# head\r---\ra: 1\r"),
+            b"%YAML 1.2\n# head\r---\ra: 1\r"
         );
     }
 

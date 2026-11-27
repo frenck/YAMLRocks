@@ -65,6 +65,7 @@ impl IncludeResolver {
             tag: "!env_var".to_owned(),
             target: text,
             target_file_id: None,
+            empty_documents: None,
         });
         Ok(resolved)
     }

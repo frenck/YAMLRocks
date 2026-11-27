@@ -161,6 +161,28 @@ def test_assigned_none_key_follows_the_null_style() -> None:
     assert doc.to_yaml() == b"a: 1\n~: 2\n"
 
 
+@pytest.mark.parametrize(
+    ("src", "out"),
+    [
+        pytest.param(
+            "-  e\n ::\n", '-  "e :"\n- 3\n', id="folds-to-trailing-space-colon"
+        ),
+        pytest.param(
+            "-   e\n a::\n", '-   "e a:"\n- 3\n', id="folds-to-trailing-colon"
+        ),
+    ],
+)
+def test_folded_value_ending_in_a_colon_is_quoted(src: str, out: str) -> None:
+    """A plain value folded to end in `:` is quoted, not replayed as a key."""
+    doc = yamlrocks.loads(src, option=RT)
+    first = yamlrocks.loads(src)[0]
+    doc[1] = 3
+    reemitted = doc.to_yaml()
+
+    assert reemitted == out.encode()
+    assert yamlrocks.loads(reemitted) == [first, 3]
+
+
 def test_keep_block_scalar_at_end_survives_a_key_added_after_it() -> None:
     """A ``|+`` scalar that ended the input keeps its value when a key follows."""
     src = "a: 1\nk: |+\n  x"

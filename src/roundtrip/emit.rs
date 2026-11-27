@@ -906,7 +906,14 @@ impl RoundTripEmitter {
     /// one line, and an explicit one is rebuilt from its value rather than
     /// threading the key's position through here. The checks the plain arms of
     /// [`emit_scalar`](Self::emit_scalar) make before writing a value verbatim
-    /// apply to its source just the same.
+    /// apply to its source just the same: a leading BOM, flow-unsafe text
+    /// inside a flow collection, and text that does not read back as plain
+    /// ([`plain_reads_back`]; never before a key's `:` here, since keys are not
+    /// replayed). Two of its arms have no counterpart: a line break in the
+    /// value is what the replayed source lines hold, checked by
+    /// [`continuation_lines_fit`] instead, and the dump width only shapes
+    /// synthetic nodes, which have no source to replay. A quoted scalar's
+    /// quotes protect its content, so only its continuation lines are checked.
     ///
     /// A block scalar keeps its body lines at their source columns too, and
     /// what they mean depends on the indentation of the node holding it: the
@@ -922,7 +929,9 @@ impl RoundTripEmitter {
     /// replayed either. In the source a flow indicator followed it (`?}`), but
     /// the emitter may write a line break there instead, and a lone indicator
     /// at the end of a line opens a key, an entry, or a value. Tabs separate
-    /// it from the line start just as spaces do.
+    /// it from the line start just as spaces do. This is about the source's
+    /// line layout, not the value: `x\n  ?` folds to "x ?", which reads back
+    /// fine on one line, so [`plain_reads_back`] does not cover it.
     fn raw_replay_fits(&self, raw: &str, value: &str, style: ScalarStyle) -> bool {
         match style {
             ScalarStyle::Literal | ScalarStyle::Folded if self.flow_depth > 0 => false,
@@ -941,6 +950,7 @@ impl RoundTripEmitter {
             _ if self.emitting_key => false,
             ScalarStyle::Plain if value.starts_with('\u{feff}') => false,
             ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => false,
+            ScalarStyle::Plain if !plain_reads_back(value, false) => false,
             ScalarStyle::Plain
                 if raw.rsplit(['\n', '\r']).next().is_some_and(|last| {
                     matches!(last.trim_start_matches([' ', '\t']), "?" | "-" | ":")
@@ -2188,6 +2198,9 @@ mod tests {
             ("{}::\n", "{}: \":\"\n:\n"),
             // A plain value folded from lines that end in a lone `:`.
             ("-  e\n ::\n", "-  \"e :\"\n- :\n"),
+            // The same with the colon kept in the value: its source lines fit,
+            // but replayed bare they would read back as "e a".
+            ("-   e\n a::\n", "-   \"e a:\"\n- :\n"),
             // A keep-chomped block scalar that ended the input, now followed by
             // the explicit key's `:`.
             ("? |+\n x", "? |-\n  x\n:\n"),

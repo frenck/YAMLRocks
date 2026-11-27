@@ -4,7 +4,9 @@ use crate::parser::{Event, EventKind, ParseOptions, Parser};
 use crate::resolver::{ResolvedValue, Schema};
 use crate::scanner::{Comment, ScalarStyle, ScanError, Span};
 
-use super::ast::{Comments, HeadComment, NodeStyle, YamlNode, YamlNodeKind};
+use super::ast::{
+    Comments, EmptyDocument, EmptyDocuments, HeadComment, NodeStyle, YamlNode, YamlNodeKind,
+};
 
 /// Compose a YAML string into a rich AST that preserves all structure,
 /// including comments reattached to their nearest nodes.
@@ -15,12 +17,29 @@ pub fn compose(input: &str) -> Result<Vec<YamlNode>, ScanError> {
 /// Like [`compose`], reading the input with `options`.
 pub fn compose_with(input: &str, options: ParseOptions) -> Result<Vec<YamlNode>, ScanError> {
     let mut parser = Parser::new(input).with_options(options);
-    let (events, comments) = parser.parse_all_with_comments()?;
+    let (events, mut comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, false)?;
+    retain_node_comments(&mut comments, &composer.empty_document_ranges);
     attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
     mark_leading_bom(&mut nodes, parser.had_bom());
     Ok(nodes)
+}
+
+/// Drop the comments that sit inside an empty document kept as verbatim text
+/// (see [`EmptyDocuments`]). That text replays them already; attached to a node
+/// as well, they would be emitted twice, and in the wrong document.
+fn retain_node_comments(comments: &mut Vec<Comment>, empty_document_ranges: &[(usize, usize)]) {
+    if empty_document_ranges.is_empty() {
+        return;
+    }
+
+    comments.retain(|comment| {
+        let offset = comment.span.offset;
+        !empty_document_ranges
+            .iter()
+            .any(|&(start, end)| (start..end).contains(&offset))
+    });
 }
 
 /// Record a stream-leading byte order mark on the first document root so the
@@ -37,8 +56,10 @@ fn mark_leading_bom(nodes: &mut [YamlNode], had_bom: bool) {
 /// Like [`compose`], but every explicit `---` yields a document even when empty
 /// (a trailing or lone `---` becomes a null node), matching PyYAML's
 /// `safe_load_all` document count. Used by the multi-document annotated path
-/// (`loads_all`); the round-trip path uses [`compose`], which drops empty
-/// documents so byte-for-byte re-emission is unaffected.
+/// (`loads_all`). The round-trip document uses [`compose`] instead, which gives
+/// an empty document no node of its own: a neighbouring root carries it as
+/// verbatim text (see [`EmptyDocuments`]), so the document's API sees only the
+/// documents with content while a re-emit keeps every one.
 pub fn compose_all(input: &str, options: ParseOptions) -> Result<Vec<YamlNode>, ScanError> {
     let mut parser = Parser::new(input).with_options(options);
     let (events, comments) = parser.parse_all_with_comments()?;
@@ -107,9 +128,10 @@ pub fn compose_with_file_id(
     options: ParseOptions,
 ) -> Result<Vec<YamlNode>, ScanError> {
     let mut parser = Parser::new_with_file_id(input, file_id).with_options(options);
-    let (events, comments) = parser.parse_all_with_comments()?;
+    let (events, mut comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, false)?;
+    retain_node_comments(&mut comments, &composer.empty_document_ranges);
     attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
     mark_leading_bom(&mut nodes, parser.had_bom());
     Ok(nodes)
@@ -755,6 +777,18 @@ struct Composer<'input> {
     /// ordinary document allocates nothing.
     dash_positions: HashSet<(u32, u32)>,
     document_starts: Vec<usize>,
+    /// The byte range of every empty document kept as verbatim text (see
+    /// [`EmptyDocuments`]). Their comments are part of that text, so comment
+    /// attachment must not hand them to a node as well.
+    empty_document_ranges: Vec<(usize, usize)>,
+}
+
+/// An empty document whose end is not known yet: it runs until the next
+/// document starts, which the stream loop only learns later.
+struct PendingEmptyDocument {
+    start: usize,
+    has_directives: bool,
+    explicit_end: bool,
 }
 
 impl<'input> Composer<'input> {
@@ -770,7 +804,56 @@ impl<'input> Composer<'input> {
             anchors_seen: HashSet::new(),
             dash_positions: HashSet::new(),
             document_starts: Vec::new(),
+            empty_document_ranges: Vec::new(),
         }
+    }
+
+    /// Turn a run of consecutive empty documents into their verbatim records.
+    /// Each one ends where the next begins; the last ends at `end`, the start of
+    /// the document after the run (or the end of the input).
+    fn finish_empty_run(
+        &mut self,
+        run: &mut Vec<PendingEmptyDocument>,
+        end: usize,
+    ) -> Vec<EmptyDocument> {
+        let ends: Vec<usize> = run
+            .iter()
+            .skip(1)
+            .map(|pending| pending.start)
+            .chain(std::iter::once(end))
+            .collect();
+
+        run.drain(..)
+            .zip(ends)
+            .map(|(pending, end)| {
+                self.empty_document_ranges.push((pending.start, end));
+                EmptyDocument {
+                    text: self.input[pending.start..end].to_owned(),
+                    has_directives: pending.has_directives,
+                    explicit_end: pending.explicit_end,
+                }
+            })
+            .collect()
+    }
+
+    /// Hand the run of empty documents before `node` to it, so a stream rebuilt
+    /// from the tree still holds them. `start` is where `node`'s own document
+    /// begins, which is where the run ends.
+    fn attach_empty_run(
+        &mut self,
+        node: &mut YamlNode,
+        run: &mut Vec<PendingEmptyDocument>,
+        start: usize,
+    ) {
+        if run.is_empty() {
+            return;
+        }
+
+        let before = self.finish_empty_run(run, start);
+        node.empty_documents = Some(Box::new(EmptyDocuments {
+            before,
+            after: Vec::new(),
+        }));
     }
 
     /// Remember a block sequence `-` whose item starts on a later line, so
@@ -813,6 +896,9 @@ impl<'input> Composer<'input> {
         // hand them over so re-emission can replay them.
         let mut pending_directives: Vec<String> = Vec::new();
         let mut directive_start = None;
+        // Empty documents that are not kept as null nodes, since the last root.
+        // The next root carries them, or the last root when they end the stream.
+        let mut empty_run: Vec<PendingEmptyDocument> = Vec::new();
 
         while self.pos < events.len() {
             match &events[self.pos].kind {
@@ -831,6 +917,7 @@ impl<'input> Composer<'input> {
                         // marker is preserved on re-emission.
                         node.explicit_start = true;
                         node.directives = std::mem::take(&mut pending_directives);
+                        self.attach_empty_run(&mut node, &mut empty_run, document_start);
                         self.document_starts.push(if documents.is_empty() {
                             0
                         } else {
@@ -850,9 +937,29 @@ impl<'input> Composer<'input> {
                         });
                         documents.push(node);
                     } else {
-                        // An empty document dropped here still consumed its own
-                        // directives; clear them so a `%TAG` scoped to it cannot
-                        // leak onto the next document.
+                        // Without a node of its own, an empty document is kept as
+                        // its verbatim text for a neighbouring root to carry. The
+                        // first document of the stream also owns whatever comes
+                        // before its `---`, up to a byte order mark (the emitter
+                        // writes that mark itself).
+                        let start = if documents.is_empty() && empty_run.is_empty() {
+                            if self.input.starts_with('\u{FEFF}') {
+                                '\u{FEFF}'.len_utf8()
+                            } else {
+                                0
+                            }
+                        } else {
+                            document_start
+                        };
+                        empty_run.push(PendingEmptyDocument {
+                            start,
+                            has_directives: !pending_directives.is_empty(),
+                            explicit_end: self.pos < events.len()
+                                && matches!(events[self.pos].kind, EventKind::DocumentEnd),
+                        });
+                        // Its directives are replayed with its text; clear them
+                        // so a `%TAG` scoped to it cannot leak onto the next
+                        // document.
                         pending_directives.clear();
                     }
                     if self.pos < events.len()
@@ -864,6 +971,13 @@ impl<'input> Composer<'input> {
                 EventKind::Directive(text) => {
                     directive_start.get_or_insert(events[self.pos].span.offset);
                     pending_directives.push(text.clone());
+                    self.pos += 1;
+                }
+                // A further `...` after an empty document still closes it.
+                EventKind::DocumentEnd if !empty_run.is_empty() => {
+                    if let Some(last) = empty_run.last_mut() {
+                        last.explicit_end = true;
+                    }
                     self.pos += 1;
                 }
                 _ => {
@@ -883,6 +997,7 @@ impl<'input> Composer<'input> {
                         if !node.directives.is_empty() {
                             node.explicit_start = true;
                         }
+                        self.attach_empty_run(&mut node, &mut empty_run, document_start);
                         self.document_starts.push(if documents.is_empty() {
                             0
                         } else {
@@ -896,6 +1011,17 @@ impl<'input> Composer<'input> {
                         self.pos += 1;
                     }
                 }
+            }
+        }
+
+        // Empty documents that end the stream go to the last root. A stream of
+        // nothing but empty documents has no root to carry them.
+        if !empty_run.is_empty() {
+            if let Some(last) = documents.last_mut() {
+                let after = self.finish_empty_run(&mut empty_run, self.input.len());
+                last.empty_documents
+                    .get_or_insert_with(Default::default)
+                    .after = after;
             }
         }
 
@@ -1623,6 +1749,71 @@ mod tests {
     #[test]
     fn handles_multiple_documents() {
         assert_eq!(compose("---\na: 1\n---\nb: 2\n").unwrap().len(), 2);
+    }
+
+    /// The verbatim text of each empty document a root carries, before and
+    /// after it.
+    fn empty_texts(node: &YamlNode) -> (Vec<&str>, Vec<&str>) {
+        fn texts(documents: &[super::EmptyDocument]) -> Vec<&str> {
+            documents
+                .iter()
+                .map(|document| document.text.as_str())
+                .collect()
+        }
+
+        node.empty_documents
+            .as_deref()
+            .map_or_else(Default::default, |empty| {
+                (texts(&empty.before), texts(&empty.after))
+            })
+    }
+
+    #[test]
+    fn empty_documents_ride_on_the_next_root() {
+        let nodes = compose("a: 1\n---\n# one\n---\n# two\n---\nb: 2\n").unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes[0].empty_documents.is_none());
+        assert_eq!(
+            empty_texts(&nodes[1]),
+            (vec!["---\n# one\n", "---\n# two\n"], vec![])
+        );
+    }
+
+    #[test]
+    fn empty_documents_ending_the_stream_ride_on_the_last_root() {
+        let nodes = compose("a: 1\n--- # note\n...\n").unwrap();
+        assert_eq!(empty_texts(&nodes[0]), (vec![], vec!["--- # note\n...\n"]));
+        let after = &nodes[0].empty_documents.as_deref().unwrap().after[0];
+        assert!(after.explicit_end);
+        assert!(!after.has_directives);
+    }
+
+    #[test]
+    fn first_empty_document_owns_what_precedes_its_marker() {
+        // A byte order mark is left out: the emitter restores it on its own.
+        let nodes = compose("\u{FEFF}# head\n%YAML 1.2\n---\n---\na: 1\n").unwrap();
+        assert_eq!(
+            empty_texts(&nodes[0]),
+            (vec!["# head\n%YAML 1.2\n---\n"], vec![])
+        );
+        assert!(nodes[0].empty_documents.as_deref().unwrap().before[0].has_directives);
+        assert!(nodes[0].leading_bom);
+        assert!(nodes[0].directives.is_empty());
+    }
+
+    #[test]
+    fn comments_of_an_empty_document_stay_out_of_its_neighbours() {
+        let nodes = compose("---\n# above\n---\na: 1\n--- # below\n").unwrap();
+        assert_eq!(nodes.len(), 1);
+        let a = get(&nodes[0], "a");
+        assert!(nodes[0].comments.head.is_empty() && a.comments.head.is_empty());
+        assert!(nodes[0].comments.foot.is_empty() && a.comments.foot.is_empty());
+    }
+
+    #[test]
+    fn a_stream_of_only_empty_documents_has_no_root() {
+        // Nothing can carry them; the round-trip document replays its source.
+        assert!(compose("---\n# only\n---\n").unwrap().is_empty());
     }
 
     #[test]

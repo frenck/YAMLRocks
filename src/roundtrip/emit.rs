@@ -6,7 +6,7 @@
 //! lines above a node, inline comments trail a value on the same line, and foot
 //! comments follow a node after a blank line.
 
-use super::ast::{Comments, IncludeSource, NodeStyle, YamlNode, YamlNodeKind};
+use super::ast::{Comments, EmptyDocument, IncludeSource, NodeStyle, YamlNode, YamlNodeKind};
 use crate::encode::NullStyle;
 use crate::scanner::ScalarStyle;
 
@@ -30,27 +30,62 @@ pub fn emit_roundtrip_with(node: &YamlNode, null_style: NullStyle) -> Vec<u8> {
 
 /// Emit multiple document ASTs, separated by `---` markers, rendering synthetic
 /// nulls in `null_style`.
+///
+/// The empty documents a root carries (see [`EmptyDocuments`]) are replayed
+/// around it, so the stream keeps every document its source had.
+///
+/// [`EmptyDocuments`]: super::ast::EmptyDocuments
 pub fn emit_roundtrip_all_with(nodes: &[YamlNode], null_style: NullStyle) -> Vec<u8> {
     let mut emitter = RoundTripEmitter::new(null_style);
     if nodes.first().is_some_and(|n| n.leading_bom) {
         emitter.buf.extend_from_slice(BOM);
     }
-    for (i, node) in nodes.iter().enumerate() {
-        // A directive (`%TAG`/`%YAML`) is only valid at the stream start or right
-        // after a `...` end marker, so a later document carrying directives needs
-        // the previous one closed first. `emit_document` then emits the directives
-        // and the `---`.
-        if i > 0 && !node.directives.is_empty() {
-            emitter.buf.extend_from_slice(b"...\n");
-        } else if i > 0 && !node.explicit_start {
-            // Documents need a `---` separator. A document that carries its own
-            // explicit start marker emits it in `emit_document`, so only add the
-            // separator for one that does not (avoiding a double `---`).
-            emitter.buf.extend_from_slice(b"---\n");
+
+    let mut stream_end = StreamEnd::Nothing;
+    for node in nodes {
+        let empty_documents = node.empty_documents.as_deref();
+        for document in empty_documents.map_or(&[][..], |empty| &empty.before) {
+            stream_end = emitter.emit_empty_document(document, stream_end);
+        }
+
+        if stream_end == StreamEnd::OpenDocument {
+            // A directive (`%TAG`/`%YAML`) is only valid at the stream start or
+            // right after a `...` end marker, so a document carrying directives
+            // needs the previous one closed first. `emit_document` then emits the
+            // directives and the `---`.
+            if !node.directives.is_empty() {
+                emitter.buf.extend_from_slice(b"...\n");
+            } else if !node.explicit_start {
+                // Documents need a `---` separator. A document that carries its
+                // own explicit start marker emits it in `emit_document`, so only
+                // add the separator for one that does not (avoiding a double
+                // `---`).
+                emitter.buf.extend_from_slice(b"---\n");
+            }
         }
         emitter.emit_document(node);
+        stream_end = StreamEnd::OpenDocument;
+
+        for document in empty_documents.map_or(&[][..], |empty| &empty.after) {
+            stream_end = emitter.emit_empty_document(document, stream_end);
+        }
     }
+
     emitter.finish()
+}
+
+/// How the stream emitted so far ends, which decides what separator the next
+/// document needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamEnd {
+    /// Nothing emitted yet: the next document opens the stream.
+    Nothing,
+    /// A document that is still open: the next one needs a `---`, or a `...`
+    /// first when it starts with directives.
+    OpenDocument,
+    /// A document closed by an explicit `...`: the next one may start bare or
+    /// with directives.
+    ClosedDocument,
 }
 
 /// Emit a single document with the default null style (`null` keyword). Used by
@@ -231,6 +266,27 @@ impl RoundTripEmitter {
             }
         }
         self.buf
+    }
+
+    /// Replay an empty document from its source text, after `stream_end`, and
+    /// return how the stream ends once it is written. The text carries its own
+    /// `---` and comments; only a closing `...` for an open document before it
+    /// can be missing, since the emitter does not keep a document's end marker.
+    fn emit_empty_document(
+        &mut self,
+        document: &EmptyDocument,
+        stream_end: StreamEnd,
+    ) -> StreamEnd {
+        if stream_end == StreamEnd::OpenDocument && document.has_directives {
+            self.buf.extend_from_slice(b"...\n");
+        }
+        self.buf.extend_from_slice(document.text.as_bytes());
+
+        if document.explicit_end {
+            StreamEnd::ClosedDocument
+        } else {
+            StreamEnd::OpenDocument
+        }
     }
 
     fn emit_document(&mut self, node: &YamlNode) {
@@ -1371,6 +1427,64 @@ mod tests {
             (Ok(va), Ok(vb)) => va == vb,
             _ => false,
         }
+    }
+
+    /// Every empty document survives a re-emit from the tree, byte for byte,
+    /// wherever it sits in the stream.
+    #[test]
+    fn empty_documents_survive_a_reemit() {
+        for input in [
+            "---\n---\na: 1\n",
+            "a: 1\n---\n---\nb: 2\n",
+            "a: 1\n---\n",
+            "a: 1\n--- # note\n",
+            "---\n# only a comment\n---\na: 1\n",
+            "a: 1\n---\n# one\n---\n# two\n---\nb: 2\n",
+            "a: 1\n---\n# trailing document\n",
+            "---\n...\na: 1\n",
+            "---\n...\n---\na: 1\n",
+            "%YAML 1.2\n---\n---\na: 1\n",
+            "a: 1\n...\n%YAML 1.2\n---\n# Empty\n...\n",
+            "\u{FEFF}# head\n---\n---\na: 1\n",
+        ] {
+            assert_eq!(reemit(input), input);
+        }
+    }
+
+    /// The comment of an empty document after a block scalar stays in its own
+    /// document. Folded into the preceding root, it would replay as a line of
+    /// the scalar's content.
+    #[test]
+    fn empty_document_comment_does_not_join_a_block_scalar() {
+        let input = "%YAML 1.2\n--- |\n%!PS-Adobe-2.0\n...\n%YAML 1.2\n---\n# Empty\n...\n";
+        let out = reemit(input);
+        assert!(same_value(&out, input), "data changed: {out:?}");
+        assert!(
+            out.ends_with("...\n%YAML 1.2\n---\n# Empty\n...\n"),
+            "{out:?}"
+        );
+    }
+
+    /// A document with directives after an empty one that is still open gets
+    /// the `...` it needs; one after a closed empty document does not get a
+    /// second.
+    #[test]
+    fn directives_after_an_empty_document_close_it_once() {
+        let mut nodes =
+            crate::roundtrip::composer::compose("---\n...\n%TAG !e! tag:x:\n---\n!e!t a\n")
+                .unwrap();
+        assert_eq!(
+            super::emit_roundtrip_all_with(&nodes, NullStyle::Null),
+            b"---\n...\n%TAG !e! tag:x:\n---\n!e!t a\n"
+        );
+
+        let empty = nodes[0].empty_documents.as_deref_mut().unwrap();
+        empty.before[0].text = "---\n".to_owned();
+        empty.before[0].explicit_end = false;
+        assert_eq!(
+            super::emit_roundtrip_all_with(&nodes, NullStyle::Null),
+            b"---\n...\n%TAG !e! tag:x:\n---\n!e!t a\n"
+        );
     }
 
     /// A complex mapping key (a key that is itself a collection or a block

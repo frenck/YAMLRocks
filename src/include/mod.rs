@@ -743,15 +743,22 @@ impl IncludeResolver {
             span: None,
         })?;
         let file_id = self.register_file(path.to_path_buf(), Some(content.clone()));
-        let nodes = compose_with_file_id(&content, file_id, self.parse_options).map_err(|e| {
-            IncludeError {
-                kind: IncludeErrorKind::Parse,
-                message: e.message,
-                path: path.to_path_buf(),
-                include_stack: stack.to_vec(),
-                span: Some(e.span),
-            }
-        })?;
+        let mut nodes =
+            compose_with_file_id(&content, file_id, self.parse_options).map_err(|e| {
+                IncludeError {
+                    kind: IncludeErrorKind::Parse,
+                    message: e.message,
+                    path: path.to_path_buf(),
+                    include_stack: stack.to_vec(),
+                    span: Some(e.span),
+                }
+            })?;
+        // An included root becomes a value inside the including document, so the
+        // empty documents of its own file's stream must not travel with it: the
+        // including stream would replay them as documents of its own.
+        for node in &mut nodes {
+            node.empty_documents = None;
+        }
         Ok((file_id, nodes))
     }
 

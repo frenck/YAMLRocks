@@ -19,7 +19,7 @@ use super::anchors::{
     alias_target_path, build_anchor_map, collect_alias_paths, collect_anchor_paths,
     collect_anchor_refs, detached_clone, find_anchor_path, path_precedes,
 };
-use super::ast::{HeadComment, NodeStyle, YamlNode, YamlNodeKind};
+use super::ast::{EmptyDocuments, HeadComment, NodeStyle, YamlNode, YamlNodeKind};
 use super::emit;
 use super::emit::{emit_roundtrip_all_with, emit_roundtrip_with};
 use super::value::{node_to_python_key, node_to_python_with, python_to_node, ObjectCache};
@@ -189,7 +189,11 @@ impl YAMLRocksDocument {
                 .nodes
                 .get_mut(idx)
                 .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("index out of range"))?;
-            *node = python_to_node(py, value, double_quotes, schema)?;
+            let mut new_root = python_to_node(py, value, double_quotes, schema)?;
+            // The empty documents around a root belong to the stream, not to
+            // the value being replaced.
+            new_root.empty_documents = node.empty_documents.take();
+            *node = new_root;
             node.mark_modified();
             Ok(())
         }
@@ -228,7 +232,10 @@ impl YAMLRocksDocument {
                     "index out of range",
                 ));
             }
-            self.nodes.remove(idx);
+            let removed = self.nodes.remove(idx);
+            if let Some(empty_documents) = removed.empty_documents {
+                keep_empty_documents(&mut self.nodes, idx, *empty_documents);
+            }
             // The cached source still contains the removed document; drop it so
             // the stream re-emits from the AST instead of replaying verbatim.
             self.source = None;
@@ -595,12 +602,26 @@ impl YAMLRocksDocument {
     }
 
     /// Re-emit the document from the AST (used when modified or sourceless).
+    /// Always as a stream, even for one root: the empty documents around it
+    /// are part of the stream, not of the root.
     fn emit_nodes(&self) -> Vec<u8> {
-        if self.nodes.len() == 1 {
-            emit_roundtrip_with(&self.nodes[0], self.null_style)
-        } else {
-            emit_roundtrip_all_with(&self.nodes, self.null_style)
-        }
+        emit_roundtrip_all_with(&self.nodes, self.null_style)
+    }
+}
+
+/// Hand the empty documents of a root removed from `nodes` at `idx` to a
+/// remaining neighbour, so deleting a document removes only that document.
+/// The ones before it now precede the root that followed it; with no root
+/// after it, they and any that ended the stream move to the new last root.
+/// With no root left at all, there is nothing to carry them.
+fn keep_empty_documents(nodes: &mut [YamlNode], idx: usize, removed: EmptyDocuments) {
+    if let Some(next) = nodes.get_mut(idx) {
+        let carried = next.empty_documents.get_or_insert_with(Default::default);
+        carried.before.splice(0..0, removed.before);
+    } else if let Some(last) = nodes.last_mut() {
+        let carried = last.empty_documents.get_or_insert_with(Default::default);
+        carried.after.extend(removed.before);
+        carried.after.extend(removed.after);
     }
 }
 
@@ -907,6 +928,9 @@ impl YAMLRocksNode {
         new_val.comments.foot = std::mem::take(&mut node.comments.foot);
         new_val.anchor = node.anchor.take();
         new_val.tag = node.tag.take();
+        // Set only on a document root: the empty documents around it belong to
+        // the stream, so replacing the root's value keeps them.
+        new_val.empty_documents = node.empty_documents.take();
         new_val.mark_modified();
         *node = new_val;
         Ok(())
@@ -2174,7 +2198,46 @@ fn leaves_to_list(py: Python<'_>, leaves: Vec<(Vec<Py<PyAny>>, Py<PyAny>)>) -> P
 
 #[cfg(test)]
 mod tests {
-    use super::stamp_yaml_1_2;
+    use super::{keep_empty_documents, stamp_yaml_1_2};
+    use crate::encode::NullStyle;
+    use crate::roundtrip::composer::compose;
+    use crate::roundtrip::emit::emit_roundtrip_all_with;
+
+    /// Remove root `idx` the way `del doc[idx]` does and re-emit the stream.
+    fn delete_root(input: &str, idx: usize) -> String {
+        let mut nodes = compose(input).unwrap();
+        let removed = nodes.remove(idx);
+        if let Some(empty_documents) = removed.empty_documents {
+            keep_empty_documents(&mut nodes, idx, *empty_documents);
+        }
+        String::from_utf8(emit_roundtrip_all_with(&nodes, NullStyle::Null)).unwrap()
+    }
+
+    #[test]
+    fn deleting_a_root_keeps_the_empty_documents_before_it() {
+        assert_eq!(
+            delete_root("a: 1\n---\n# x\n---\nb: 2\n---\nc: 3\n", 1),
+            "a: 1\n---\n# x\n---\nc: 3\n"
+        );
+    }
+
+    #[test]
+    fn deleting_the_last_root_keeps_the_empty_documents_around_it() {
+        assert_eq!(
+            delete_root("a: 1\n---\n# x\n---\nb: 2\n--- # y\n", 1),
+            "a: 1\n---\n# x\n--- # y\n"
+        );
+    }
+
+    #[test]
+    fn deleting_a_root_closes_its_empty_documents_before_a_directive() {
+        // The empty document now sits right before a root with a `%YAML`
+        // directive, which is only valid after a `...`.
+        assert_eq!(
+            delete_root("---\n---\nb: 1\n...\n%YAML 1.2\n---\nc: 2\n", 0),
+            "---\n...\n%YAML 1.2\n---\nc: 2\n"
+        );
+    }
 
     fn stamp(input: &[u8]) -> Vec<u8> {
         let mut buf = input.to_vec();

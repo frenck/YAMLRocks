@@ -45,6 +45,11 @@ pub struct YamlNode {
     /// the first document root; `false` otherwise. Preserved so re-emission keeps
     /// the mark and a round-trip stays byte-for-byte.
     pub leading_bom: bool,
+    /// The empty documents next to this document root in its stream. Only set
+    /// on a document root, and only by the round-trip composer; `None` for
+    /// nested nodes and for a root with no empty neighbours. See
+    /// [`EmptyDocuments`].
+    pub empty_documents: Option<Box<EmptyDocuments>>,
     /// Whether this node was created from a Python value (an edit) rather than
     /// parsed from source. A *synthetic* null follows the document's null style on
     /// re-emission; a *loaded* null always re-emits in its original form so an
@@ -77,6 +82,7 @@ impl YamlNode {
             explicit_start: false,
             directives: Vec::new(),
             leading_bom: false,
+            empty_documents: None,
             synthetic: false,
             explicit_key: false,
         }
@@ -186,6 +192,45 @@ pub fn is_include_tag(tag: Option<&str>) -> bool {
                 | "!include_dir_merge_named"
         )
     )
+}
+
+/// The empty documents (a `---` with no content, or with only comments) on
+/// either side of a document root.
+///
+/// An empty document has no node of its own, so the round-trip tree would lose
+/// it, and with it the stream's document count, the moment the stream is
+/// rebuilt from the tree. The root that follows a run of empty documents
+/// carries that run instead, and the last root also carries any that end the
+/// stream. A stream that holds only empty documents has no root to carry them;
+/// it always re-emits from its cached source, since there is nothing to edit.
+#[derive(Debug, Clone, Default)]
+pub struct EmptyDocuments {
+    /// The empty documents directly before this root, in source order.
+    pub before: Vec<EmptyDocument>,
+    /// The empty documents after this root. Only the last root of a stream has
+    /// any: an empty document between two roots belongs to the next one.
+    pub after: Vec<EmptyDocument>,
+}
+
+/// One empty document, kept as its verbatim source.
+///
+/// It holds nothing but directives, its `---`, comments, blank lines, and an
+/// optional `...`, so replaying its text is exact and keeps its comments with
+/// it rather than handing them to a neighbouring node.
+#[derive(Debug, Clone)]
+pub struct EmptyDocument {
+    /// The source from the document's start (its first directive, or its `---`)
+    /// up to where the next document starts. For the first document of a
+    /// stream it starts at the beginning of the input, after any byte order
+    /// mark, so comments above its `---` stay with it.
+    pub text: String,
+    /// Whether it opens with directives. A directive is only valid at the start
+    /// of the stream or after a `...`, so a document emitted before this one has
+    /// to be closed first.
+    pub has_directives: bool,
+    /// Whether it is closed by an explicit `...`. A document that follows a
+    /// closed one needs no separator of its own.
+    pub explicit_end: bool,
 }
 
 /// The content of a YAML node.

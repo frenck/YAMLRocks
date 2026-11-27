@@ -384,16 +384,17 @@ def test_roundtrip_unmodified_tag_directive_is_byte_identical():
     assert yamlrocks.dumps(doc) == src
 
 
-def test_roundtrip_dropped_empty_document_does_not_leak_its_directive():
-    """A directive scoped to a skipped empty document does not reach the next."""
-    # The `%TAG` belongs to the empty first document; once that document is
-    # dropped, re-emitting the second (modified) one must not carry the handle.
+def test_roundtrip_empty_document_keeps_its_directive_to_itself():
+    """A directive scoped to an empty document does not reach the next."""
+    # The `%TAG` belongs to the empty first document. Re-emitting the second
+    # (modified) one keeps the handle on that empty document, ahead of its own
+    # `---`, and does not repeat it on the second.
     src = b"%TAG !e! tag:x:\n---\n---\nb: 2\n"
     doc = yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP)
     doc["b"] = 9
     out = yamlrocks.dumps(doc)
-    assert b"%TAG" not in out
-    assert out == b"---\nb: 9\n"
+    assert out == b"%TAG !e! tag:x:\n---\n---\nb: 9\n"
+    assert yamlrocks.loads_all(out) == [None, {"b": 9}]
 
 
 def test_roundtrip_edit_keeps_yaml_version_directive():

@@ -2,6 +2,7 @@
 //! custom-tagged values, and the [`YAMLRocksAnnotatedDict`]/[`YAMLRocksAnnotatedList`]
 //! subclasses that carry source locations in annotated mode.
 
+use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
@@ -47,6 +48,17 @@ impl YAMLRocksTag {
 
     fn __repr__(&self) -> String {
         format!("YAMLRocksTag('{}', ...)", self.tag)
+    }
+
+    /// Report the held value to the garbage collector, so a reference cycle
+    /// through a tag (a value that reaches back to it, like a list the tag was
+    /// later appended to) is collectable instead of leaking.
+    ///
+    /// No `__clear__` is needed, for the same reason a `tuple` has none: the tag
+    /// is frozen and its value exists before the tag does, so any cycle through
+    /// it also passes through a mutable object that the collector can clear.
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.value)
     }
 }
 

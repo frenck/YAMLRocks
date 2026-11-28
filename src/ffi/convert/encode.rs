@@ -1,6 +1,5 @@
-use std::sync::OnceLock;
-
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{
     PyBool, PyBytes, PyDict, PyFloat, PyFrozenSet, PyInt, PyList, PySet, PyString, PyTuple, PyType,
 };
@@ -526,7 +525,7 @@ pub(crate) fn numpy_child<'py>(
     py: Python<'py>,
     obj: &Bound<'py, PyAny>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let types = NUMPY_TYPES.get_or_init(|| {
+    let types = NUMPY_TYPES.get_or_init(py, || {
         let numpy = py.import("numpy").ok()?;
         let ndarray = numpy.getattr("ndarray").ok()?.unbind();
         let generic = numpy.getattr("generic").ok()?.unbind();
@@ -549,7 +548,13 @@ pub(crate) fn numpy_child<'py>(
 
 /// Cached `numpy.ndarray` / `numpy.generic` types, resolved once. `None` means
 /// numpy is not importable, so nothing can be a numpy object.
-static NUMPY_TYPES: OnceLock<Option<(Py<PyAny>, Py<PyAny>)>> = OnceLock::new();
+///
+/// A `PyOnceLock`, not a `std::sync::OnceLock`: the initializer imports numpy,
+/// which runs Python. A second thread blocked on a plain `OnceLock` stays
+/// attached to the interpreter while it waits, so the importing thread can never
+/// take the GIL back (or, on a free-threaded build, stop the world), and both
+/// hang on concurrent first use. `PyOnceLock` detaches while it waits.
+static NUMPY_TYPES: PyOnceLock<Option<(Py<PyAny>, Py<PyAny>)>> = PyOnceLock::new();
 
 /// Convert a numpy array (`tolist`) or scalar (`item`), but only for genuine
 /// numpy objects. Detection and decomposition live in [`numpy_child`], shared

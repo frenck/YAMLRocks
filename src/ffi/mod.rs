@@ -865,14 +865,14 @@ fn extract_input(data: &Bound<'_, PyAny>) -> PyResult<String> {
         return bytes_to_string(b.as_bytes());
     }
     if let Ok(ba) = data.cast::<PyByteArray>() {
-        // SAFETY: we copy out of the buffer immediately, without releasing the
-        // GIL or mutating the bytearray in between.
-        return bytes_to_string(unsafe { ba.as_bytes() });
+        // `to_vec` copies under the bytearray's critical section, so on a
+        // free-threaded build another thread cannot resize or free the buffer
+        // mid-copy (the GIL alone protects that only on a regular build).
+        return owned_bytes_to_string(ba.to_vec());
     }
     // memoryview and other buffer-protocol objects.
     if let Ok(buffer) = PyBuffer::<u8>::get(data) {
-        let bytes = buffer.to_vec(data.py())?;
-        return bytes_to_string(&bytes);
+        return owned_bytes_to_string(buffer.to_vec(data.py())?);
     }
     Err(PyTypeError::new_err(
         "loads() requires str, bytes, bytearray, or a buffer (e.g. memoryview)",
@@ -932,6 +932,17 @@ fn bytes_to_string(bytes: &[u8]) -> PyResult<String> {
         Encoding::Utf16Be => decode_utf16(bytes, true),
         Encoding::Utf32Le => decode_utf32(bytes, false),
         Encoding::Utf32Be => decode_utf32(bytes, true),
+    }
+}
+
+/// Like [`bytes_to_string`], but for a buffer that was already copied out of a
+/// Python object: UTF-8 input (the common case) reuses the allocation instead of
+/// copying the bytes a second time.
+fn owned_bytes_to_string(bytes: Vec<u8>) -> PyResult<String> {
+    match detect_encoding(&bytes) {
+        Encoding::Utf8 => String::from_utf8(bytes)
+            .map_err(|e| errors::decode_message(format!("invalid UTF-8: {e}"))),
+        _ => bytes_to_string(&bytes),
     }
 }
 

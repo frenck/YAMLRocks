@@ -18,6 +18,11 @@ use super::decode::resolve_tagged;
 use super::TagPolicy;
 
 /// Cached references to the pure-Python annotated-scalar classes.
+///
+/// Filled with a check, then an import, then `set`, never `get_or_init`: the
+/// import runs Python, and a thread blocked on a `OnceLock` initializer while
+/// attached to the interpreter would deadlock against the thread doing the
+/// import. Two threads may both import on first use; the first `set` wins.
 static ANNOTATED_STR: OnceLock<Py<PyAny>> = OnceLock::new();
 static ANNOTATED_INT: OnceLock<Py<PyAny>> = OnceLock::new();
 static ANNOTATED_FLOAT: OnceLock<Py<PyAny>> = OnceLock::new();

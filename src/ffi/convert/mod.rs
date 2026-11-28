@@ -29,8 +29,10 @@ pub(crate) use encode::{
 
 /// Build a Python `int` from a decimal integer string (with an optional sign),
 /// for integers too large to fit in `i64`. The digits are already validated as a
-/// base-10 integer, so this is infallible in practice; on the unexpected failure
-/// (out of memory) it clears the error and falls back to the string.
+/// base-10 integer, but the conversion can still fail: an integer longer than
+/// `sys.get_int_max_str_digits()` (4300 digits by default) raises `ValueError`,
+/// and memory can run out. On any failure it clears the error and falls back to
+/// the string, so such an integer loads as a `str`.
 pub(crate) fn py_int_from_decimal(py: Python<'_>, digits: &str) -> Py<PyAny> {
     // YAML 1.1 permits underscore digit separators (`1_000_000`), and the
     // resolver accepts them leniently (including `1__000`/`1000_`, matching

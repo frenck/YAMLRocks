@@ -577,9 +577,11 @@ mod tests {
 
 use pyo3::prelude::*;
 
-// The module holds no mutable global state (all state lives in per-instance
-// pyclasses guarded by PyO3), so it is safe to run without the GIL on
-// free-threaded (nogil) CPython builds.
+// Safe to run without the GIL on free-threaded (nogil) CPython builds: state
+// lives in per-instance pyclasses guarded by PyO3. The only module-wide state
+// is an atomic temp-file counter and a few write-once caches of Python classes
+// (the numpy types and the annotated scalar classes), each filled race-free and
+// never changed after.
 #[pymodule(gil_used = false)]
 fn _yamlrocks(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ffi::loads, m)?)?;

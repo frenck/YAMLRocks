@@ -1,7 +1,7 @@
 use pyo3::exceptions::PyTypeError;
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDate, PyDateTime, PyDelta, PyFloat, PyString, PyTuple, PyTzInfo};
+use pyo3::types::{PyDate, PyDateTime, PyDelta, PyFloat, PyString, PyTuple, PyTzInfo};
 
 use crate::decode::Value;
 use crate::ffi::errors;
@@ -184,8 +184,6 @@ fn value_to_python_inner<'tree>(
     scratch: &mut Scratch<'tree>,
     depth: usize,
 ) -> PyResult<Py<PyAny>> {
-    // The scalar arms repeat `plain_scalar_to_python` on purpose: one dispatch
-    // here keeps the hottest path of `loads` as short as it can be.
     let obj = match value {
         Value::Null => py.None(),
         Value::Bool(b) => b.into_pyobject(py)?.to_owned().into_any().unbind(),
@@ -259,22 +257,35 @@ fn is_plain_scalar(value: &Value<'_>) -> bool {
     )
 }
 
-/// Convert a plain scalar (see [`is_plain_scalar`]), or `None` for any other
-/// value.
+/// Convert a plain scalar (see [`is_plain_scalar`]) with the raw CPython
+/// constructors, returning a new reference, or NULL with the Python error set
+/// when the allocation fails.
+///
+/// PyO3's safe constructors are not used here on purpose: on a NULL result
+/// they report the error through `sys.unraisablehook` before panicking, which
+/// runs Python while [`plain_scalar_list`] holds a list with NULL slots.
+///
+/// # Safety
+///
+/// The caller must be attached to the interpreter and `value` must satisfy
+/// [`is_plain_scalar`].
 #[inline]
-fn plain_scalar_to_python(py: Python<'_>, value: &Value<'_>) -> Option<Py<PyAny>> {
-    let obj = match value {
-        Value::Null => py.None(),
-        Value::Bool(b) => PyBool::new(py, *b).to_owned().into_any().unbind(),
-        Value::Int(i) => {
-            let Ok(int) = i.into_pyobject(py);
-            int.into_any().unbind()
+unsafe fn plain_scalar_new_ref(value: &Value<'_>) -> *mut ffi::PyObject {
+    // SAFETY: the caller is attached, so the singletons and the constructors
+    // may be used; each call returns a new (or NULL) reference.
+    unsafe {
+        match value {
+            Value::Null => ffi::Py_NewRef(ffi::Py_None()),
+            Value::Bool(true) => ffi::Py_NewRef(ffi::Py_True()),
+            Value::Bool(false) => ffi::Py_NewRef(ffi::Py_False()),
+            Value::Int(i) => ffi::PyLong_FromLongLong(*i),
+            Value::Float(f) => ffi::PyFloat_FromDouble(*f),
+            Value::String(s) => {
+                ffi::PyUnicode_FromStringAndSize(s.as_ptr().cast(), s.len() as ffi::Py_ssize_t)
+            }
+            _ => unreachable!("caller checked is_plain_scalar"),
         }
-        Value::Float(f) => PyFloat::new(py, *f).into_any().unbind(),
-        Value::String(s) => PyString::new(py, s).into_any().unbind(),
-        _ => return None,
-    };
-    Some(obj)
+    }
 }
 
 /// Build a list of plain scalars (see [`is_plain_scalar`]), converting each
@@ -283,27 +294,36 @@ fn plain_scalar_to_python(py: Python<'_>, value: &Value<'_>) -> Option<Py<PyAny>
 /// This is the common case and skips the scratch stack entirely. It is sound
 /// only because no conversion in the fill loop can run Python code, trigger a
 /// garbage collection or reach a point where another thread could stop the
-/// world, so nothing can observe the list while a slot is still NULL.
+/// world, so nothing can observe the list while a slot is still NULL. That
+/// includes the failure path: a constructor that runs out of memory returns
+/// NULL, and the error is fetched and returned without calling into Python.
 ///
 /// Kept out of line, like [`collection_list`], so the per-value dispatch in
 /// `value_to_python_inner` stays small.
 #[inline(never)]
 fn plain_scalar_list(py: Python<'_>, items: &[Value<'_>]) -> PyResult<Py<PyAny>> {
     // SAFETY: `PyList_New` returns a new list of `items.len()` NULL slots;
-    // `from_owned_ptr_or_err` takes ownership (or raises on null). Should a
-    // conversion below panic, dropping the list releases the slots filled so
-    // far, and CPython's list deallocator tolerates the NULL ones.
+    // `from_owned_ptr_or_err` takes ownership (or raises on null). On an early
+    // return below, dropping the list releases the slots filled so far, and
+    // CPython's list deallocator tolerates the NULL ones.
     let list = unsafe {
         Bound::from_owned_ptr_or_err(py, ffi::PyList_New(items.len() as ffi::Py_ssize_t))?
     };
+
     for (i, item) in items.iter().enumerate() {
-        let child = plain_scalar_to_python(py, item).expect("caller checked is_plain_scalar");
+        // SAFETY: `py` proves we are attached, and the caller checked that
+        // every item is a plain scalar.
+        let child = unsafe { plain_scalar_new_ref(item) };
+        if child.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+
         // SAFETY: `i` is in bounds (< len) and each slot is filled exactly once.
         // Only plain scalar conversions run between `PyList_New` and this
-        // store, so the list has not been observable (see above). `into_ptr`
-        // hands over an owned reference for `PyList_SET_ITEM` to steal.
+        // store, so the list has not been observable (see above).
+        // `PyList_SET_ITEM` steals the new reference in `child`.
         unsafe {
-            ffi::PyList_SET_ITEM(list.as_ptr(), i as ffi::Py_ssize_t, child.into_ptr());
+            ffi::PyList_SET_ITEM(list.as_ptr(), i as ffi::Py_ssize_t, child);
         }
     }
     Ok(list.into_any().unbind())

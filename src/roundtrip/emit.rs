@@ -7,6 +7,7 @@
 //! comments follow a node after a blank line.
 
 use super::ast::{Comments, EmptyDocument, IncludeSource, NodeStyle, YamlNode, YamlNodeKind};
+use super::composer::ComposedStream;
 use crate::encode::NullStyle;
 use crate::scanner::ScalarStyle;
 
@@ -71,6 +72,29 @@ pub fn emit_roundtrip_all_with(nodes: &[YamlNode], null_style: NullStyle) -> Vec
     })
 }
 
+/// Emit a whole composed stream, rendering synthetic nulls in `null_style`.
+/// Its roots are written as [`emit_roundtrip_all_with`] writes them. A stream
+/// without a root still holds its empty documents, which are replayed instead,
+/// so the stream keeps as many documents as its source had.
+pub fn emit_stream_with(stream: &ComposedStream, null_style: NullStyle) -> Vec<u8> {
+    if !stream.roots.is_empty() {
+        return emit_roundtrip_all_with(&stream.roots, null_style);
+    }
+    if stream.empty_documents.is_empty() {
+        return Vec::new();
+    }
+
+    let mut emitter = RoundTripEmitter::new(null_style, DumpConfig::default());
+    if stream.leading_bom {
+        emitter.buf.extend_from_slice(BOM);
+    }
+    let mut stream_end = StreamEnd::Nothing;
+    for document in &stream.empty_documents {
+        stream_end = emitter.emit_empty_document(document, stream_end);
+    }
+    emitter.finish()
+}
+
 /// Write `nodes` as a stream of documents, with the empty documents they carry.
 fn write_stream(emitter: &mut RoundTripEmitter, nodes: &[YamlNode]) {
     if nodes.first().is_some_and(|n| n.leading_bom) {
@@ -99,8 +123,7 @@ fn write_stream(emitter: &mut RoundTripEmitter, nodes: &[YamlNode]) {
                 emitter.buf.extend_from_slice(b"---\n");
             }
         }
-        emitter.emit_document(node);
-        stream_end = StreamEnd::OpenDocument;
+        stream_end = emitter.emit_document(node);
 
         for document in empty_documents.map_or(&[][..], |empty| &empty.after) {
             stream_end = emitter.emit_empty_document(document, stream_end);
@@ -170,8 +193,8 @@ pub fn emit_roundtrip_dump(node: &YamlNode, null_style: NullStyle, dump: DumpCon
         if node.leading_bom {
             emitter.buf.extend_from_slice(BOM);
         }
-        emitter.emit_document(node);
-        if dump.explicit_end {
+        let stream_end = emitter.emit_document(node);
+        if dump.explicit_end && stream_end != StreamEnd::ClosedDocument {
             emitter.buf.extend_from_slice(b"...\n");
         }
     })
@@ -224,6 +247,10 @@ struct RoundTripEmitter {
     /// break may be replayed from its source. Cleared for the second pass of
     /// [`run_emitter`], which rebuilds it from its value instead.
     replay_unterminated_keep: bool,
+    /// Where the last keep-chomped block scalar written (`|+`, `>+`) ended in
+    /// the buffer, so no blank line is written right after it (see
+    /// [`emit_blank_before`](Self::emit_blank_before)).
+    keep_chomped_end: Option<usize>,
     /// The lowest column a continuation line of a multi-line plain or quoted
     /// scalar may start at in the block position being written: one past the
     /// column of the mapping key or sequence dash that holds it, zero at the
@@ -249,6 +276,7 @@ impl RoundTripEmitter {
             unterminated_raw_keeps: false,
             earlier_keep_followed: false,
             replay_unterminated_keep: true,
+            keep_chomped_end: None,
             continuation_floor: 0,
         }
     }
@@ -363,7 +391,9 @@ impl RoundTripEmitter {
         }
     }
 
-    fn emit_document(&mut self, node: &YamlNode) {
+    /// Write one document and return how the stream ends after it: open,
+    /// unless the document had to be closed with a `...`.
+    fn emit_document(&mut self, node: &YamlNode) -> StreamEnd {
         // Directives precede the `---` that opens their document. A `%TAG` handle
         // is in scope only for this document, so replaying it keeps a tagged node
         // (`!e!foo`) resolvable when the edited document reloads.
@@ -381,7 +411,7 @@ impl RoundTripEmitter {
             self.emit_inline_comment(&node.comments);
             self.buf.push(b'\n');
             self.emit_foot(&node.comments, 0);
-            return;
+            return StreamEnd::OpenDocument;
         }
         // A synthetic (dump-path) root block collection that carries a tag emits
         // the tag on its own line, then its body indented one step under it, so
@@ -430,21 +460,67 @@ impl RoundTripEmitter {
             _ => {
                 self.emit_anchor_tag(node);
                 self.continuation_floor = 0;
+                let content_start = self.buf.len();
                 // A root block scalar's body sits one step in, matching the fast
                 // encoder's `emit_literal_block(s, step())`.
                 self.emit_inline_content(node, self.step());
                 self.emit_inline_comment(&node.comments);
                 self.end_line();
+
+                if self.foot_joins_root_block_scalar(node, content_start) {
+                    self.buf.extend_from_slice(b"...\n");
+                    self.emit_foot(&node.comments, 0);
+                    return StreamEnd::ClosedDocument;
+                }
             }
         }
         self.emit_foot(&node.comments, 0);
+        StreamEnd::OpenDocument
+    }
+
+    /// Whether the first foot comment of a root block scalar, written right
+    /// after it, would be read as a line of its content. At the root a block
+    /// scalar's lines may start at column 0, where its source ended it with a
+    /// `...` that the tree does not keep; an empty one takes its indentation
+    /// from the first line that follows. The scalar was written from
+    /// `content_start` on.
+    fn foot_joins_root_block_scalar(&self, node: &YamlNode, content_start: usize) -> bool {
+        let YamlNodeKind::Scalar(_, ScalarStyle::Literal | ScalarStyle::Folded) = node.kind else {
+            return false;
+        };
+        let Some(first_foot) = node.comments.foot.first() else {
+            return false;
+        };
+        let Ok(written) = std::str::from_utf8(&self.buf[content_start..]) else {
+            return false;
+        };
+
+        let mut followed = written.to_owned();
+        followed.push('#');
+        if !first_foot.is_empty() {
+            followed.push(' ');
+            followed.push_str(first_foot);
+        }
+        followed.push('\n');
+
+        let alone = crate::scanner::reread_block_scalar(written, -1);
+        alone.is_some() && alone != crate::scanner::reread_block_scalar(&followed, -1)
     }
 
     // -- Block mapping --
 
     /// Emit the blank source lines recorded before a node, preserving the
     /// author's section spacing on re-emit.
+    ///
+    /// Not right after a keep-chomped block scalar (`|+`): there they would be
+    /// read back as its trailing empty lines. In the source such lines belong
+    /// to the scalar; a node can still record some when its own line is not
+    /// where its entry starts (`- !t`, the blank lines, then its content).
     fn emit_blank_before(&mut self, comments: &Comments) {
+        if self.follows_keep_chomped_scalar() {
+            return;
+        }
+
         for _ in 0..comments.blank_before {
             self.buf.push(b'\n');
         }
@@ -691,6 +767,26 @@ impl RoundTripEmitter {
         }
     }
 
+    /// Whether nothing but the line break closing its last line was written
+    /// since a keep-chomped block scalar (see
+    /// [`keep_chomped_end`](Self::keep_chomped_end)).
+    fn follows_keep_chomped_scalar(&self) -> bool {
+        self.keep_chomped_end.is_some_and(|end| {
+            self.buf.len() <= end + 1 && self.buf[end..].iter().all(|&byte| byte == b'\n')
+        })
+    }
+
+    /// Whether the next byte written starts a line at column 0. A byte order
+    /// mark at the head of the stream is not content, so the line after it
+    /// still starts there. Looks at the last byte only, as this runs for every
+    /// plain scalar written.
+    fn at_line_start(&self) -> bool {
+        match self.buf.last() {
+            None | Some(b'\n' | b'\r') => true,
+            Some(_) => self.buf == BOM,
+        }
+    }
+
     // -- Block sequence --
 
     fn emit_block_sequence(&mut self, items: &[YamlNode], indent: usize) {
@@ -888,6 +984,9 @@ impl RoundTripEmitter {
                         // character, and the line break after it is the
                         // emitter's to write.
                         let block = matches!(style, ScalarStyle::Literal | ScalarStyle::Folded);
+                        if block && block_header_keeps(raw) {
+                            self.keep_chomped_end = Some(self.buf.len());
+                        }
                         if block && !raw.ends_with(['\n', '\r']) {
                             // Tracking this one replaces the previous one, so
                             // settle first whether that one was followed.
@@ -926,12 +1025,13 @@ impl RoundTripEmitter {
     /// [`emit_scalar`](Self::emit_scalar) make before writing a value verbatim
     /// apply to its source just the same: a leading BOM, flow-unsafe text
     /// inside a flow collection, and text that does not read back as plain
-    /// ([`plain_reads_back`]; never before a key's `:` here, since keys are not
-    /// replayed). Two of its arms have no counterpart: a line break in the
-    /// value is what the replayed source lines hold, checked by
-    /// [`continuation_lines_fit`] instead, and the dump width only shapes
-    /// synthetic nodes, which have no source to replay. A quoted scalar's
-    /// quotes protect its content, so only its continuation lines are checked.
+    /// where it is written ([`plain_reads_back`], with the same column-0 rule;
+    /// never before a key's `:` here, since keys are not replayed). Two of its
+    /// arms have no counterpart: a line break in the value is what the
+    /// replayed source lines hold, checked by [`continuation_lines_fit`]
+    /// instead, and the dump width only shapes synthetic nodes, which have no
+    /// source to replay. A quoted scalar's quotes protect its content, so only
+    /// its continuation lines are checked.
     ///
     /// A block scalar keeps its body lines at their source columns too, and
     /// what they mean depends on the indentation of the node holding it: the
@@ -968,7 +1068,7 @@ impl RoundTripEmitter {
             _ if self.emitting_key => false,
             ScalarStyle::Plain if value.starts_with('\u{feff}') => false,
             ScalarStyle::Plain if self.flow_depth > 0 && plain_unsafe_in_flow(value) => false,
-            ScalarStyle::Plain if !plain_reads_back(value, false) => false,
+            ScalarStyle::Plain if !plain_reads_back(value, false, self.at_line_start()) => false,
             ScalarStyle::Plain
                 if raw.rsplit(['\n', '\r']).next().is_some_and(|last| {
                     matches!(last.trim_start_matches([' ', '\t']), "?" | "-" | ":")
@@ -1024,8 +1124,11 @@ impl RoundTripEmitter {
             // A plain scalar the scanner read only thanks to what followed it in
             // the source (`-` and `?` before a `:` that the parser took as the
             // next entry's, a value folded from lines ending in a lone `:`) is
-            // quoted once that neighbour is gone. See [`plain_reads_back`].
-            ScalarStyle::Plain if !plain_reads_back(value, before_colon) => {
+            // quoted once that neighbour is gone. So is one the source indented
+            // that would open a directive or a document marker at column 0,
+            // where the emitter writes a root scalar or a root mapping's key.
+            // See [`plain_reads_back`].
+            ScalarStyle::Plain if !plain_reads_back(value, before_colon, self.at_line_start()) => {
                 self.push_quoted(value);
             }
             ScalarStyle::Plain
@@ -1134,14 +1237,20 @@ impl RoundTripEmitter {
         // indicator there counts from column 0.
         let parent_indent = self.parent_indent().max(0) as usize;
 
+        let header_start = self.buf.len();
         crate::emit_util::push_block_scalar_header(
             &mut self.buf,
             value,
             marker,
             body_indent - parent_indent,
         );
+        let keeps = self.buf[header_start..].contains(&b'+');
         self.emit_inline_comment(&node.comments);
         crate::emit_util::push_block_scalar_body(&mut self.buf, value, marker, body_indent);
+
+        if keeps {
+            self.keep_chomped_end = Some(self.buf.len());
+        }
     }
 
     /// The indentation of the block mapping or sequence that holds the node
@@ -1513,9 +1622,16 @@ fn plain_unsafe_in_flow(value: &str) -> bool {
 /// (`before_colon`), a lone indicator and a trailing `:` are plain text: the
 /// `:` that follows keeps them from standing alone (`-: v`, `a:: v`).
 ///
+/// At the start of a line (`line_start`, column 0 with nothing before it: a
+/// root scalar, a key of a root block mapping) two more starts mean something
+/// else. A `%` opens a directive, and `---` or `...` followed by white space
+/// or the end of the line is a document marker. A key's `:` right after a bare
+/// marker keeps it plain (`---: v`).
+///
 /// The scanner never reads such a plain scalar on its own; one reaches the
-/// emitter when the source put it next to a character that kept it plain.
-fn plain_reads_back(value: &str, before_colon: bool) -> bool {
+/// emitter when the source put it next to a character that kept it plain, or
+/// indented it where the emitter writes it at column 0.
+fn plain_reads_back(value: &str, before_colon: bool, line_start: bool) -> bool {
     let holds_indicator = value.contains(": ")
         || value.contains(" #")
         || value.contains("\t#")
@@ -1526,8 +1642,34 @@ fn plain_reads_back(value: &str, before_colon: bool) -> bool {
         return false;
     }
 
+    if line_start && starts_like_directive_or_marker(value, before_colon) {
+        return false;
+    }
+
     let stands_alone = matches!(value, "-" | "?" | ":") || value.ends_with(':');
     before_colon || !stands_alone
+}
+
+/// Whether text written at column 0 starts a directive (`%`) or a document
+/// marker (`---` or `...` followed by white space, a line break, or the end of
+/// the line). `before_colon` says a key's `:` follows the text directly, which
+/// ends the line's first token for a bare `---` or `...`.
+fn starts_like_directive_or_marker(text: &str, before_colon: bool) -> bool {
+    if text.starts_with('%') {
+        return true;
+    }
+
+    let Some(rest) = text
+        .strip_prefix("---")
+        .or_else(|| text.strip_prefix("..."))
+    else {
+        return false;
+    };
+
+    match rest.chars().next() {
+        None => !before_colon,
+        Some(next) => matches!(next, ' ' | '\t' | '\n' | '\r'),
+    }
 }
 
 /// Whether a block mapping key is written in the explicit `?`/`:` form rather
@@ -1691,8 +1833,9 @@ mod tests {
     /// Re-emit the round-trip AST of `input` and return the re-emitted bytes as
     /// text, asserting the result re-composes (is valid YAML).
     fn reemit(input: &str) -> String {
-        let nodes = crate::roundtrip::composer::compose(input).unwrap();
-        let out = super::emit_roundtrip_all_with(&nodes, NullStyle::Null);
+        let stream =
+            crate::roundtrip::composer::compose_stream_with(input, Default::default()).unwrap();
+        let out = super::emit_stream_with(&stream, NullStyle::Null);
         let text = String::from_utf8(out).unwrap();
         assert!(
             crate::roundtrip::composer::compose(&text).is_ok(),
@@ -1732,6 +1875,28 @@ mod tests {
             "\u{FEFF}# head\n---\n---\na: 1\n",
         ] {
             assert_eq!(reemit(input), input);
+        }
+    }
+
+    /// A stream of nothing but empty documents has no root to carry them; the
+    /// composed stream keeps them, so its re-emit holds every one.
+    #[test]
+    fn a_stream_without_a_root_keeps_its_empty_documents() {
+        for input in [
+            "---",
+            "---\n",
+            "---\n---\n",
+            "--- # note\n",
+            "---\n# only a comment\n",
+            "%YAML 1.2\n---\n",
+            "%YAML 1.2\n\t\n---\n",
+            "---\n...\n%YAML 1.2\n---\n...\n",
+            "# head\n---\n",
+            "\u{FEFF}---\n",
+            "\u{FEFF}# head\n---\n---\n",
+        ] {
+            assert_eq!(reemit(input), input);
+            assert!(same_value(input, &reemit(input)), "{input:?}");
         }
     }
 
@@ -2045,6 +2210,77 @@ mod tests {
         }
     }
 
+    /// A lone `\r` breaks a line. The empty lines a keep-chomped block scalar
+    /// ends with are its own, so the key after it gets no blank line before
+    /// it, which `|+` would add to the value.
+    #[test]
+    fn lone_carriage_return_lines_stay_with_their_block_scalar() {
+        for input in [
+            "a: |+\r\r\rb: 1\n",
+            ": |+\r\r:",
+            "a: |+\r\r\r\nb: 1\r\r\rc: 2\n",
+        ] {
+            let out = reemit(input);
+            assert!(same_value(input, &out), "{input:?} -> {out:?}");
+        }
+    }
+
+    /// An entry whose content starts below its `-` records the blank lines in
+    /// between as its own. Right after a keep-chomped block scalar, writing
+    /// them above the `-` would add them to that scalar's value.
+    #[test]
+    fn no_blank_line_is_written_after_a_keep_chomped_block_scalar() {
+        for input in [
+            "- |+\n x\n- !t\n\n  y\n",
+            "- >+\n x\n- &a\n\n  y\n",
+            "- |+\n x\n-\n\n  y\n",
+            "- |+\n x\r- !t\r\r  y\r",
+        ] {
+            let out = reemit(input);
+            assert!(same_value(input, &out), "{input:?} -> {out:?}");
+        }
+
+        // The same holds for one rebuilt from its value.
+        let mut nodes = crate::roundtrip::composer::compose("- |+\n x\n\n- !t\n\n  y\n").unwrap();
+        let YamlNodeKind::Sequence(items) = &mut nodes[0].kind else {
+            panic!("expected a sequence");
+        };
+        items[0].mark_modified();
+        let out = String::from_utf8(super::emit_roundtrip_all_with(&nodes, NullStyle::Null));
+        assert_eq!(out.unwrap(), "- |+\n  x\n\n- !t y\n");
+    }
+
+    /// A root block scalar whose lines start at column 0 was ended by a `...`
+    /// in its source. A comment after it keeps that marker, or it would be
+    /// read as one more line of the scalar. An indented one needs none.
+    #[test]
+    fn comment_after_an_unindented_root_block_scalar_keeps_the_end_marker() {
+        for (input, expected) in [
+            ("--- >\nx\n...\n# c\n", "---\n>\nx\n...\n# c\n"),
+            ("--- |\n...\n# c\n", "---\n|\n...\n# c\n"),
+            // Between documents the comment opens the next one, whose `---`
+            // ends the scalar.
+            ("--- >\nx\n...\n# c\n--- y\n", "---\n>\nx\n---\n# c\ny\n"),
+            ("--- >\nx\n...\n# c\n", "---\n>\nx\n...\n# c\n"),
+            ("|\n  x\n# c\n", "|\n  x\n# c\n"),
+        ] {
+            let out = reemit(input);
+            assert_eq!(out, expected, "{input:?}");
+            assert!(same_value(input, &out), "{input:?} -> {out:?}");
+        }
+    }
+
+    /// A blank line written with a lone `\r` is kept before the next key like
+    /// one written with `\n`.
+    #[test]
+    fn blank_lines_with_lone_carriage_returns_are_counted_once() {
+        let nodes = crate::roundtrip::composer::compose("a: 1\r\rb: 2\r").unwrap();
+        let YamlNodeKind::Mapping(pairs) = &nodes[0].kind else {
+            panic!("expected a mapping");
+        };
+        assert_eq!(pairs[1].0.comments.blank_before, 1);
+    }
+
     /// The detected indentation is the leading spaces of the first line with
     /// content; an indentation indicator or a scalar without content leaves it
     /// to a full read.
@@ -2277,18 +2513,86 @@ mod tests {
     #[test]
     fn plain_reads_back_where_the_scanner_reads_it_plain() {
         for value in ["a", "a-b", "a:b", "http://x", "a#b", "-a", "?a", ":a"] {
-            assert!(super::plain_reads_back(value, false), "{value:?}");
-            assert!(super::plain_reads_back(value, true), "{value:?}");
+            for line_start in [false, true] {
+                assert!(
+                    super::plain_reads_back(value, false, line_start),
+                    "{value:?}"
+                );
+                assert!(
+                    super::plain_reads_back(value, true, line_start),
+                    "{value:?}"
+                );
+            }
         }
 
         for value in ["-", "?", ":", "a:", "e :"] {
-            assert!(!super::plain_reads_back(value, false), "{value:?}");
-            assert!(super::plain_reads_back(value, true), "{value:?}");
+            assert!(!super::plain_reads_back(value, false, false), "{value:?}");
+            assert!(super::plain_reads_back(value, true, false), "{value:?}");
         }
 
         for value in ["a: b", "a #b", "a\t#b", "- a", "? a", ": a"] {
-            assert!(!super::plain_reads_back(value, false), "{value:?}");
-            assert!(!super::plain_reads_back(value, true), "{value:?}");
+            assert!(!super::plain_reads_back(value, false, false), "{value:?}");
+            assert!(!super::plain_reads_back(value, true, false), "{value:?}");
+        }
+    }
+
+    /// At column 0, a leading `%` and a document marker do not read back as
+    /// plain text; anywhere else on a line they do.
+    #[test]
+    fn plain_reads_back_at_the_start_of_a_line() {
+        for value in ["%", "%x", "% a", "--- a", "...\tx", "---", "..."] {
+            assert!(super::plain_reads_back(value, false, false), "{value:?}");
+            assert!(!super::plain_reads_back(value, false, true), "{value:?}");
+        }
+
+        // A key's `:` right after a bare marker keeps it plain; after a
+        // marker and a space it does not.
+        for value in ["---", "..."] {
+            assert!(super::plain_reads_back(value, true, true), "{value:?}");
+        }
+        for value in ["%x", "--- a", "... a"] {
+            assert!(!super::plain_reads_back(value, true, true), "{value:?}");
+        }
+
+        for value in ["---x", "....", "-- -", "a %", "x---"] {
+            assert!(super::plain_reads_back(value, false, true), "{value:?}");
+        }
+    }
+
+    /// A plain scalar the source indented, which would open a directive or a
+    /// document marker at column 0, is quoted where the emitter writes it
+    /// there: the root, after a `---`, behind a byte order mark, and a key of
+    /// a root mapping. A tag or anchor in front of it keeps it off column 0.
+    #[test]
+    fn plain_text_at_column_0_is_quoted_where_it_would_change_meaning() {
+        for (input, expected) in [
+            (" %x\n", "\"%x\"\n"),
+            ("\t%\t\n", "\"%\"\n"),
+            ("\t...\tx\n", "\"...\\tx\"\n"),
+            (" --- a\n", "\"--- a\"\n"),
+            (" ---\nb\n", "\"--- b\"\n"),
+            ("--- %x\n", "---\n\"%x\"\n"),
+            ("a\n--- %x\n", "a\n---\n\"%x\"\n"),
+            ("\u{feff} %x\n", "\u{feff}\"%x\"\n"),
+            (" %x: 1\n %y: 2\n", "\"%x\": 1\n\"%y\": 2\n"),
+            (" ... a: 1\n", "\"... a\": 1\n"),
+            (" ---: 1\n", "---: 1\n"),
+            ("!t %x\n", "!t %x\n"),
+            ("&a ... x\n", "&a ... x\n"),
+            ("k: %x\n", "k: %x\n"),
+        ] {
+            let out = reemit(input);
+            assert_eq!(out, expected, "{input:?}");
+            assert!(same_value(input, &out), "{input:?} -> {out:?}");
+        }
+    }
+
+    /// A multi-line root plain scalar keeps its source lines where none of
+    /// them starts a directive or a marker at column 0.
+    #[test]
+    fn multiline_root_plain_scalar_replays_where_column_0_is_safe() {
+        for input in ["a\n%b\n", "a\n b\n", "---\na\n%b\n"] {
+            assert_eq!(reemit(input), input);
         }
     }
 

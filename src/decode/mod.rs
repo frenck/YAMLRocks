@@ -1320,8 +1320,11 @@ impl<'input> Decoder<'input> {
                     // sibling mapping key sits at the sequence's own column dedents
                     // straight to a `Key` with no `BlockEnd` (the sequence shares
                     // the mapping's level), e.g. `9:\n-\nq:` is `{9: [null], q: null}`.
-                    // A non-empty `- key: val` entry opens with `MappingStart`, not
-                    // a bare `Key`, so this never swallows real content.
+                    // `Value` is the same case with an empty sibling key, which the
+                    // scanner gives no `Key` token: `k:\n-\n: v` is
+                    // `{k: [null], null: v}`. A non-empty `- key: val` or `- : val`
+                    // entry opens with `MappingStart`, not a bare `Key` or `Value`,
+                    // so this never swallows real content.
                     if self.pos < events.len()
                         && matches!(
                             events[self.pos].kind,
@@ -1330,6 +1333,7 @@ impl<'input> Decoder<'input> {
                                 | EventKind::MappingEnd
                                 | EventKind::BlockEnd
                                 | EventKind::Key { .. }
+                                | EventKind::Value
                         )
                     {
                         items.push(Value::Null);
@@ -1400,6 +1404,26 @@ mod tests {
     #[test]
     fn multiple_documents() {
         assert_eq!(decode("---\na: 1\n---\nb: 2\n").len(), 2);
+    }
+
+    #[test]
+    fn empty_indentless_entry_before_an_empty_key_is_null() {
+        // The empty key `: v` has no `Key` token, so the bare `-` dedents
+        // straight to its `Value`. The entry is still a null of its own.
+        assert_eq!(
+            decode("k:\n- a\n-\n: v\n"),
+            vec![Value::Mapping(vec![
+                (s("k"), Value::Sequence(vec![s("a"), Value::Null])),
+                (Value::Null, s("v")),
+            ])]
+        );
+        assert_eq!(
+            decode("k:\n-\n: v\n"),
+            vec![Value::Mapping(vec![
+                (s("k"), Value::Sequence(vec![Value::Null])),
+                (Value::Null, s("v")),
+            ])]
+        );
     }
 
     #[test]

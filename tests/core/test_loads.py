@@ -190,6 +190,71 @@ def test_empty_indentless_sequence_entry_before_a_sibling_key():
     assert yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP).to_yaml() == src
 
 
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        pytest.param(
+            "k:\n- a\n-\n: v\n", {"k": ["a", None], None: "v"}, id="after-an-item"
+        ),
+        pytest.param("k:\n-\n: v\n", {"k": [None], None: "v"}, id="only-item"),
+        pytest.param(
+            "k:\n-\n-\n-\n: v\n", {"k": [None, None, None], None: "v"}, id="several"
+        ),
+        pytest.param(
+            "k:\n- a\n-  # note\n: v\n",
+            {"k": ["a", None], None: "v"},
+            id="commented",
+        ),
+        pytest.param(
+            "o:\n  k:\n  - a\n  -\n  : v\n",
+            {"o": {"k": ["a", None], None: "v"}},
+            id="nested-mapping",
+        ),
+        pytest.param(
+            "- k:\n  - a\n  -\n  : v\n",
+            [{"k": ["a", None], None: "v"}],
+            id="inside-a-sequence-item",
+        ),
+        pytest.param(
+            "? x\n:\n- a\n-\n: v\n",
+            {"x": ["a", None], None: "v"},
+            id="explicit-key-value",
+        ),
+        pytest.param(
+            "k: !!seq\n- a\n-\n: v\n", {"k": ["a", None], None: "v"}, id="tagged"
+        ),
+        pytest.param(
+            "k:\n  - a\n  -\n: v\n", {"k": ["a", None], None: "v"}, id="indented"
+        ),
+        pytest.param(
+            "k:\n- a\n-\nj: v\n", {"k": ["a", None], "j": "v"}, id="sibling-key"
+        ),
+        pytest.param(
+            "k:\n- a\n-\n? x\n: v\n",
+            {"k": ["a", None], "x": "v"},
+            id="explicit-sibling-key",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "option",
+    [
+        pytest.param(0, id="fast"),
+        pytest.param(yamlrocks.OPT_ANNOTATED, id="annotated"),
+        pytest.param(yamlrocks.OPT_PYYAML_COMPAT, id="pyyaml-compat"),
+    ],
+)
+def test_empty_indentless_sequence_entry_before_an_empty_key(
+    src: str, expected: object, option: int
+) -> None:
+    """A bare `-` right before an empty key `: v` stays a null item of its own."""
+    assert yamlrocks.loads(src, option=option) == expected
+
+    doc = yamlrocks.loads(src, option=yamlrocks.OPT_ROUND_TRIP | option)
+    assert doc.to_dict() == expected
+    assert doc.to_yaml() == src.encode()
+
+
 def test_str_input_accepted():
     """Accept a str input and parse it."""
     assert yamlrocks.loads("key: value") == {"key": "value"}

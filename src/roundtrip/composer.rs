@@ -1615,9 +1615,12 @@ impl<'input> Composer<'input> {
     /// nested sequence, so `-\n-\n-` stays three nulls, not `[[[]]]`. `Key`
     /// covers the indentless case: an empty entry whose sibling mapping key sits
     /// at the sequence's own column dedents straight to a `Key` with no
-    /// `BlockEnd` (the sequence shares the mapping's level), e.g. `9:\n-\nq:`. A
-    /// non-empty `- key: val` entry opens with `MappingStart`, never a bare `Key`,
-    /// so this never drops real content.
+    /// `BlockEnd` (the sequence shares the mapping's level), e.g. `9:\n-\nq:`.
+    /// `Value` is the same case with an empty sibling key: the scanner gives an
+    /// empty implicit key no `Key` token, so `k:\n-\n: v` dedents straight to the
+    /// `:`. A non-empty `- key: val` or `- : val` entry opens with
+    /// `MappingStart`, never a bare `Key` or `Value`, so this never drops real
+    /// content.
     fn compose_block_entry(
         &mut self,
         events: &[Event],
@@ -1631,6 +1634,7 @@ impl<'input> Composer<'input> {
                     | EventKind::MappingEnd
                     | EventKind::BlockEnd
                     | EventKind::Key { .. }
+                    | EventKind::Value
             )
         {
             return Ok(Some(YamlNode::new(YamlNodeKind::Null, dash_span)));
@@ -1730,6 +1734,29 @@ mod tests {
         };
         assert_eq!(items.len(), 1, "the empty entry survives as one null");
         assert!(matches!(items[0].kind, YamlNodeKind::Null));
+        let out = crate::roundtrip::emit::emit_roundtrip(&r);
+        assert_eq!(out, src.as_bytes(), "re-emits byte-for-byte");
+    }
+
+    #[test]
+    fn empty_indentless_entry_before_an_empty_key_keeps_its_null() {
+        // An empty key has no `Key` token, so the entry dedents straight to the
+        // `Value` of `: v`. That `Value` ends the sequence like a sibling `Key`
+        // does, after the empty entry is kept.
+        let src = "k:\n- a\n-\n: v\n";
+        let r = root(src);
+        let YamlNodeKind::Mapping(pairs) = &r.kind else {
+            panic!("expected a mapping");
+        };
+        assert_eq!(pairs.len(), 2, "the empty key is a pair of its own");
+        assert!(matches!(pairs[1].0.kind, YamlNodeKind::Null));
+
+        let YamlNodeKind::Sequence(items) = &get(&r, "k").kind else {
+            panic!("expected a sequence under key k");
+        };
+        assert_eq!(items.len(), 2, "the empty entry survives as a null");
+        assert!(matches!(items[1].kind, YamlNodeKind::Null));
+
         let out = crate::roundtrip::emit::emit_roundtrip(&r);
         assert_eq!(out, src.as_bytes(), "re-emits byte-for-byte");
     }

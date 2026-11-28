@@ -60,6 +60,16 @@ KEPT = [
     pytest.param("a: 2\nb:: v\n", id="key-ending-in-colon"),
     pytest.param("a: 2\nk:\n&x c: 3\n", id="anchored-key-after-empty-value"),
     pytest.param("a: 2\nk:\n!!str c: 3\n", id="tagged-key-after-empty-value"),
+    pytest.param("a: 2\nk:\n- b\n-\n: v\n", id="empty-item-before-empty-key"),
+    pytest.param("a: 2\nk:\n-\n: v\n", id="only-empty-item-before-empty-key"),
+    pytest.param("a: 2\nk: !t\n-\n: v\n", id="tagged-empty-item-before-empty-key"),
+    pytest.param(
+        "a: 2\no:\n  k:\n  - b\n  -\n  : v\n", id="nested-empty-item-before-empty-key"
+    ),
+    pytest.param(
+        "a: 2\ns:\n- k:\n  - b\n  -\n  : v\n",
+        id="item-mapping-empty-item-before-empty-key",
+    ),
 ]
 
 
@@ -159,6 +169,17 @@ def test_assigned_none_key_follows_the_null_style() -> None:
     doc[None] = 2
 
     assert doc.to_yaml() == b"a: 1\n~: 2\n"
+
+
+def test_empty_item_before_empty_key_survives_an_edit_to_its_sequence() -> None:
+    """Editing the sequence keeps its empty last item apart from the empty key."""
+    src = "k:\n- b\n-\n: v\n"
+    doc = yamlrocks.loads(src, option=RT)
+    doc["k"][0] = "c"
+    out = doc.to_yaml()
+
+    assert out == b"k:\n- c\n-\n: v\n"
+    assert yamlrocks.loads(out) == {"k": ["c", None], None: "v"}
 
 
 @pytest.mark.parametrize(

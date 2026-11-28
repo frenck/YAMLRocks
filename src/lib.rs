@@ -22,7 +22,7 @@ pub mod fuzz {
     use crate::encode::{encode, EmitOptions, NullStyle};
     use crate::parser::ParseOptions;
     use crate::resolver::Schema;
-    use crate::roundtrip::ast::{NodeStyle, YamlNode, YamlNodeKind};
+    use crate::roundtrip::ast::{YamlNode, YamlNodeKind};
     use crate::roundtrip::composer::{compose, compose_stream_with, ComposedStream};
     use crate::roundtrip::emit::{emit_roundtrip_all_with, emit_stream_with};
 
@@ -85,9 +85,6 @@ pub mod fuzz {
     /// source, which exercises the emitter's quoting and fallback rules. First
     /// one scalar, picked by a hash of the input so a finding reproduces
     /// exactly, rebuilt between replayed neighbours; then every one.
-    ///
-    /// A stream that holds a shape the readers themselves cannot read back
-    /// is skipped, one named gap at a time (see [`runs_into_a_reader_gap`]).
     pub fn roundtrip_differential(input: &str) {
         let Ok(expected) = decode_with(input, Schema::Yaml12, false, false) else {
             return;
@@ -95,9 +92,6 @@ pub mod fuzz {
         let Ok(mut stream) = compose_stream_with(input, ParseOptions::default()) else {
             return;
         };
-        if runs_into_a_reader_gap(&stream) {
-            return;
-        }
 
         check_reemit_roundtrip(input, &stream, &expected, "unmodified");
 
@@ -154,87 +148,6 @@ pub mod fuzz {
                 "round-trip re-emit changed the data of document {document}\n  stage:    {stage}\n  input:    {input:?}\n  emitted:  {text:?}\n  original: {original:?}\n  reloaded: {reread:?}"
             );
         }
-    }
-
-    /// Whether `stream` holds a shape that a known gap in the readers (not
-    /// the emitter) keeps from reading back as it was loaded. Each predicate
-    /// here names one such gap and the input that shows it; a stream it
-    /// matches is skipped, so the target keeps checking everything else.
-    pub(crate) fn runs_into_a_reader_gap(stream: &ComposedStream) -> bool {
-        stream
-            .roots
-            .iter()
-            .any(|root| any_node(root, &drops_empty_item_before_empty_key))
-    }
-
-    /// Whether `node` is a block mapping holding a block sequence whose last
-    /// item is a bare `-`, right before an empty key:
-    ///
-    /// ```yaml
-    /// k:
-    /// - a
-    /// -
-    /// : v
-    /// ```
-    ///
-    /// Open problem in the reader, not the emitter: it drops that last item.
-    /// The scanner gives an empty key no `Key` token, so the `Value` token
-    /// right after the item's `SequenceEntry` ends the sequence, in the fast
-    /// decoder and the composer alike. Written out again, a tree holding this
-    /// shape loses the item on reload. When the dropped item was the only one,
-    /// the tree holds an empty block sequence, which is written as `[]` and
-    /// then reads back differently from the source (a tag kept or lost, a
-    /// merge key merging nothing). Skipped until both readers keep the item.
-    ///
-    /// The readers only drop the item when the sequence sits at its key's
-    /// own column. Where the emitter puts it depends on the indent it writes
-    /// the key at, which is not the key's source column once a parent is
-    /// re-indented, so this matches the shape at any column instead of
-    /// following the emitter's layout.
-    pub(crate) fn drops_empty_item_before_empty_key(node: &YamlNode) -> bool {
-        let YamlNodeKind::Mapping(pairs) = &node.kind else {
-            return false;
-        };
-
-        pairs.windows(2).any(|window| {
-            let [(_, value), (next_key, _)] = window else {
-                return false;
-            };
-            let YamlNodeKind::Sequence(items) = &value.kind else {
-                return false;
-            };
-
-            // A block sequence is never empty in its source; an empty one is
-            // what is left once its only item was dropped.
-            let dropped = items.last().is_none_or(is_bare_null);
-            value.style == NodeStyle::Block && dropped && is_bare_null(next_key)
-        })
-    }
-
-    /// Whether `node` is a null written as nothing at all: no token, no tag,
-    /// no anchor.
-    fn is_bare_null(node: &YamlNode) -> bool {
-        matches!(node.kind, YamlNodeKind::Null)
-            && !node.synthetic
-            && node.tag.is_none()
-            && node.anchor.is_none()
-    }
-
-    /// Whether `predicate` holds for `node` or any node below it, keys
-    /// included.
-    pub(crate) fn any_node(node: &YamlNode, predicate: &impl Fn(&YamlNode) -> bool) -> bool {
-        crate::stack::guard(|| {
-            predicate(node)
-                || match &node.kind {
-                    YamlNodeKind::Mapping(pairs) => pairs
-                        .iter()
-                        .any(|(key, value)| any_node(key, predicate) || any_node(value, predicate)),
-                    YamlNodeKind::Sequence(items) => {
-                        items.iter().any(|item| any_node(item, predicate))
-                    }
-                    YamlNodeKind::Scalar(..) | YamlNodeKind::Alias(_) | YamlNodeKind::Null => false,
-                }
-        })
     }
 
     /// Call `visit` on every scalar under `node`, the node itself included, in
@@ -598,26 +511,20 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_differential_skips_an_empty_item_before_an_empty_key() {
-        // The readers drop the bare `-` before `: v`, so a tree that still
-        // holds one (or an empty block sequence left by it) is skipped.
-        for (input, skipped) in [
-            ("k:\n- a\n-\n-\n: v\n", true),
-            (": !\n-\n:", true),
-            ("<<: !t\n-\n: v\n", true),
-            ("k:\n- a\n-\nj: v\n", false),
-            ("k:\n  - a\n  -\n: v\n", true),
+    fn roundtrip_differential_keeps_an_empty_item_before_an_empty_key() {
+        // A bare `-` right before an empty key `: v` is an item of its own,
+        // and an edited re-emit must keep it, flush with its key or indented.
+        for input in [
+            "k:\n- a\n-\n-\n: v\n",
+            ": !\n-\n:",
+            "<<: !t\n-\n: v\n",
+            "k:\n- a\n-\nj: v\n",
+            "k:\n  - a\n  -\n: v\n",
             // Indented in its source, flush with its key once `outer` is
             // re-indented.
-            ("outer:\n k:\n  - a\n  -\n : v\n", true),
-            ("k:\n- a\n- !t\n: v\n", false),
+            "outer:\n k:\n  - a\n  -\n : v\n",
+            "k:\n- a\n- !t\n: v\n",
         ] {
-            let stream =
-                crate::roundtrip::composer::compose_stream_with(input, Default::default()).unwrap();
-            let matched = stream.roots.iter().any(|root| {
-                crate::fuzz::any_node(root, &crate::fuzz::drops_empty_item_before_empty_key)
-            });
-            assert_eq!(matched, skipped, "{input:?}");
             crate::fuzz::roundtrip_differential(input);
         }
     }

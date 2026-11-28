@@ -153,14 +153,15 @@ structures and arbitrary bytes). For deeper, coverage-guided fuzzing of the Rust
 parser, there are [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) targets
 under `fuzz/`:
 
-| Target                 | What it drives                                                      | Contract                                       |
-| ---------------------- | ------------------------------------------------------------------- | ---------------------------------------------- |
-| `parse`                | scanner → parser → composer (the round-trip AST)                    | never panic/hang                               |
-| `decode`               | fast `loads` path → `Value` tree → fast `dumps`, under both schemas | never panic/hang                               |
-| `roundtrip`            | compose → emit → re-compose (the round-trip emitter)                | never panic/hang                               |
-| `differential`         | `loads(dumps(loads(x)))` must equal `loads(x)`                      | never silently corrupt data                    |
-| `differential_options` | the same, under a matrix of non-default emit options                | never silently corrupt data                    |
-| `include`              | `!include`/`!include_dir_*`/`!secret`/`!env_var` over a temp tree   | never panic/hang; no read escapes the base dir |
+| Target                   | What it drives                                                      | Contract                                       |
+| ------------------------ | ------------------------------------------------------------------- | ---------------------------------------------- |
+| `parse`                  | scanner → parser → composer (the round-trip AST)                    | never panic/hang                               |
+| `decode`                 | fast `loads` path → `Value` tree → fast `dumps`, under both schemas | never panic/hang                               |
+| `roundtrip`              | compose → emit → re-compose (the round-trip emitter)                | never panic/hang                               |
+| `differential`           | `loads(dumps(loads(x)))` must equal `loads(x)`                      | never silently corrupt data                    |
+| `differential_options`   | the same, under a matrix of non-default emit options                | never silently corrupt data                    |
+| `roundtrip_differential` | compose → emit → `loads`, unmodified and with scalars modified      | never silently corrupt data                    |
+| `include`                | `!include`/`!include_dir_*`/`!secret`/`!env_var` over a temp tree   | never panic/hang; no read escapes the base dir |
 
 ```bash
 cargo install cargo-fuzz             # once; needs a nightly toolchain
@@ -169,24 +170,41 @@ just fuzz 60 differential            # fuzz any target by name
 cargo +nightly fuzz run parse        # or invoke cargo-fuzz directly, until a crash or Ctrl-C
 ```
 
+A run starts from the inputs in its corpus directory (`fuzz/corpus/<target>/`,
+not committed). Seeding it with the YAML test suite's inputs gives the fuzzer
+every construct of the language to mutate from the first second:
+
+```bash
+mkdir -p fuzz/corpus/roundtrip_differential
+find tests/data/yaml_test_suite/cases -name in.yaml -not -path '*/name/*' -not -path '*/tags/*' \
+  | while read -r f; do cp "$f" "fuzz/corpus/roundtrip_differential/$(echo "$f" | tr / _)"; done
+cargo +nightly fuzz run roundtrip_differential -- -fork=4 -ignore_crashes=1 -max_total_time=1200
+```
+
 The crash-only targets (`parse`, `decode`, `roundtrip`, `include`) check that no
 input _crashes_ or hangs the engine. `differential` and `differential_options`
 check something a crash-only target cannot: that `dumps` never emits YAML which
 `loads` reads back as _different data_ (a mis-quoted string re-resolving to a
 bool, a float losing precision). Such a bug produces wrong values, not a panic,
-so only comparing the two trees surfaces it. `include` adds a security assertion
-on top of never crashing: a resolved `!include` or `!secret` path can never
-escape the configured base directory, so a traversal or a symlink swap is caught
-as a confinement error rather than a read outside the tree.
+so only comparing the two trees surfaces it. `roundtrip_differential` holds the
+round-trip emitter to the same standard: what an edited document's `to_yaml`
+writes must load back as the data it was loaded from, document by document,
+with every scalar replayed from its source, with one rebuilt from its value,
+and with all of them rebuilt. `include` adds a security
+assertion on top of never crashing: a resolved `!include` or `!secret` path can
+never escape the configured base directory, so a traversal or a symlink swap is
+caught as a confinement error rather than a read outside the tree.
 
-[ClusterFuzzLite](https://google.github.io/clusterfuzzlite/) builds and runs
-every target for a short batch on each pull request (see
+[ClusterFuzzLite](https://google.github.io/clusterfuzzlite/) builds every
+target, fuzzes the ones a pull request's code change reaches for a few minutes,
+and runs a longer batch every day (see
 `.github/workflows/clusterfuzzlite.yaml` and `.clusterfuzzlite/`; the build
 compiles every `fuzz/fuzz_targets/*.rs`, so a new target is picked up
 automatically). A `parse`, `decode`, `roundtrip`, or `include` crash is an engine
 bug (it may reject malformed input with an error, but must never panic or hang);
-a `differential` or `differential_options` failure is a correctness bug (a
-document that does not survive a `dumps`/`loads` round-trip).
+a `differential`, `differential_options`, or `roundtrip_differential` failure is
+a correctness bug (a document that does not survive a `dumps`/`loads` or a
+re-emit/`loads` round-trip).
 
 ## Code quality
 

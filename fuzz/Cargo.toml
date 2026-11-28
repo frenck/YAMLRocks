@@ -56,6 +56,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "roundtrip_differential"
+path = "fuzz_targets/roundtrip_differential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "include"
 path = "fuzz_targets/include.rs"
 test = false

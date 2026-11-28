@@ -143,15 +143,18 @@ how to read them.
 ## Fuzzing
 
 `tests/robustness/test_fuzz.py` is a fast, always-on property check. For deeper,
-coverage-guided fuzzing of the Rust parser there are four
+coverage-guided fuzzing of the Rust parser there are seven
 [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) targets under `fuzz/`:
 
-| Target         | What it drives                                             | Contract                    |
-| -------------- | ---------------------------------------------------------- | --------------------------- |
-| `parse`        | scanner → parser → composer (the round-trip AST)           | never panic or hang         |
-| `decode`       | the fast `loads` path and fast `dumps`, under both schemas | never panic or hang         |
-| `roundtrip`    | compose → emit → re-compose (the round-trip emitter)       | never panic or hang         |
-| `differential` | `loads(dumps(loads(x)))` must equal `loads(x)`             | never silently corrupt data |
+| Target                   | What it drives                                                    | Contract                                          |
+| ------------------------ | ----------------------------------------------------------------- | ------------------------------------------------- |
+| `parse`                  | scanner → parser → composer (the round-trip AST)                  | never panic or hang                               |
+| `decode`                 | the fast `loads` path and fast `dumps`, under both schemas        | never panic or hang                               |
+| `roundtrip`              | compose → emit → re-compose (the round-trip emitter)              | never panic or hang                               |
+| `differential`           | `loads(dumps(loads(x)))` must equal `loads(x)`                    | never silently corrupt data                       |
+| `differential_options`   | the same, under a matrix of non-default emit options              | never silently corrupt data                       |
+| `roundtrip_differential` | compose → emit → `loads`, unmodified and with scalars modified    | never silently corrupt data                       |
+| `include`                | `!include`/`!include_dir_*`/`!secret`/`!env_var` over a temp tree | never panic or hang; no read escapes the base dir |
 
 ```bash
 cargo install cargo-fuzz          # once; needs a nightly toolchain
@@ -159,14 +162,18 @@ just fuzz 60                       # fuzz `parse` for 60s (the default target)
 just fuzz 60 differential          # fuzz any target by name
 ```
 
-The first three targets check that no input _crashes_ the parser. `differential`
-checks something a crash-only target cannot: that `dumps` never emits YAML which
-`loads` reads back as _different_ data (a mis-quoted string re-resolving to a
-bool, a float losing precision). That shows up as wrong values, not a panic, so
-only comparing the two trees surfaces it.
-[ClusterFuzzLite](https://google.github.io/clusterfuzzlite/) builds and runs
-every target for a short batch on each pull request. A `parse`/`decode`/`roundtrip`
-crash is a parser bug; a `differential` failure is a correctness bug.
+The crash-only targets (`parse`, `decode`, `roundtrip`, `include`) check that no
+input _crashes_ the parser. The differential targets check something a
+crash-only target cannot: that `dumps`, or the round-trip emitter behind an
+edited document's `to_yaml`, never writes YAML which `loads` reads back as
+_different_ data (a mis-quoted string re-resolving to a bool, a float losing
+precision). That shows up as wrong values, not a panic, so only comparing the
+two trees surfaces it.
+[ClusterFuzzLite](https://google.github.io/clusterfuzzlite/) builds every
+target, fuzzes the ones a pull request's code change reaches for a few minutes,
+and runs a longer batch every day. A `parse`/`decode`/`roundtrip` crash is a
+parser bug; a `differential`, `differential_options` or `roundtrip_differential`
+failure is a correctness bug.
 
 ## Code quality
 

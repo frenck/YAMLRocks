@@ -272,3 +272,45 @@ def test_reemitted_block_scalars_read_back(style: str):
                 setattr(doc.locate(path), attribute, setting)
                 out = doc.to_yaml()
                 assert yamlrocks.loads(out) == expected, (value, src, out)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        pytest.param("a: |+\r\r\rb: 1\n", id="lone-cr"),
+        pytest.param("a: |+\r\n\r\n\r\nb: 1\n", id="crlf"),
+        pytest.param("a: |+\n x\r\rb: 1\rc: 2\n", id="mixed"),
+    ],
+)
+def test_keep_chomped_scalar_with_carriage_returns(src: str):
+    """A ``|+`` scalar whose lines end in a lone ``\\r`` keeps its empty lines."""
+    doc = yamlrocks.loads(src, option=RT)
+    doc["b"] = 2
+    assert yamlrocks.loads(doc.to_yaml()) == {**yamlrocks.loads(src), "b": 2}
+
+
+def test_comment_after_an_unindented_root_block_scalar():
+    """A root block scalar at column 0 keeps the ``...`` that ends it before a comment."""
+    src = "a: 1\n--- >\nfolded\ntext\n...\n# trailing\n"
+    doc = yamlrocks.loads(src, option=RT)
+    doc[0] = {"a": 2}
+    out = doc.to_yaml()
+    assert out == b"a: 2\n---\n>\nfolded\ntext\n...\n# trailing\n"
+    assert yamlrocks.loads_all(out) == [{"a": 2}, "folded text\n"]
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        pytest.param("- |+\n x\n- !t\n\n  y\n- z\n", id="tagged-item-below-its-dash"),
+        pytest.param("- >+\n x\n- &a\n\n  y\n- z\n", id="anchored-item-below-its-dash"),
+        pytest.param("- |+\n x\n-\n\n  y\n- z\n", id="item-below-its-dash"),
+    ],
+)
+def test_keep_chomped_scalar_gains_no_blank_line(src: str):
+    """No blank line lands after a ``|+`` scalar, where it would join the value."""
+    doc = yamlrocks.loads(src, option=RT)
+    doc[2] = "edited"
+    expected = yamlrocks.loads(src)
+    expected[2] = "edited"
+    assert yamlrocks.loads(doc.to_yaml()) == expected

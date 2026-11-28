@@ -16,14 +16,56 @@ pub fn compose(input: &str) -> Result<Vec<YamlNode>, ScanError> {
 
 /// Like [`compose`], reading the input with `options`.
 pub fn compose_with(input: &str, options: ParseOptions) -> Result<Vec<YamlNode>, ScanError> {
+    compose_stream_with(input, options).map(|stream| stream.roots)
+}
+
+/// A whole composed stream: its document roots, plus the empty documents of a
+/// stream that has no root to carry them.
+///
+/// Every empty document normally rides on a neighbouring root (see
+/// [`EmptyDocuments`]). A stream of nothing but empty documents (`---\n---\n`,
+/// `%YAML 1.2\n---\n`, `--- # note\n`) has no root, so they are kept here
+/// instead, and [`emit_stream_with`] writes them back.
+///
+/// [`emit_stream_with`]: super::emit::emit_stream_with
+#[derive(Debug, Clone, Default)]
+pub struct ComposedStream {
+    /// The root of each document with content, in source order.
+    pub roots: Vec<YamlNode>,
+    /// The empty documents of a stream without a single root, as verbatim
+    /// source text. Always empty when there are roots.
+    pub empty_documents: Vec<EmptyDocument>,
+    /// Whether a stream without a root started with a byte order mark. A root
+    /// records that itself ([`YamlNode::leading_bom`]).
+    pub leading_bom: bool,
+}
+
+/// Like [`compose_with`], keeping the empty documents of a stream that has no
+/// root (see [`ComposedStream`]).
+pub fn compose_stream_with(
+    input: &str,
+    options: ParseOptions,
+) -> Result<ComposedStream, ScanError> {
     let mut parser = Parser::new(input).with_options(options);
     let (events, mut comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
-    let mut nodes = composer.compose_stream(&events, false)?;
+    let mut roots = composer.compose_stream(&events, false)?;
     retain_node_comments(&mut comments, &composer.empty_document_ranges);
-    attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
-    mark_leading_bom(&mut nodes, parser.had_bom());
-    Ok(nodes)
+    attach_comments(
+        &mut roots,
+        &comments,
+        input,
+        &composer.line_starts,
+        &composer.dash_positions,
+    );
+    mark_leading_bom(&mut roots, parser.had_bom());
+
+    let leading_bom = roots.is_empty() && parser.had_bom();
+    Ok(ComposedStream {
+        roots,
+        empty_documents: composer.rootless_empty_documents,
+        leading_bom,
+    })
 }
 
 /// Drop the comments that sit inside an empty document kept as verbatim text
@@ -56,6 +98,15 @@ fn line_start_of(input: &str, offset: usize) -> usize {
         .map_or(0, |line_break| line_break + 1)
 }
 
+/// How many line breaks `text` holds, counted as the scanner counts them: `\n`,
+/// a lone `\r`, and `\r\n` are one break each.
+fn count_line_breaks(text: &str) -> u32 {
+    let carriage_returns = text.matches('\r').count();
+    let line_feeds = text.matches('\n').count();
+    let crlf_pairs = text.matches("\r\n").count();
+    (carriage_returns + line_feeds - crlf_pairs) as u32
+}
+
 /// Record a stream-leading byte order mark on the first document root so the
 /// round-trip emitter can restore it. No-op for a stream without one (or an
 /// empty stream).
@@ -79,7 +130,13 @@ pub fn compose_all(input: &str, options: ParseOptions) -> Result<Vec<YamlNode>, 
     let (events, comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, true)?;
-    attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
+    attach_comments(
+        &mut nodes,
+        &comments,
+        input,
+        &composer.line_starts,
+        &composer.dash_positions,
+    );
     mark_leading_bom(&mut nodes, parser.had_bom());
     Ok(nodes)
 }
@@ -94,7 +151,13 @@ pub fn compose_all_with_source(
     let (events, comments) = parser.parse_all_with_comments()?;
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, true)?;
-    attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
+    attach_comments(
+        &mut nodes,
+        &comments,
+        input,
+        &composer.line_starts,
+        &composer.dash_positions,
+    );
     mark_leading_bom(&mut nodes, parser.had_bom());
     composer.document_starts.push(input.len());
     Ok(nodes
@@ -146,7 +209,13 @@ pub fn compose_with_file_id(
     let mut composer = Composer::new(input);
     let mut nodes = composer.compose_stream(&events, false)?;
     retain_node_comments(&mut comments, &composer.empty_document_ranges);
-    attach_comments(&mut nodes, &comments, input, &composer.dash_positions);
+    attach_comments(
+        &mut nodes,
+        &comments,
+        input,
+        &composer.line_starts,
+        &composer.dash_positions,
+    );
     mark_leading_bom(&mut nodes, parser.had_bom());
     Ok(nodes)
 }
@@ -356,6 +425,7 @@ fn attach_comments(
     nodes: &mut [YamlNode],
     comments: &[Comment],
     input: &str,
+    line_starts: &[usize],
     dash_positions: &std::collections::HashSet<(u32, u32)>,
 ) {
     // Unlike comment attachment, blank-line spacing must be recorded even for a
@@ -365,12 +435,17 @@ fn attach_comments(
     // non-whitespace content). A node's leading blank count is then the size of
     // the intersection of the gap before it with this set, rather than `end()`
     // arithmetic, which is only a best-effort estimate for block scalars and
-    // would miscount the content lines of a `|`/`>` block as blanks.
-    let blank_lines: std::collections::HashSet<u32> = input
-        .split('\n')
+    // would miscount the content lines of a `|`/`>` block as blanks. The lines
+    // are the scanner's (see [`build_line_starts`]: a lone `\r` ends one too),
+    // so their numbers line up with the nodes' spans.
+    let blank_lines: std::collections::HashSet<u32> = line_starts
+        .iter()
         .enumerate()
-        .filter(|(_, text)| text.trim().is_empty())
-        .map(|(i, _)| i as u32)
+        .filter(|&(line, &start)| {
+            let end = line_starts.get(line + 1).copied().unwrap_or(input.len());
+            input[start..end].trim().is_empty()
+        })
+        .map(|(line, _)| line as u32)
         .collect();
     let context = CommentContext {
         comments,
@@ -702,7 +777,7 @@ fn visit_for_comments_inner(
     // this also covers the trailing blank lines that source includes, so the
     // next node's `blank_before` does not re-count them.
     match &node.comments.raw {
-        Some(raw) => state.bump(line + raw.matches('\n').count() as u32),
+        Some(raw) => state.bump(line + count_line_breaks(raw)),
         None => state.bump(node.end().0),
     }
 
@@ -795,6 +870,9 @@ struct Composer<'input> {
     /// [`EmptyDocuments`]). Their comments are part of that text, so comment
     /// attachment must not hand them to a node as well.
     empty_document_ranges: Vec<(usize, usize)>,
+    /// The empty documents of a stream that turned out to have no root to
+    /// carry them (see [`ComposedStream`]).
+    rootless_empty_documents: Vec<EmptyDocument>,
 }
 
 /// An empty document whose end is not known yet: it runs until the next
@@ -819,6 +897,7 @@ impl<'input> Composer<'input> {
             dash_positions: HashSet::new(),
             document_starts: Vec::new(),
             empty_document_ranges: Vec::new(),
+            rootless_empty_documents: Vec::new(),
         }
     }
 
@@ -1035,13 +1114,17 @@ impl<'input> Composer<'input> {
         }
 
         // Empty documents that end the stream go to the last root. A stream of
-        // nothing but empty documents has no root to carry them.
+        // nothing but empty documents has no root to carry them, so the stream
+        // keeps them itself.
         if !empty_run.is_empty() {
-            if let Some(last) = documents.last_mut() {
-                let after = self.finish_empty_run(&mut empty_run, self.input.len());
-                last.empty_documents
-                    .get_or_insert_with(Default::default)
-                    .after = after;
+            let run = self.finish_empty_run(&mut empty_run, self.input.len());
+            match documents.last_mut() {
+                Some(last) => {
+                    last.empty_documents
+                        .get_or_insert_with(Default::default)
+                        .after = run;
+                }
+                None => self.rootless_empty_documents = run,
             }
         }
 

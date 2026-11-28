@@ -4,9 +4,11 @@
 //! but `to_yaml` returns the *cached source* verbatim for an unmodified document
 //! (see [`YAMLRocksDocument::root_bytes`]), so it never runs the emitter: it
 //! proves only that the source was stored. These tests close that gap. They
-//! drive the curated corpus and the YAML test suite through `compose` +
-//! `emit_roundtrip_all_with` directly, the exact path a *modified* document
-//! re-emits through, and assert the emitter rebuilds each input byte-for-byte.
+//! drive the curated corpus and the YAML test suite through
+//! `compose_stream_with` + `emit_stream_with` directly, the exact path a
+//! *modified* document re-emits through (plus the empty documents of a stream
+//! with no root, which such a document never re-emits), and assert the emitter
+//! rebuilds each input byte-for-byte.
 //!
 //! The genuinely unreproducible tail (exotic constructs the round-trip emitter
 //! normalizes, the same class the `roundtrip` fuzz target surfaces) is recorded
@@ -17,8 +19,9 @@
 use std::path::PathBuf;
 
 use crate::encode::NullStyle;
-use crate::roundtrip::composer::compose;
-use crate::roundtrip::emit::emit_roundtrip_all_with;
+use crate::parser::ParseOptions;
+use crate::roundtrip::composer::compose_stream_with;
+use crate::roundtrip::emit::emit_stream_with;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data")
@@ -29,8 +32,8 @@ fn data_dir() -> PathBuf {
 /// does not parse (only parseable inputs have a fidelity expectation) or the
 /// emitter produced non-UTF-8 (which is itself a failure the callers assert on).
 fn reemit(input: &str) -> Option<String> {
-    let nodes = compose(input).ok()?;
-    String::from_utf8(emit_roundtrip_all_with(&nodes, NullStyle::default())).ok()
+    let stream = compose_stream_with(input, ParseOptions::default()).ok()?;
+    String::from_utf8(emit_stream_with(&stream, NullStyle::default())).ok()
 }
 
 /// `(name, input)` for every single-document YAML test suite case, or empty when

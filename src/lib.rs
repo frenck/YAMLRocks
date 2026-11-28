@@ -20,9 +20,11 @@ mod version;
 pub mod fuzz {
     use crate::decode::decode_with;
     use crate::encode::{encode, EmitOptions, NullStyle};
+    use crate::parser::ParseOptions;
     use crate::resolver::Schema;
-    use crate::roundtrip::composer::compose;
-    use crate::roundtrip::emit::emit_roundtrip_all_with;
+    use crate::roundtrip::ast::{NodeStyle, YamlNode, YamlNodeKind};
+    use crate::roundtrip::composer::{compose, compose_stream_with, ComposedStream};
+    use crate::roundtrip::emit::{emit_roundtrip_all_with, emit_stream_with};
 
     /// Run arbitrary text through the full scanner → parser → composer pipeline.
     /// It must never panic or hang: it returns an AST or a clean parse error.
@@ -66,6 +68,210 @@ pub mod fuzz {
         if let Ok(text) = std::str::from_utf8(&emitted) {
             let _ = compose(text);
         }
+    }
+
+    /// Round-trip differential: re-emitting a round-trip document must never
+    /// change its data. The [`roundtrip`] target only proves the emitter does
+    /// not crash; this one checks what an edited document's `to_yaml` writes.
+    /// For any input both the composer and the fast decoder accept, it forces
+    /// the whole stream through the emitter (never the cached source), reloads
+    /// the output with the fast decoder, and asserts it holds as many documents
+    /// as the input, each with the same data. That is the path every untouched
+    /// node takes once anything in its document changes.
+    ///
+    /// Two more stages mark scalars modified without changing them, as
+    /// setting a comment to the one it already has would, and check again. A
+    /// modified scalar is rebuilt from its value instead of replayed from its
+    /// source, which exercises the emitter's quoting and fallback rules. First
+    /// one scalar, picked by a hash of the input so a finding reproduces
+    /// exactly, rebuilt between replayed neighbours; then every one.
+    ///
+    /// A stream that holds a shape the readers themselves cannot read back
+    /// is skipped, one named gap at a time (see [`runs_into_a_reader_gap`]).
+    pub fn roundtrip_differential(input: &str) {
+        let Ok(expected) = decode_with(input, Schema::Yaml12, false, false) else {
+            return;
+        };
+        let Ok(mut stream) = compose_stream_with(input, ParseOptions::default()) else {
+            return;
+        };
+        if runs_into_a_reader_gap(&stream) {
+            return;
+        }
+
+        check_reemit_roundtrip(input, &stream, &expected, "unmodified");
+
+        let mut scalars = 0;
+        for root in &mut stream.roots {
+            for_each_scalar(root, &mut |_| scalars += 1);
+        }
+        if scalars == 0 {
+            return;
+        }
+
+        let pick = (fnv1a(input.as_bytes()) % scalars as u64) as usize;
+        let mut index = 0;
+        for root in &mut stream.roots {
+            for_each_scalar(root, &mut |scalar| {
+                if index == pick {
+                    scalar.mark_modified();
+                }
+                index += 1;
+            });
+        }
+        check_reemit_roundtrip(input, &stream, &expected, "one scalar modified");
+
+        for root in &mut stream.roots {
+            for_each_scalar(root, &mut YamlNode::mark_modified);
+        }
+        check_reemit_roundtrip(input, &stream, &expected, "every scalar modified");
+    }
+
+    /// Emit `stream` through the round-trip emitter, reload the output with the
+    /// fast decoder, and assert it holds `expected`, document by document.
+    /// `stage` names the edit in the panic message.
+    fn check_reemit_roundtrip(
+        input: &str,
+        stream: &ComposedStream,
+        expected: &[crate::decode::Value<'_>],
+        stage: &str,
+    ) {
+        let emitted = emit_stream_with(stream, NullStyle::default());
+        let text = std::str::from_utf8(&emitted).unwrap_or_else(|e| {
+            panic!("round-trip re-emit wrote invalid UTF-8\n  stage:    {stage}\n  input:    {input:?}\n  error:    {e}")
+        });
+        let reloaded = decode_with(text, Schema::Yaml12, false, false).unwrap_or_else(|e| {
+            panic!("round-trip re-emit wrote YAML that loads rejects\n  stage:    {stage}\n  input:    {input:?}\n  emitted:  {text:?}\n  error:    {e:?}")
+        });
+        assert_eq!(
+            reloaded.len(),
+            expected.len(),
+            "round-trip re-emit changed the number of documents\n  stage:    {stage}\n  input:    {input:?}\n  emitted:  {text:?}"
+        );
+        for (document, (original, reread)) in expected.iter().zip(&reloaded).enumerate() {
+            assert!(
+                values_equiv(original, reread),
+                "round-trip re-emit changed the data of document {document}\n  stage:    {stage}\n  input:    {input:?}\n  emitted:  {text:?}\n  original: {original:?}\n  reloaded: {reread:?}"
+            );
+        }
+    }
+
+    /// Whether `stream` holds a shape that a known gap in the readers (not
+    /// the emitter) keeps from reading back as it was loaded. Each predicate
+    /// here names one such gap and the input that shows it; a stream it
+    /// matches is skipped, so the target keeps checking everything else.
+    pub(crate) fn runs_into_a_reader_gap(stream: &ComposedStream) -> bool {
+        stream
+            .roots
+            .iter()
+            .any(|root| any_node(root, &drops_empty_item_before_empty_key))
+    }
+
+    /// Whether `node` is a block mapping holding a block sequence whose last
+    /// item is a bare `-`, right before an empty key:
+    ///
+    /// ```yaml
+    /// k:
+    /// - a
+    /// -
+    /// : v
+    /// ```
+    ///
+    /// Open problem in the reader, not the emitter: it drops that last item.
+    /// The scanner gives an empty key no `Key` token, so the `Value` token
+    /// right after the item's `SequenceEntry` ends the sequence, in the fast
+    /// decoder and the composer alike. Written out again, a tree holding this
+    /// shape loses the item on reload. When the dropped item was the only one,
+    /// the tree holds an empty block sequence, which is written as `[]` and
+    /// then reads back differently from the source (a tag kept or lost, a
+    /// merge key merging nothing). Skipped until both readers keep the item.
+    ///
+    /// The readers only drop the item when the sequence sits at its key's
+    /// own column. Where the emitter puts it depends on the indent it writes
+    /// the key at, which is not the key's source column once a parent is
+    /// re-indented, so this matches the shape at any column instead of
+    /// following the emitter's layout.
+    pub(crate) fn drops_empty_item_before_empty_key(node: &YamlNode) -> bool {
+        let YamlNodeKind::Mapping(pairs) = &node.kind else {
+            return false;
+        };
+
+        pairs.windows(2).any(|window| {
+            let [(_, value), (next_key, _)] = window else {
+                return false;
+            };
+            let YamlNodeKind::Sequence(items) = &value.kind else {
+                return false;
+            };
+
+            // A block sequence is never empty in its source; an empty one is
+            // what is left once its only item was dropped.
+            let dropped = items.last().is_none_or(is_bare_null);
+            value.style == NodeStyle::Block && dropped && is_bare_null(next_key)
+        })
+    }
+
+    /// Whether `node` is a null written as nothing at all: no token, no tag,
+    /// no anchor.
+    fn is_bare_null(node: &YamlNode) -> bool {
+        matches!(node.kind, YamlNodeKind::Null)
+            && !node.synthetic
+            && node.tag.is_none()
+            && node.anchor.is_none()
+    }
+
+    /// Whether `predicate` holds for `node` or any node below it, keys
+    /// included.
+    pub(crate) fn any_node(node: &YamlNode, predicate: &impl Fn(&YamlNode) -> bool) -> bool {
+        crate::stack::guard(|| {
+            predicate(node)
+                || match &node.kind {
+                    YamlNodeKind::Mapping(pairs) => pairs
+                        .iter()
+                        .any(|(key, value)| any_node(key, predicate) || any_node(value, predicate)),
+                    YamlNodeKind::Sequence(items) => {
+                        items.iter().any(|item| any_node(item, predicate))
+                    }
+                    YamlNodeKind::Scalar(..) | YamlNodeKind::Alias(_) | YamlNodeKind::Null => false,
+                }
+        })
+    }
+
+    /// Call `visit` on every scalar under `node`, the node itself included, in
+    /// document order. Keys are visited too, down into a collection used as
+    /// a key: a block scalar key replays its source like any value does.
+    fn for_each_scalar(node: &mut YamlNode, visit: &mut impl FnMut(&mut YamlNode)) {
+        // The tree is as deep as the input nests, so grow the stack on demand
+        // as the emitter's own walks do. See [`crate::stack`].
+        crate::stack::guard(|| {
+            if matches!(node.kind, YamlNodeKind::Scalar(..)) {
+                visit(node);
+                return;
+            }
+
+            match &mut node.kind {
+                YamlNodeKind::Mapping(pairs) => {
+                    for (key, value) in pairs {
+                        for_each_scalar(key, visit);
+                        for_each_scalar(value, visit);
+                    }
+                }
+                YamlNodeKind::Sequence(items) => {
+                    for item in items {
+                        for_each_scalar(item, visit);
+                    }
+                }
+                YamlNodeKind::Scalar(..) | YamlNodeKind::Alias(_) | YamlNodeKind::Null => {}
+            }
+        });
+    }
+
+    /// The 64-bit FNV-1a hash of `bytes`: a stable, dependency-free way to turn
+    /// an input into the same choice on every run.
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
     }
 
     /// Differential: the fast decoder and the fast emitter must agree on the
@@ -313,6 +519,152 @@ mod tests {
         // API only accepts already-emittable tags starting with `!`.
         let input = "%TAG !e! tag:example.com,2020:\n---\nk: !e!foo bar\n";
         crate::fuzz::differential_options(input);
+    }
+
+    #[test]
+    fn roundtrip_differential_keeps_multiline_flow_scalars() {
+        // A blank line inside a plain or quoted scalar folds to a `\n` in its
+        // value. Written raw, that break would put the rest of the value at
+        // column 0, where it reads as a document marker or a new key.
+        for input in [
+            "a: 1\nb: text\n\n  ...\nc: 3\n",
+            "a: 1\nb: text\n\n  more\n",
+            "r:\n  - x\n\n    y\n",
+            "f: [x\n\n  y, z]\n",
+            "b: 'x\n\n  y'\n",
+            "r:\n  - 'a\n\n    b'\n",
+            "a:\n b: x\n\n  y\n",
+        ] {
+            crate::fuzz::roundtrip_differential(input);
+        }
+    }
+
+    #[test]
+    fn roundtrip_differential_keeps_text_off_column_0() {
+        // The emitter writes a root scalar and a root mapping's keys at column
+        // 0, where a leading `%` opens a directive and `---` or `...` before
+        // white space is a document marker. The source had them indented.
+        for input in [
+            " %",
+            "\t%\t\tx",
+            " %z\t\n :-\n  \n\tz7#",
+            "\t...\tt",
+            " ---\na:- 0X6666 '6663",
+            "--- \t%\"r\n-\t ",
+            "a\n--- ... >\n",
+            " %x: 1\n %y: 2\n",
+            " ... x: 1\n",
+        ] {
+            crate::fuzz::roundtrip_differential(input);
+        }
+    }
+
+    #[test]
+    fn roundtrip_differential_keeps_streams_without_a_root() {
+        // Every document of these streams is empty, so no root carries them.
+        for input in [
+            "---",
+            "---\n---\n",
+            "%YAML 1.2\n\t\n---\n",
+            "---\n# only a comment\n",
+            "#\r\r---\r#\r",
+            "\u{feff}--- \n",
+        ] {
+            crate::fuzz::roundtrip_differential(input);
+        }
+    }
+
+    #[test]
+    fn roundtrip_differential_keeps_lone_carriage_returns() {
+        // A lone `\r` breaks a line, so the empty lines a `|+` scalar keeps
+        // are its own and not blank lines before the next key. And no blank
+        // line may follow a `|+` scalar where an entry starts below its `-`.
+        for input in [": |+\r\r:", "a: |+\r\r\rb: 1\n", "- |+\n x\n- !t\n\n  y\n"] {
+            crate::fuzz::roundtrip_differential(input);
+        }
+    }
+
+    #[test]
+    fn roundtrip_differential_keeps_the_end_of_an_unindented_root_block_scalar() {
+        // A root block scalar's lines may start at column 0. A comment after
+        // its `...` would otherwise be read as one more of them.
+        for input in [
+            "--- >\nx\n...\n# c",
+            "--- |\n...\n#",
+            "a\n--- |\nb\n...\n# c\n",
+        ] {
+            crate::fuzz::roundtrip_differential(input);
+        }
+    }
+
+    #[test]
+    fn roundtrip_differential_skips_an_empty_item_before_an_empty_key() {
+        // The readers drop the bare `-` before `: v`, so a tree that still
+        // holds one (or an empty block sequence left by it) is skipped.
+        for (input, skipped) in [
+            ("k:\n- a\n-\n-\n: v\n", true),
+            (": !\n-\n:", true),
+            ("<<: !t\n-\n: v\n", true),
+            ("k:\n- a\n-\nj: v\n", false),
+            ("k:\n  - a\n  -\n: v\n", true),
+            // Indented in its source, flush with its key once `outer` is
+            // re-indented.
+            ("outer:\n k:\n  - a\n  -\n : v\n", true),
+            ("k:\n- a\n- !t\n: v\n", false),
+        ] {
+            let stream =
+                crate::roundtrip::composer::compose_stream_with(input, Default::default()).unwrap();
+            let matched = stream.roots.iter().any(|root| {
+                crate::fuzz::any_node(root, &crate::fuzz::drops_empty_item_before_empty_key)
+            });
+            assert_eq!(matched, skipped, "{input:?}");
+            crate::fuzz::roundtrip_differential(input);
+        }
+    }
+
+    #[test]
+    fn roundtrip_differential_modifies_scalars_in_keys() {
+        // A document whose only scalars are keys still reaches the modified
+        // stages: a block scalar key, and scalars inside a collection key.
+        for input in ["? |\n  x\n:\n", "? [a, 'b c']\n: \n", "? {a: \"x\"}\n:\n"] {
+            crate::fuzz::roundtrip_differential(input);
+        }
+    }
+
+    #[test]
+    fn roundtrip_differential_holds_over_the_suite_and_the_corpus() {
+        // Every YAML test suite input (when the submodule is checked out) and
+        // every file of the curated corpus.
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+        let mut inputs = Vec::new();
+        collect_yaml_inputs(&data.join("yaml_test_suite/cases"), &mut inputs);
+        collect_yaml_inputs(&data.join("corpus"), &mut inputs);
+
+        for path in inputs {
+            if let Ok(input) = std::fs::read_to_string(&path) {
+                crate::fuzz::roundtrip_differential(&input);
+            }
+        }
+    }
+
+    /// Every `*.yaml` file under `dir`: for a test suite case, its input and
+    /// the expected outputs, which are YAML too. The suite's `name` and `tags`
+    /// directories hold the same cases again, so they are left out.
+    fn collect_yaml_inputs(dir: &std::path::Path, inputs: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+
+        for path in entries.flatten().map(|entry| entry.path()) {
+            let name = path.file_name().unwrap_or_default();
+            if path.is_dir() {
+                if name != "name" && name != "tags" {
+                    collect_yaml_inputs(&path, inputs);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "yaml") {
+                inputs.push(path);
+            }
+        }
     }
 }
 

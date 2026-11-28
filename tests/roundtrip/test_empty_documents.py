@@ -127,6 +127,32 @@ def test_single_content_document_keeps_its_api(source):
     assert doc.node.comment_after is None
 
 
+@pytest.mark.parametrize(
+    ("source", "documents"),
+    [
+        (b"---", 1),
+        (b"---\n---\n", 2),
+        (b"--- # note\n", 1),
+        (b"---\n# only a comment\n", 1),
+        (b"%YAML 1.2\n---\n", 1),
+        (b"\xef\xbb\xbf---\n", 1),
+        (b"---\n...\n%YAML 1.2\n---\n...\n", 2),
+    ],
+)
+def test_stream_without_a_root_keeps_its_api(source, documents):
+    """A stream of only empty documents loads as nothing to edit and replays as is."""
+    doc = yamlrocks.loads(source, option=RT)
+
+    assert doc.to_dict() == []
+    assert len(doc) == 0
+    with pytest.raises(IndexError):
+        doc[0]
+    assert doc.to_yaml() == source
+    assert yamlrocks.loads(source) is None
+    assert yamlrocks.loads_all(source) == [None] * documents
+    assert len(yamlrocks.loads_all(source, option=RT)) == documents
+
+
 def test_included_file_keeps_its_empty_documents_to_itself(tmp_path):
     """An included file's empty documents never become documents of the includer."""
     (tmp_path / "part.yaml").write_bytes(b"---\n# part note\n---\na: 1\n")

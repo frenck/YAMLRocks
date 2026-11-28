@@ -79,7 +79,7 @@ pub mod fuzz {
     /// as the input, each with the same data. That is the path every untouched
     /// node takes once anything in its document changes.
     ///
-    /// Two more stages mark scalar values modified without changing them, as
+    /// Two more stages mark scalars modified without changing them, as
     /// setting a comment to the one it already has would, and check again. A
     /// modified scalar is rebuilt from its value instead of replayed from its
     /// source, which exercises the emitter's quoting and fallback rules. First
@@ -103,7 +103,7 @@ pub mod fuzz {
 
         let mut scalars = 0;
         for root in &mut stream.roots {
-            for_each_value_scalar(root, &mut |_| scalars += 1);
+            for_each_scalar(root, &mut |_| scalars += 1);
         }
         if scalars == 0 {
             return;
@@ -112,7 +112,7 @@ pub mod fuzz {
         let pick = (fnv1a(input.as_bytes()) % scalars as u64) as usize;
         let mut index = 0;
         for root in &mut stream.roots {
-            for_each_value_scalar(root, &mut |scalar| {
+            for_each_scalar(root, &mut |scalar| {
                 if index == pick {
                     scalar.mark_modified();
                 }
@@ -122,7 +122,7 @@ pub mod fuzz {
         check_reemit_roundtrip(input, &stream, &expected, "one scalar modified");
 
         for root in &mut stream.roots {
-            for_each_value_scalar(root, &mut YamlNode::mark_modified);
+            for_each_scalar(root, &mut YamlNode::mark_modified);
         }
         check_reemit_roundtrip(input, &stream, &expected, "every scalar modified");
     }
@@ -167,8 +167,8 @@ pub mod fuzz {
             .any(|root| any_node(root, &drops_empty_item_before_empty_key))
     }
 
-    /// Whether `node` is a block mapping holding a sequence at its key's own
-    /// column whose last item is a bare `-`, right before an empty key:
+    /// Whether `node` is a block mapping holding a block sequence whose last
+    /// item is a bare `-`, right before an empty key:
     ///
     /// ```yaml
     /// k:
@@ -185,13 +185,19 @@ pub mod fuzz {
     /// the tree holds an empty block sequence, which is written as `[]` and
     /// then reads back differently from the source (a tag kept or lost, a
     /// merge key merging nothing). Skipped until both readers keep the item.
+    ///
+    /// The readers only drop the item when the sequence sits at its key's
+    /// own column. Where the emitter puts it depends on the indent it writes
+    /// the key at, which is not the key's source column once a parent is
+    /// re-indented, so this matches the shape at any column instead of
+    /// following the emitter's layout.
     pub(crate) fn drops_empty_item_before_empty_key(node: &YamlNode) -> bool {
         let YamlNodeKind::Mapping(pairs) = &node.kind else {
             return false;
         };
 
         pairs.windows(2).any(|window| {
-            let [(key, value), (next_key, _)] = window else {
+            let [(_, value), (next_key, _)] = window else {
                 return false;
             };
             let YamlNodeKind::Sequence(items) = &value.kind else {
@@ -199,13 +205,8 @@ pub mod fuzz {
             };
 
             // A block sequence is never empty in its source; an empty one is
-            // what is left once its only item was dropped. Otherwise the
-            // emitter writes it at the key's column (as it decides in
-            // `emit_value_after_colon`), where the last item is dropped again.
-            let dropped = match items.last() {
-                None => true,
-                Some(last) => value.span.column <= key.span.column && is_bare_null(last),
-            };
+            // what is left once its only item was dropped.
+            let dropped = items.last().is_none_or(is_bare_null);
             value.style == NodeStyle::Block && dropped && is_bare_null(next_key)
         })
     }
@@ -236,11 +237,10 @@ pub mod fuzz {
         })
     }
 
-    /// Call `visit` on every scalar in value position under `node` (a mapping
-    /// value, a sequence item, or the root itself), in document order. Keys
-    /// are left out: the emitter always rebuilds a key from its value, so
-    /// marking one modified changes nothing.
-    fn for_each_value_scalar(node: &mut YamlNode, visit: &mut impl FnMut(&mut YamlNode)) {
+    /// Call `visit` on every scalar under `node`, the node itself included, in
+    /// document order. Keys are visited too, down into a collection used as
+    /// a key: a block scalar key replays its source like any value does.
+    fn for_each_scalar(node: &mut YamlNode, visit: &mut impl FnMut(&mut YamlNode)) {
         // The tree is as deep as the input nests, so grow the stack on demand
         // as the emitter's own walks do. See [`crate::stack`].
         crate::stack::guard(|| {
@@ -251,13 +251,14 @@ pub mod fuzz {
 
             match &mut node.kind {
                 YamlNodeKind::Mapping(pairs) => {
-                    for (_, value) in pairs {
-                        for_each_value_scalar(value, visit);
+                    for (key, value) in pairs {
+                        for_each_scalar(key, visit);
+                        for_each_scalar(value, visit);
                     }
                 }
                 YamlNodeKind::Sequence(items) => {
                     for item in items {
-                        for_each_value_scalar(item, visit);
+                        for_each_scalar(item, visit);
                     }
                 }
                 YamlNodeKind::Scalar(..) | YamlNodeKind::Alias(_) | YamlNodeKind::Null => {}
@@ -605,7 +606,10 @@ mod tests {
             (": !\n-\n:", true),
             ("<<: !t\n-\n: v\n", true),
             ("k:\n- a\n-\nj: v\n", false),
-            ("k:\n  - a\n  -\n: v\n", false),
+            ("k:\n  - a\n  -\n: v\n", true),
+            // Indented in its source, flush with its key once `outer` is
+            // re-indented.
+            ("outer:\n k:\n  - a\n  -\n : v\n", true),
             ("k:\n- a\n- !t\n: v\n", false),
         ] {
             let stream =
@@ -614,6 +618,15 @@ mod tests {
                 crate::fuzz::any_node(root, &crate::fuzz::drops_empty_item_before_empty_key)
             });
             assert_eq!(matched, skipped, "{input:?}");
+            crate::fuzz::roundtrip_differential(input);
+        }
+    }
+
+    #[test]
+    fn roundtrip_differential_modifies_scalars_in_keys() {
+        // A document whose only scalars are keys still reaches the modified
+        // stages: a block scalar key, and scalars inside a collection key.
+        for input in ["? |\n  x\n:\n", "? [a, 'b c']\n: \n", "? {a: \"x\"}\n:\n"] {
             crate::fuzz::roundtrip_differential(input);
         }
     }
